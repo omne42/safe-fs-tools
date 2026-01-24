@@ -1,0 +1,33 @@
+[[roots]]
+id = "workspace"
+path = "/absolute/path/to/your/workspace"
+mode = "read_only" # or "read_write"
+
+[permissions]
+read = true
+glob = true
+grep = true
+edit = false
+patch = false
+delete = false
+
+[limits]
+max_read_bytes = 1048576
+max_write_bytes = 1048576
+max_results = 2000
+max_line_bytes = 4096
+
+[secrets]
+deny_globs = [
+  ".git/**",
+  "**/.git/**",
+  ".env",
+  ".env.*",
+  "**/.env",
+  "**/.env.*",
+]
+redact_regexes = [
+  "OPENAI_API_KEY=[A-Za-z0-9_\\-]+",
+]
+replacement = "***REDACTED***"
+
