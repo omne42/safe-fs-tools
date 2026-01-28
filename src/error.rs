@@ -7,11 +7,17 @@ pub enum Error {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("io error during {op} ({path}): {source}")]
+    IoPath {
+        op: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[cfg(any(feature = "glob", feature = "grep"))]
     #[error("walkdir error: {0}")]
     WalkDir(#[from] walkdir::Error),
-
-    #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
 
     #[error("invalid policy: {0}")]
     InvalidPolicy(String),
@@ -22,7 +28,7 @@ pub enum Error {
     #[error("root not found: {0}")]
     RootNotFound(String),
 
-    #[error("path is outside root '{root_id}': {path}")]
+    #[error("path resolves outside root '{root_id}': {path}")]
     OutsideRoot { root_id: String, path: PathBuf },
 
     #[error("operation is not permitted: {0}")]
@@ -49,3 +55,37 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    pub(crate) fn io_path(
+        op: &'static str,
+        path: impl Into<PathBuf>,
+        source: std::io::Error,
+    ) -> Self {
+        Self::IoPath {
+            op,
+            path: path.into(),
+            source,
+        }
+    }
+
+    /// A stable, programmatic error code for callers that need to classify failures.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Error::Io(_) => "io",
+            Error::IoPath { .. } => "io",
+            #[cfg(any(feature = "glob", feature = "grep"))]
+            Error::WalkDir(_) => "walkdir",
+            Error::InvalidPolicy(_) => "invalid_policy",
+            Error::InvalidPath(_) => "invalid_path",
+            Error::RootNotFound(_) => "root_not_found",
+            Error::OutsideRoot { .. } => "outside_root",
+            Error::NotPermitted(_) => "not_permitted",
+            Error::SecretPathDenied(_) => "secret_path_denied",
+            Error::FileTooLarge { .. } => "file_too_large",
+            Error::InvalidUtf8(_) => "invalid_utf8",
+            Error::Patch(_) => "patch",
+            Error::InvalidRegex(_) => "invalid_regex",
+        }
+    }
+}

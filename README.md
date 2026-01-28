@@ -9,6 +9,31 @@ The point is **not** the commands — it is the **explicit safety model**:
 - `Root`: where filesystem access is anchored
 - `SecretRules`: what must never be read, and what must be redacted
 
+Important boundaries:
+
+- This is **not** an OS sandbox. It enforces a policy at the tool layer; use OS-level sandboxing (containers, macOS sandbox, Linux Landlock, etc.) if you need strong isolation.
+- Root checks are best-effort and **not** hardened against concurrent filesystem adversaries (TOCTOU).
+- Text ops (`read`/`edit`/`patch`) are **UTF-8 only**. `grep` skips non-UTF8 files and reports skip counts in its JSON output.
+- See `SECURITY.md` for the threat model.
+
+## Semantics
+
+- Roots are configured explicitly in `SandboxPolicy.roots` and canonicalized in `ops::Context::new`.
+- `root.path` must be an absolute path to an existing directory (validated in `SandboxPolicy::validate` + `Context::new`).
+- Relative paths are resolved by `root.path.join(path)`; absolute paths are accepted but must still end up inside the selected root.
+- Directory traversal (`glob`/`grep`) uses `walkdir` with `follow_links(false)`.
+- Symlinked **files** are treated as files, but their resolved targets must stay within the selected root; symlinked **directories** are not traversed.
+- `glob` results are sorted by path; `grep` results are sorted by `(path, line)`.
+- `limits.max_walk_entries` caps how many directory entries `glob`/`grep` will traverse.
+- `limits.max_walk_files` caps how many files `glob`/`grep` will scan (responses include `scanned_files` and `scan_limit_reached`; the limit can be reached by either cap).
+- `limits.max_read_bytes` is a hard cap (no implicit truncation). `read`/`edit`/`patch` fail if the operation would exceed the cap; `grep` skips files above the cap.
+- For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).
+- `delete` removes the path itself (does not follow symlinks); it validates the parent directory is within the selected root.
+- `secrets.deny_globs` hides paths from `glob`/`grep` and denies direct access (`read`/`edit`/`patch`/`delete`).
+- `secrets.redact_regexes` are applied to returned text (`read` file content and `grep` matched lines).
+- `grep` truncates individual matched lines to `limits.max_line_bytes` and marks matches with `line_truncated=true`.
+- Errors are classified via a stable `Error::code()` string (useful for JSON error mapping).
+
 Non-goals (by design):
 
 - No Mode/approval system (that belongs to higher-level products, not a fs tool).
@@ -16,10 +41,11 @@ Non-goals (by design):
 
 ## CLI
 
-All commands require a policy file (`.toml` or `.json`) and output JSON.
+All commands require a policy file (`.toml` or `.json`) and output JSON on success (errors are printed to stderr and exit with code 1). Use `--error-format json` for machine-parsable errors.
 
 ```bash
 safe-fs-tools --policy policy.toml read  --root workspace path/to/file.txt
+safe-fs-tools --policy policy.toml read  --root workspace path/to/file.txt --start-line 10 --end-line 20
 safe-fs-tools --policy policy.toml glob  --root workspace "**/*.rs"
 safe-fs-tools --policy policy.toml grep  --root workspace "TODO" --glob "**/*.rs"
 safe-fs-tools --policy policy.toml edit  --root workspace path/to/file.txt --start-line 3 --end-line 4 "replacement\n"
@@ -29,9 +55,58 @@ cat ./change.diff | safe-fs-tools --policy policy.toml patch --root workspace pa
 safe-fs-tools --policy policy.toml delete --root workspace path/to/file.txt
 ```
 
+## Library
+
+```rust
+use safe_fs_tools::{Context, ReadRequest, RootMode, SandboxPolicy};
+
+let mut policy =
+    SandboxPolicy::single_root("workspace", "/abs/path/to/workspace", RootMode::ReadOnly);
+policy.permissions.read = true;
+
+let ctx = Context::new(policy)?;
+let resp = ctx.read_file(ReadRequest {
+    root_id: "workspace".to_string(),
+    path: "README.md".into(),
+    start_line: Some(1),
+    end_line: Some(20),
+})?;
+println!("{}", resp.content);
+# Ok::<(), safe_fs_tools::Error>(())
+```
+
 ## Policy format (TOML)
 
 See `policy.example.toml`.
+
+## Optional: policy-io
+
+If you want the library to load `.toml` / `.json` policies directly, enable the `policy-io` feature:
+
+```toml
+safe-fs-tools = { version = "*", features = ["policy-io"] }
+```
+
+Then use:
+
+```rust
+let policy = safe_fs_tools::policy_io::load_policy("./policy.toml")?;
+```
+
+Or, if you just want a ready-to-use context:
+
+```rust
+let ctx = safe_fs_tools::Context::from_policy_path("./policy.toml")?;
+```
+
+## Cargo features
+
+- Default features: `glob`, `grep`, `patch`
+- `glob`: enables `glob_paths` traversal (adds `walkdir`)
+- `grep`: enables `grep` traversal (adds `walkdir`)
+- `patch`: enables unified-diff patching (adds `diffy`)
+- `policy-io`: enables `policy_io::load_policy` (adds `toml` + `serde_json`)
+- If `glob`/`grep`/`patch` are disabled, the corresponding functions still exist but return `Error::NotPermitted` (this keeps a stable API while allowing smaller dependency graphs).
 
 ## Dev
 
@@ -39,6 +114,14 @@ See `policy.example.toml`.
 cargo fmt
 cargo test
 cargo clippy --all-targets -- -D warnings
+```
+
+See `docs/example-survey.md` for notes on how similar projects model filesystem tool boundaries.
+
+Build/run the CLI from source:
+
+```bash
+cargo run -p safe-fs-tools-cli -- --policy policy.example.toml --help
 ```
 
 Enable hooks:

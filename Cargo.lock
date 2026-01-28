@@ -334,7 +334,6 @@ dependencies = [
 name = "safe-fs-tools"
 version = "0.1.0"
 dependencies = [
- "clap",
  "diffy",
  "globset",
  "regex",
@@ -344,6 +343,15 @@ dependencies = [
  "thiserror",
  "toml",
  "walkdir",
+]
+
+[[package]]
+name = "safe-fs-tools-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "safe-fs-tools",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,7 +1,8 @@
+use std::borrow::Cow;
 use std::path::Path;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use regex::Regex;
+use regex::{NoExpand, Regex};
 
 use crate::error::{Error, Result};
 use crate::policy::SecretRules;
@@ -49,10 +50,14 @@ impl SecretRedactor {
     }
 
     pub fn redact_text(&self, input: &str) -> String {
-        let mut out = input.to_string();
+        let mut current: Cow<'_, str> = Cow::Borrowed(input);
         for regex in &self.redact {
-            out = regex.replace_all(&out, &self.replacement).to_string();
+            let replaced = regex.replace_all(current.as_ref(), NoExpand(&self.replacement));
+            if matches!(replaced, Cow::Borrowed(_)) {
+                continue;
+            }
+            current = Cow::Owned(replaced.into_owned());
         }
-        out
+        current.into_owned()
     }
 }

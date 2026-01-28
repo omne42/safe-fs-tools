@@ -1,0 +1,13 @@
+[package]
+name = "safe-fs-tools-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "safe-fs-tools"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+safe-fs-tools = { path = "..", default-features = false, features = ["glob", "grep", "patch", "policy-io"] }
+serde_json = "1"

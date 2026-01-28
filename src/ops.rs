@@ -1,15 +1,131 @@
+use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "patch")]
 use diffy::{Patch, apply};
+#[cfg(any(feature = "glob", feature = "grep"))]
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
+#[cfg(any(feature = "glob", feature = "grep"))]
 use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
 use crate::policy::{RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
+
+static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    if let Ok(meta) = fs::metadata(path)
+        && meta.len() > max_bytes
+    {
+        return Err(Error::FileTooLarge {
+            path: relative.to_path_buf(),
+            size_bytes: meta.len(),
+            max_bytes,
+        });
+    }
+
+    let file = fs::File::open(path).map_err(|err| Error::io_path("open", relative, err))?;
+    let limit = max_bytes.saturating_add(1);
+    let mut bytes = Vec::<u8>::new();
+    file.take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|err| Error::io_path("read", relative, err))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(Error::FileTooLarge {
+            path: relative.to_path_buf(),
+            size_bytes: bytes.len() as u64,
+            max_bytes,
+        });
+    }
+    Ok(bytes)
+}
+
+fn read_string_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<String> {
+    let bytes = read_bytes_limited(path, relative, max_bytes)?;
+    std::str::from_utf8(&bytes)
+        .map_err(|_| Error::InvalidUtf8(relative.to_path_buf()))
+        .map(str::to_string)
+}
+
+fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
+    // Preserve prior behavior: fail if the original file isn't writable.
+    let _ = fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|err| Error::io_path("open_for_write", relative, err))?;
+
+    let perms = fs::metadata(path)
+        .map_err(|err| Error::io_path("metadata", relative, err))?
+        .permissions();
+
+    let parent = path.parent().ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "invalid path {}: missing parent directory",
+            relative.display()
+        ))
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "invalid path {}: missing file name",
+            relative.display()
+        ))
+    })?;
+
+    let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    for attempt in 0..100u32 {
+        let mut tmp_name = OsString::from(".");
+        tmp_name.push(file_name);
+        tmp_name.push(format!(
+            ".safe-fs-tools.tmp.{}.{}.{}",
+            std::process::id(),
+            counter,
+            attempt
+        ));
+        let tmp_path = parent.join(&tmp_name);
+
+        let open = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path);
+        let mut tmp_file = match open {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(Error::io_path("create_temp", relative, err)),
+        };
+
+        if let Err(err) = tmp_file.write_all(bytes) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(Error::io_path("write", relative, err));
+        }
+        if let Err(err) = tmp_file.sync_all() {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(Error::io_path("sync", relative, err));
+        }
+        drop(tmp_file);
+
+        if let Err(err) = fs::set_permissions(&tmp_path, perms.clone()) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(Error::io_path("set_permissions", relative, err));
+        }
+
+        if let Err(err) = fs::rename(&tmp_path, path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(Error::io_path("rename", relative, err));
+        }
+
+        return Ok(());
+    }
+
+    Err(Error::InvalidPath(format!(
+        "failed to create unique temp file for {}",
+        relative.display()
+    )))
+}
 
 #[derive(Debug)]
 pub struct Context {
@@ -32,6 +148,20 @@ impl Context {
                     root.path.display()
                 ))
             })?;
+            let meta = fs::metadata(&canonical).map_err(|err| {
+                Error::InvalidPolicy(format!(
+                    "failed to stat root {} ({}): {err}",
+                    root.id,
+                    canonical.display()
+                ))
+            })?;
+            if !meta.is_dir() {
+                return Err(Error::InvalidPolicy(format!(
+                    "root {} ({}) is not a directory",
+                    root.id,
+                    canonical.display()
+                )));
+            }
             canonical_roots.push((root.id.clone(), canonical));
         }
 
@@ -42,8 +172,38 @@ impl Context {
         })
     }
 
+    #[cfg(feature = "policy-io")]
+    pub fn from_policy_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let policy = crate::policy_io::load_policy(path)?;
+        Self::new(policy)
+    }
+
     pub fn policy(&self) -> &SandboxPolicy {
         &self.policy
+    }
+
+    pub fn read_file(&self, request: ReadRequest) -> Result<ReadResponse> {
+        read_file(self, request)
+    }
+
+    pub fn glob_paths(&self, request: GlobRequest) -> Result<GlobResponse> {
+        glob_paths(self, request)
+    }
+
+    pub fn grep(&self, request: GrepRequest) -> Result<GrepResponse> {
+        grep(self, request)
+    }
+
+    pub fn edit_range(&self, request: EditRequest) -> Result<EditResponse> {
+        edit_range(self, request)
+    }
+
+    pub fn apply_unified_patch(&self, request: PatchRequest) -> Result<PatchResponse> {
+        apply_unified_patch(self, request)
+    }
+
+    pub fn delete_file(&self, request: DeleteRequest) -> Result<DeleteResponse> {
+        delete_file(self, request)
     }
 
     fn canonical_root(&self, root_id: &str) -> Result<&PathBuf> {
@@ -55,12 +215,42 @@ impl Context {
 
     fn canonical_path_in_root(&self, root_id: &str, path: &Path) -> Result<(PathBuf, PathBuf)> {
         let resolved = self.policy.resolve_path(root_id, path)?;
+        let root = self.policy.root(root_id)?;
         let canonical_root = self.canonical_root(root_id)?;
-        let canonical = resolved.canonicalize()?;
+
+        let relative_requested = if path.is_absolute() {
+            if let Ok(relative) = resolved.strip_prefix(&root.path) {
+                relative.to_path_buf()
+            } else if let Ok(relative) = resolved.strip_prefix(canonical_root) {
+                relative.to_path_buf()
+            } else if let (Some(parent), Some(file_name)) =
+                (resolved.parent(), resolved.file_name())
+            {
+                let canonical_parent = parent
+                    .canonicalize()
+                    .map_err(|err| Error::io_path("canonicalize", parent, err))?;
+                let normalized = canonical_parent.join(file_name);
+                normalized
+                    .strip_prefix(canonical_root)
+                    .unwrap_or(&normalized)
+                    .to_path_buf()
+            } else {
+                resolved.clone()
+            }
+        } else {
+            path.to_path_buf()
+        };
+        if self.redactor.is_path_denied(&relative_requested) {
+            return Err(Error::SecretPathDenied(relative_requested));
+        }
+
+        let canonical = resolved
+            .canonicalize()
+            .map_err(|err| Error::io_path("canonicalize", &resolved, err))?;
         if !canonical.starts_with(canonical_root) {
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
-                path: canonical,
+                path: resolved,
             });
         }
         let relative = canonical
@@ -88,14 +278,23 @@ impl Context {
 pub struct ReadRequest {
     pub root_id: String,
     pub path: PathBuf,
+    #[serde(default)]
+    pub start_line: Option<u64>,
+    #[serde(default)]
+    pub end_line: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadResponse {
     pub path: PathBuf,
+    /// Always `false`: `read` fails instead of truncating.
     pub truncated: bool,
     pub bytes_read: u64,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u64>,
 }
 
 pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
@@ -106,23 +305,86 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
     }
 
     let (path, relative) = ctx.canonical_path_in_root(&request.root_id, &request.path)?;
-    let meta = fs::metadata(&path)?;
-    if meta.len() > ctx.policy.limits.max_read_bytes {
-        return Err(Error::FileTooLarge {
-            path: relative,
-            size_bytes: meta.len(),
-            max_bytes: ctx.policy.limits.max_read_bytes,
-        });
-    }
 
-    let mut file = fs::File::open(&path)?;
-    let mut bytes = Vec::<u8>::new();
-    file.read_to_end(&mut bytes)?;
-    let bytes_read = bytes.len() as u64;
+    let (bytes_read, content) = match (request.start_line, request.end_line) {
+        (None, None) => {
+            let bytes = read_bytes_limited(&path, &relative, ctx.policy.limits.max_read_bytes)?;
+            let bytes_read = bytes.len() as u64;
+            let content = std::str::from_utf8(&bytes)
+                .map_err(|_| Error::InvalidUtf8(relative.clone()))?
+                .to_string();
+            (bytes_read, content)
+        }
+        (Some(start_line), Some(end_line)) => {
+            if start_line == 0 || end_line == 0 || start_line > end_line {
+                return Err(Error::InvalidPath(format!(
+                    "invalid line range {}..{}",
+                    start_line, end_line
+                )));
+            }
 
-    let content = std::str::from_utf8(&bytes)
-        .map_err(|_| Error::InvalidUtf8(relative.clone()))?
-        .to_string();
+            let file =
+                fs::File::open(&path).map_err(|err| Error::io_path("open", &relative, err))?;
+            let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
+            let mut reader = std::io::BufReader::new(file.take(limit));
+            let mut buf = Vec::<u8>::new();
+            let mut out = Vec::<u8>::new();
+
+            let mut scanned_bytes: u64 = 0;
+            let mut current_line: u64 = 0;
+
+            loop {
+                buf.clear();
+                let n = reader
+                    .read_until(b'\n', &mut buf)
+                    .map_err(|err| Error::io_path("read", &relative, err))?;
+                if n == 0 {
+                    break;
+                }
+
+                scanned_bytes = scanned_bytes.saturating_add(n as u64);
+                if scanned_bytes > ctx.policy.limits.max_read_bytes {
+                    return Err(Error::FileTooLarge {
+                        path: relative.clone(),
+                        size_bytes: scanned_bytes,
+                        max_bytes: ctx.policy.limits.max_read_bytes,
+                    });
+                }
+
+                current_line += 1;
+                if current_line < start_line {
+                    continue;
+                }
+                if current_line > end_line {
+                    break;
+                }
+
+                out.extend_from_slice(&buf);
+                if current_line == end_line {
+                    break;
+                }
+            }
+
+            if current_line < start_line || current_line < end_line {
+                return Err(Error::InvalidPath(format!(
+                    "line range {}..{} out of bounds (file has {} lines)",
+                    start_line, end_line, current_line
+                )));
+            }
+
+            let bytes_read = out.len() as u64;
+            let content = std::str::from_utf8(&out)
+                .map_err(|_| Error::InvalidUtf8(relative.clone()))?
+                .to_string();
+            (bytes_read, content)
+        }
+        _ => {
+            return Err(Error::InvalidPath(
+                "start_line and end_line must be provided together".to_string(),
+            ));
+        }
+    };
+
     let content = ctx.redactor.redact_text(&content);
 
     Ok(ReadResponse {
@@ -130,6 +392,8 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
         truncated: false,
         bytes_read,
         content,
+        start_line: request.start_line,
+        end_line: request.end_line,
     })
 }
 
@@ -143,8 +407,13 @@ pub struct GlobRequest {
 pub struct GlobResponse {
     pub matches: Vec<PathBuf>,
     pub truncated: bool,
+    #[serde(default)]
+    pub scanned_files: u64,
+    #[serde(default)]
+    pub scan_limit_reached: bool,
 }
 
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn compile_glob(pattern: &str) -> Result<GlobSet> {
     let glob = GlobBuilder::new(pattern)
         .literal_separator(true)
@@ -157,6 +426,16 @@ fn compile_glob(pattern: &str) -> Result<GlobSet> {
         .map_err(|err| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {err}")))
 }
 
+#[cfg(not(feature = "glob"))]
+pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
+    let _ = ctx;
+    let _ = request;
+    Err(Error::NotPermitted(
+        "glob is not supported: crate feature 'glob' is disabled".to_string(),
+    ))
+}
+
+#[cfg(feature = "glob")]
 pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     if !ctx.policy.permissions.glob {
         return Err(Error::NotPermitted(
@@ -168,6 +447,9 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
 
     let mut matches = Vec::<PathBuf>::new();
     let mut truncated = false;
+    let mut scanned_files: u64 = 0;
+    let mut scanned_entries: u64 = 0;
+    let mut scan_limit_reached = false;
     for entry in WalkDir::new(&root_path)
         .follow_links(false)
         .into_iter()
@@ -183,9 +465,24 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         })
     {
         let entry = entry?;
-        if !entry.file_type().is_file() {
+        if entry.depth() > 0 {
+            if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
+                truncated = true;
+                scan_limit_reached = true;
+                break;
+            }
+            scanned_entries = scanned_entries.saturating_add(1);
+        }
+        let file_type = entry.file_type();
+        if !(file_type.is_file() || file_type.is_symlink()) {
             continue;
         }
+        if scanned_files as usize >= ctx.policy.limits.max_walk_files {
+            truncated = true;
+            scan_limit_reached = true;
+            break;
+        }
+        scanned_files = scanned_files.saturating_add(1);
         let relative = entry
             .path()
             .strip_prefix(&root_path)
@@ -193,8 +490,24 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         if ctx.redactor.is_path_denied(relative) {
             continue;
         }
-        if matcher.is_match(relative) {
-            matches.push(relative.to_path_buf());
+        let relative = if file_type.is_symlink() {
+            let (canonical, _canonical_relative) =
+                match ctx.canonical_path_in_root(&request.root_id, entry.path()) {
+                    Ok(ok) => ok,
+                    Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
+                    Err(err) => return Err(err),
+                };
+            let meta = fs::metadata(&canonical)
+                .map_err(|err| Error::io_path("metadata", relative, err))?;
+            if !meta.is_file() {
+                continue;
+            }
+            relative.to_path_buf()
+        } else {
+            relative.to_path_buf()
+        };
+        if matcher.is_match(&relative) {
+            matches.push(relative);
             if matches.len() >= ctx.policy.limits.max_results {
                 truncated = true;
                 break;
@@ -202,7 +515,13 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         }
     }
 
-    Ok(GlobResponse { matches, truncated })
+    matches.sort();
+    Ok(GlobResponse {
+        matches,
+        truncated,
+        scanned_files,
+        scan_limit_reached,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,14 +539,34 @@ pub struct GrepMatch {
     pub path: PathBuf,
     pub line: u64,
     pub text: String,
+    #[serde(default)]
+    pub line_truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrepResponse {
     pub matches: Vec<GrepMatch>,
     pub truncated: bool,
+    #[serde(default)]
+    pub skipped_too_large_files: u64,
+    #[serde(default)]
+    pub skipped_non_utf8_files: u64,
+    #[serde(default)]
+    pub scanned_files: u64,
+    #[serde(default)]
+    pub scan_limit_reached: bool,
 }
 
+#[cfg(not(feature = "grep"))]
+pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
+    let _ = ctx;
+    let _ = request;
+    Err(Error::NotPermitted(
+        "grep is not supported: crate feature 'grep' is disabled".to_string(),
+    ))
+}
+
+#[cfg(feature = "grep")]
 pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     if !ctx.policy.permissions.grep {
         return Err(Error::NotPermitted(
@@ -248,6 +587,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
     let mut matches = Vec::<GrepMatch>::new();
     let mut truncated = false;
+    let mut skipped_too_large_files: u64 = 0;
+    let mut skipped_non_utf8_files: u64 = 0;
+    let mut scanned_files: u64 = 0;
+    let mut scanned_entries: u64 = 0;
+    let mut scan_limit_reached = false;
 
     for entry in WalkDir::new(&root_path)
         .follow_links(false)
@@ -264,9 +608,24 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         })
     {
         let entry = entry?;
-        if !entry.file_type().is_file() {
+        if entry.depth() > 0 {
+            if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
+                truncated = true;
+                scan_limit_reached = true;
+                break;
+            }
+            scanned_entries = scanned_entries.saturating_add(1);
+        }
+        let file_type = entry.file_type();
+        if !(file_type.is_file() || file_type.is_symlink()) {
             continue;
         }
+        if scanned_files as usize >= ctx.policy.limits.max_walk_files {
+            truncated = true;
+            scan_limit_reached = true;
+            break;
+        }
+        scanned_files = scanned_files.saturating_add(1);
         let relative = entry
             .path()
             .strip_prefix(&root_path)
@@ -274,24 +633,44 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         if ctx.redactor.is_path_denied(relative) {
             continue;
         }
-        if let Some(glob) = &file_glob {
-            if !glob.is_match(relative) {
+        let (path, relative_path) = if file_type.is_symlink() {
+            let (canonical, _canonical_relative) =
+                match ctx.canonical_path_in_root(&request.root_id, entry.path()) {
+                    Ok(ok) => ok,
+                    Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
+                    Err(err) => return Err(err),
+                };
+            let meta = fs::metadata(&canonical)
+                .map_err(|err| Error::io_path("metadata", relative, err))?;
+            if !meta.is_file() {
                 continue;
             }
-        }
-
-        let meta = fs::metadata(entry.path())?;
-        if meta.len() > ctx.policy.limits.max_read_bytes {
+            (canonical, relative.to_path_buf())
+        } else {
+            (entry.path().to_path_buf(), relative.to_path_buf())
+        };
+        if let Some(glob) = &file_glob
+            && !glob.is_match(&relative_path)
+        {
             continue;
         }
 
-        let content = fs::read_to_string(entry.path()).map_err(|err| {
-            if err.kind() == std::io::ErrorKind::InvalidData {
-                Error::InvalidUtf8(relative.to_path_buf())
-            } else {
-                Error::Io(err)
+        let bytes =
+            match read_bytes_limited(&path, &relative_path, ctx.policy.limits.max_read_bytes) {
+                Ok(bytes) => bytes,
+                Err(Error::FileTooLarge { .. }) => {
+                    skipped_too_large_files = skipped_too_large_files.saturating_add(1);
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+        let content = match std::str::from_utf8(&bytes) {
+            Ok(content) => content,
+            Err(_) => {
+                skipped_non_utf8_files = skipped_non_utf8_files.saturating_add(1);
+                continue;
             }
-        })?;
+        };
 
         for (idx, line) in content.lines().enumerate() {
             let ok = match &regex {
@@ -301,16 +680,16 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             if !ok {
                 continue;
             }
-            let text = line
-                .as_bytes()
-                .get(..ctx.policy.limits.max_line_bytes)
-                .map(|slice| String::from_utf8_lossy(slice).to_string())
-                .unwrap_or_default();
+            let line_bytes = line.as_bytes();
+            let line_truncated = line_bytes.len() > ctx.policy.limits.max_line_bytes;
+            let end = line_bytes.len().min(ctx.policy.limits.max_line_bytes);
+            let text = String::from_utf8_lossy(&line_bytes[..end]).to_string();
             let text = ctx.redactor.redact_text(&text);
             matches.push(GrepMatch {
-                path: relative.to_path_buf(),
+                path: relative_path.clone(),
                 line: idx.saturating_add(1) as u64,
                 text,
+                line_truncated,
             });
             if matches.len() >= ctx.policy.limits.max_results {
                 truncated = true;
@@ -323,7 +702,15 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         }
     }
 
-    Ok(GrepResponse { matches, truncated })
+    matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
+    Ok(GrepResponse {
+        matches,
+        truncated,
+        skipped_too_large_files,
+        skipped_non_utf8_files,
+        scanned_files,
+        scan_limit_reached,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -357,8 +744,12 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         )));
     }
 
-    let content = fs::read_to_string(&path)?;
-    let lines: Vec<&str> = content.lines().collect();
+    let content = read_string_limited(&path, &relative, ctx.policy.limits.max_read_bytes)?;
+    let lines: Vec<&str> = if content.is_empty() {
+        Vec::new()
+    } else {
+        content.split_inclusive('\n').collect()
+    };
     let start = (request.start_line - 1) as usize;
     let end = (request.end_line - 1) as usize;
     if start >= lines.len() || end >= lines.len() {
@@ -370,17 +761,47 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         )));
     }
 
-    let mut out = String::new();
+    let newline = if lines[end].ends_with("\r\n") {
+        "\r\n"
+    } else if lines[end].ends_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
+
+    let mut replacement = if newline == "\r\n" {
+        let mut out = String::with_capacity(request.replacement.len());
+        let mut prev_was_cr = false;
+        for ch in request.replacement.chars() {
+            if ch == '\n' {
+                if prev_was_cr {
+                    out.push('\n');
+                } else {
+                    out.push('\r');
+                    out.push('\n');
+                }
+                prev_was_cr = false;
+                continue;
+            }
+            out.push(ch);
+            prev_was_cr = ch == '\r';
+        }
+        out
+    } else {
+        request.replacement.clone()
+    };
+
+    if !newline.is_empty() && !replacement.ends_with(newline) {
+        replacement.push_str(newline);
+    }
+
+    let mut out = String::with_capacity(content.len().saturating_add(replacement.len()));
     for (idx, line) in lines.iter().enumerate() {
         if idx == start {
-            out.push_str(&request.replacement);
-            if !request.replacement.ends_with('\n') {
-                out.push('\n');
-            }
+            out.push_str(&replacement);
         }
         if idx < start || idx > end {
             out.push_str(line);
-            out.push('\n');
         }
     }
 
@@ -392,8 +813,7 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         });
     }
 
-    let mut file = fs::File::create(&path)?;
-    file.write_all(out.as_bytes())?;
+    write_bytes_atomic(&path, &relative, out.as_bytes())?;
     Ok(EditResponse {
         path: relative,
         bytes_written: out.len() as u64,
@@ -413,6 +833,16 @@ pub struct PatchResponse {
     pub bytes_written: u64,
 }
 
+#[cfg(not(feature = "patch"))]
+pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<PatchResponse> {
+    let _ = ctx;
+    let _ = request;
+    Err(Error::NotPermitted(
+        "patch is not supported: crate feature 'patch' is disabled".to_string(),
+    ))
+}
+
+#[cfg(feature = "patch")]
 pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<PatchResponse> {
     if !ctx.policy.permissions.patch {
         return Err(Error::NotPermitted(
@@ -422,7 +852,7 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
     ctx.ensure_can_write(&request.root_id, "patch")?;
     let (path, relative) = ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
-    let content = fs::read_to_string(&path)?;
+    let content = read_string_limited(&path, &relative, ctx.policy.limits.max_read_bytes)?;
     let parsed = Patch::from_str(&request.patch).map_err(|err| Error::Patch(err.to_string()))?;
     let updated = apply(&content, &parsed).map_err(|err| Error::Patch(err.to_string()))?;
 
@@ -434,8 +864,7 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         });
     }
 
-    let mut file = fs::File::create(&path)?;
-    file.write_all(updated.as_bytes())?;
+    write_bytes_atomic(&path, &relative, updated.as_bytes())?;
     Ok(PatchResponse {
         path: relative,
         bytes_written: updated.len() as u64,
@@ -460,7 +889,50 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
         ));
     }
     ctx.ensure_can_write(&request.root_id, "delete")?;
-    let (path, relative) = ctx.canonical_path_in_root(&request.root_id, &request.path)?;
-    fs::remove_file(path)?;
+
+    let resolved = ctx.policy.resolve_path(&request.root_id, &request.path)?;
+    let canonical_root = ctx.canonical_root(&request.root_id)?;
+
+    let file_name = resolved
+        .file_name()
+        .ok_or_else(|| Error::InvalidPath("delete requires a file path (got empty)".to_string()))?;
+    if file_name == std::ffi::OsStr::new(".") || file_name == std::ffi::OsStr::new("..") {
+        return Err(Error::InvalidPath(format!(
+            "invalid delete path {:?}",
+            request.path
+        )));
+    }
+
+    let parent = resolved.parent().ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "invalid delete path {:?}: missing parent directory",
+            request.path
+        ))
+    })?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|err| Error::io_path("canonicalize", parent, err))?;
+    if !canonical_parent.starts_with(canonical_root) {
+        return Err(Error::OutsideRoot {
+            root_id: request.root_id.clone(),
+            path: resolved.clone(),
+        });
+    }
+
+    let relative_parent = canonical_parent
+        .strip_prefix(canonical_root)
+        .unwrap_or(&canonical_parent);
+    let relative = relative_parent.join(file_name);
+    if ctx.redactor.is_path_denied(&relative) {
+        return Err(Error::SecretPathDenied(relative));
+    }
+
+    let meta = fs::symlink_metadata(&resolved)
+        .map_err(|err| Error::io_path("metadata", &relative, err))?;
+    if meta.is_dir() {
+        return Err(Error::InvalidPath("delete only supports files".to_string()));
+    }
+
+    fs::remove_file(&resolved).map_err(|err| Error::io_path("remove_file", &relative, err))?;
     Ok(DeleteResponse { path: relative })
 }
