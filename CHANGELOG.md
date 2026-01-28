@@ -42,3 +42,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secrets.deny_globs` can no longer be bypassed via symlink paths (deny rules are applied before resolving symlink targets).
 - Redaction replacement strings are now treated literally (no `$1` / `$name` capture expansion).
 - `edit`/`patch` now write atomically (temp file + rename) and preserve existing file permissions.
+- Atomic write temp files are created with restrictive permissions on Unix to avoid transient exposure.

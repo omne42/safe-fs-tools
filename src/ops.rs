@@ -18,6 +18,17 @@ use crate::redaction::SecretRedactor;
 
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+fn open_private_temp_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut open_options = fs::OpenOptions::new();
+    open_options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open_options.mode(0o600);
+    }
+    open_options.open(path)
+}
+
 fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     if let Ok(meta) = fs::metadata(path)
         && meta.len() > max_bytes
@@ -88,11 +99,7 @@ fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> 
         ));
         let tmp_path = parent.join(&tmp_name);
 
-        let open = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp_path);
-        let mut tmp_file = match open {
+        let mut tmp_file = match open_private_temp_file(&tmp_path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(Error::io_path("create_temp", relative, err)),
@@ -125,6 +132,22 @@ fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> 
         "failed to create unique temp file for {}",
         relative.display()
     )))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn open_private_temp_file_creates_files_without_group_or_other_access() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("tmp.txt");
+        drop(open_private_temp_file(&path).expect("open"));
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode & 0o077, 0, "expected no group/other permission bits");
+    }
 }
 
 #[derive(Debug)]
