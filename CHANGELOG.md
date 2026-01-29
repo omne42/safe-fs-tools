@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--no-default-features` now builds cleanly (gate `walkdir` error variant behind traversal features).
 - `secrets.deny_globs` can no longer be bypassed via symlink paths (deny rules are applied before resolving symlink targets).
+- `secrets.deny_globs` matching now performs lexical normalization (e.g. `sub/../.git/...`), preventing bypass via `..` segments.
 - On Windows, glob/deny-glob matching now handles `\\` path separators.
 - Redaction replacement strings are now treated literally (no `$1` / `$name` capture expansion).
 - `edit`/`patch` now write atomically (temp file + rename) and preserve existing file permissions.

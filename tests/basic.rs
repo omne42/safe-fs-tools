@@ -589,6 +589,42 @@ fn deny_globs_cannot_be_bypassed_via_symlink_paths() {
 }
 
 #[test]
+#[cfg(unix)]
+fn deny_globs_match_after_lexical_normalization() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("target.txt"), "hello\n").expect("write");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+    std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
+    symlink(
+        dir.path().join("target.txt"),
+        dir.path().join(".git").join("link.txt"),
+    )
+    .expect("symlink");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.deny_globs = vec![".git/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("sub/../.git/link.txt"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 #[cfg(all(unix, feature = "glob", feature = "grep"))]
 fn glob_and_grep_include_symlink_files() {
     use std::os::unix::fs::symlink;

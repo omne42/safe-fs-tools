@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use regex::{NoExpand, Regex};
@@ -18,7 +18,7 @@ impl SecretRedactor {
     pub fn from_rules(rules: &SecretRules) -> Result<Self> {
         let mut deny_builder = GlobSetBuilder::new();
         for pattern in &rules.deny_globs {
-            let glob = GlobBuilder::new(pattern)
+            let glob = GlobBuilder::new(normalize_glob_pattern(pattern).as_ref())
                 .literal_separator(true)
                 .build()
                 .map_err(|err| {
@@ -63,15 +63,60 @@ impl SecretRedactor {
 }
 
 #[cfg(windows)]
+fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
+    if !pattern.contains('\\') {
+        return Cow::Borrowed(pattern);
+    }
+    Cow::Owned(pattern.replace('\\', "/"))
+}
+
+#[cfg(not(windows))]
+fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
+    Cow::Borrowed(pattern)
+}
+
+fn normalize_relative_path(path: &Path) -> Cow<'_, Path> {
+    if path.is_absolute() {
+        return Cow::Borrowed(path);
+    }
+
+    let mut out = PathBuf::new();
+    let mut changed = false;
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {
+                changed = true;
+            }
+            Component::ParentDir => {
+                if out.pop() {
+                    changed = true;
+                } else {
+                    out.push("..");
+                }
+            }
+            Component::Normal(part) => out.push(part),
+            // For deny-glob matching, treat other component kinds as opaque.
+            other => out.push(other.as_os_str()),
+        }
+    }
+
+    if !changed {
+        return Cow::Borrowed(path);
+    }
+    Cow::Owned(out)
+}
+
+#[cfg(windows)]
 fn normalize_path_for_glob(path: &Path) -> Cow<'_, Path> {
+    let path = normalize_relative_path(path);
     let raw = path.to_string_lossy();
     if !raw.contains('\\') {
-        return Cow::Borrowed(path);
+        return path;
     }
     Cow::Owned(std::path::PathBuf::from(raw.replace('\\', "/")))
 }
 
 #[cfg(not(windows))]
 fn normalize_path_for_glob(path: &Path) -> Cow<'_, Path> {
-    Cow::Borrowed(path)
+    normalize_relative_path(path)
 }

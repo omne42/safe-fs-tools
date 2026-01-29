@@ -29,7 +29,7 @@ Important boundaries:
 - `limits.max_read_bytes` is a hard cap (no implicit truncation). `read`/`edit`/`patch` fail if the operation would exceed the cap; `grep` skips files above the cap.
 - For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).
 - `delete` removes the path itself (does not follow symlinks); it validates the parent directory is within the selected root.
-- `secrets.deny_globs` hides paths from `glob`/`grep` and denies direct access (`read`/`edit`/`patch`/`delete`).
+- `secrets.deny_globs` hides paths from `glob`/`grep` and denies direct access (`read`/`edit`/`patch`/`delete`). Deny checks apply to both the requested path (after `.`/`..` normalization) and the canonicalized resolved path.
 - `secrets.redact_regexes` are applied to returned text (`read` file content and `grep` matched lines).
 - `grep` truncates individual matched lines to `limits.max_line_bytes` and marks matches with `line_truncated=true`.
 - Errors are classified via a stable `Error::code()` string (useful for JSON error mapping).

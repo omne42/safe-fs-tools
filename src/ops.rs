@@ -493,8 +493,23 @@ pub struct GlobResponse {
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
+#[cfg(windows)]
+fn normalize_glob_pattern(pattern: &str) -> std::borrow::Cow<'_, str> {
+    if !pattern.contains('\\') {
+        return std::borrow::Cow::Borrowed(pattern);
+    }
+    std::borrow::Cow::Owned(pattern.replace('\\', "/"))
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+#[cfg(not(windows))]
+fn normalize_glob_pattern(pattern: &str) -> std::borrow::Cow<'_, str> {
+    std::borrow::Cow::Borrowed(pattern)
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn compile_glob(pattern: &str) -> Result<GlobSet> {
-    let glob = GlobBuilder::new(pattern)
+    let glob = GlobBuilder::new(normalize_glob_pattern(pattern).as_ref())
         .literal_separator(true)
         .build()
         .map_err(|err| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {err}")))?;
