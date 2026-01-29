@@ -120,9 +120,9 @@ fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> 
             return Err(Error::io_path("set_permissions", relative, err));
         }
 
-        if let Err(err) = fs::rename(&tmp_path, path) {
+        if let Err(err) = replace_file(&tmp_path, path) {
             let _ = fs::remove_file(&tmp_path);
-            return Err(Error::io_path("rename", relative, err));
+            return Err(Error::io_path("replace_file", relative, err));
         }
 
         return Ok(());
@@ -132,6 +132,62 @@ fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> 
         "failed to create unique temp file for {}",
         relative.display()
     )))
+}
+
+#[cfg(windows)]
+fn replace_file(tmp_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_IGNORE_MERGE_ERRORS, ReplaceFileW};
+
+    if !dest_path.exists() {
+        return fs::rename(tmp_path, dest_path);
+    }
+
+    fn to_wide_null(s: &OsStr) -> Vec<u16> {
+        let mut wide: Vec<u16> = s.encode_wide().collect();
+        wide.push(0);
+        wide
+    }
+
+    let replaced = unsafe {
+        ReplaceFileW(
+            to_wide_null(dest_path.as_os_str()).as_ptr(),
+            to_wide_null(tmp_path.as_os_str()).as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_IGNORE_MERGE_ERRORS,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+
+    if replaced == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(tmp_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+    fs::rename(tmp_path, dest_path)
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let raw = path.to_string_lossy();
+        if !raw.contains('\\') {
+            return glob.is_match(path);
+        }
+        let normalized = raw.replace('\\', "/");
+        return glob.is_match(Path::new(&normalized));
+    }
+    #[cfg(not(windows))]
+    {
+        glob.is_match(path)
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -475,6 +531,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let mut scan_limit_reached = false;
     for entry in WalkDir::new(&root_path)
         .follow_links(false)
+        .sort_by_file_name()
         .into_iter()
         .filter_entry(|entry| {
             if entry.depth() == 0 {
@@ -529,7 +586,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         } else {
             relative.to_path_buf()
         };
-        if matcher.is_match(&relative) {
+        if globset_is_match(&matcher, &relative) {
             matches.push(relative);
             if matches.len() >= ctx.policy.limits.max_results {
                 truncated = true;
@@ -618,6 +675,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
     for entry in WalkDir::new(&root_path)
         .follow_links(false)
+        .sort_by_file_name()
         .into_iter()
         .filter_entry(|entry| {
             if entry.depth() == 0 {
@@ -673,7 +731,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             (entry.path().to_path_buf(), relative.to_path_buf())
         };
         if let Some(glob) = &file_glob
-            && !glob.is_match(&relative_path)
+            && !globset_is_match(glob, &relative_path)
         {
             continue;
         }

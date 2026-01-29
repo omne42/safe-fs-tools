@@ -52,6 +52,9 @@ pub enum Error {
 
     #[error("invalid regex: {0}")]
     InvalidRegex(String),
+
+    #[error("input is too large ({size_bytes} bytes; max {max_bytes} bytes)")]
+    InputTooLarge { size_bytes: u64, max_bytes: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -86,6 +89,7 @@ impl Error {
             Error::InvalidUtf8(_) => "invalid_utf8",
             Error::Patch(_) => "patch",
             Error::InvalidRegex(_) => "invalid_regex",
+            Error::InputTooLarge { .. } => "input_too_large",
         }
     }
 }

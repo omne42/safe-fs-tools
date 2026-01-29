@@ -43,6 +43,8 @@ Non-goals (by design):
 
 All commands require a policy file (`.toml` or `.json`) and output JSON on success (errors are printed to stderr and exit with code 1). Use `--error-format json` for machine-parsable errors.
 
+For `patch`, you can also cap the patch *input* size (stdin or file) via `--max-patch-bytes` (defaults to `policy.limits.max_read_bytes`).
+
 ```bash
 safe-fs-tools --policy policy.toml read  --root workspace path/to/file.txt
 safe-fs-tools --policy policy.toml read  --root workspace path/to/file.txt --start-line 10 --end-line 20
@@ -117,6 +119,7 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 See `docs/example-survey.md` for notes on how similar projects model filesystem tool boundaries.
+See `docs/db-vfs.md` for the DB-backed VFS (DB-VFS) decision + TODOs.
 
 Build/run the CLI from source:
 

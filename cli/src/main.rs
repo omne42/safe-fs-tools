@@ -63,6 +63,10 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = ErrorFormat::Text)]
     error_format: ErrorFormat,
 
+    /// Max bytes for patch input (stdin or file). Defaults to policy.limits.max_read_bytes.
+    #[arg(long)]
+    max_patch_bytes: Option<u64>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -122,12 +126,64 @@ fn main() {
         match error_format {
             ErrorFormat::Text => eprintln!("{err}"),
             ErrorFormat::Json => {
-                let out = serde_json::json!({
-                    "error": {
-                        "code": err.code(),
-                        "message": err.to_string(),
+                let mut error = serde_json::Map::new();
+                error.insert(
+                    "code".to_string(),
+                    serde_json::Value::String(err.code().to_string()),
+                );
+                error.insert(
+                    "message".to_string(),
+                    serde_json::Value::String(err.to_string()),
+                );
+
+                if let CliError::Tool(tool) = &err {
+                    let details = match tool {
+                        safe_fs_tools::Error::IoPath { op, path, .. } => Some(serde_json::json!({
+                            "kind": "io_path",
+                            "op": op,
+                            "path": path.display().to_string(),
+                        })),
+                        safe_fs_tools::Error::OutsideRoot { root_id, path } => {
+                            Some(serde_json::json!({
+                                "kind": "outside_root",
+                                "root_id": root_id,
+                                "path": path.display().to_string(),
+                            }))
+                        }
+                        safe_fs_tools::Error::SecretPathDenied(path) => Some(serde_json::json!({
+                            "kind": "secret_path_denied",
+                            "path": path.display().to_string(),
+                        })),
+                        safe_fs_tools::Error::FileTooLarge {
+                            path,
+                            size_bytes,
+                            max_bytes,
+                        } => Some(serde_json::json!({
+                            "kind": "file_too_large",
+                            "path": path.display().to_string(),
+                            "size_bytes": size_bytes,
+                            "max_bytes": max_bytes,
+                        })),
+                        safe_fs_tools::Error::InvalidUtf8(path) => Some(serde_json::json!({
+                            "kind": "invalid_utf8",
+                            "path": path.display().to_string(),
+                        })),
+                        safe_fs_tools::Error::InputTooLarge {
+                            size_bytes,
+                            max_bytes,
+                        } => Some(serde_json::json!({
+                            "kind": "input_too_large",
+                            "size_bytes": size_bytes,
+                            "max_bytes": max_bytes,
+                        })),
+                        _ => None,
+                    };
+                    if let Some(details) = details {
+                        error.insert("details".to_string(), details);
                     }
-                });
+                }
+
+                let out = serde_json::json!({ "error": error });
                 match serde_json::to_string(&out) {
                     Ok(text) => eprintln!("{text}"),
                     Err(_) => eprintln!("{err}"),
@@ -139,7 +195,9 @@ fn main() {
 }
 
 fn run(cli: &Cli) -> Result<(), CliError> {
-    let ctx = Context::from_policy_path(&cli.policy)?;
+    let policy = safe_fs_tools::policy_io::load_policy(&cli.policy)?;
+    let max_patch_bytes = cli.max_patch_bytes.unwrap_or(policy.limits.max_read_bytes);
+    let ctx = Context::new(policy)?;
 
     let value = match &cli.command {
         Command::Read {
@@ -202,7 +260,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
             PatchRequest {
                 root_id: root.clone(),
                 path: path.clone(),
-                patch: load_text(patch_file)?,
+                patch: load_text_limited(patch_file, max_patch_bytes)?,
             },
         )?)?,
         Command::Delete { root, path } => serde_json::to_value(safe_fs_tools::ops::delete_file(
@@ -218,11 +276,44 @@ fn run(cli: &Cli) -> Result<(), CliError> {
     Ok(())
 }
 
-fn load_text(path: &PathBuf) -> Result<String, safe_fs_tools::Error> {
+fn load_text_limited(path: &PathBuf, max_bytes: u64) -> Result<String, safe_fs_tools::Error> {
+    let limit = max_bytes.saturating_add(1);
+    let mut bytes = Vec::<u8>::new();
+
     if path.as_os_str() == "-" {
-        let mut out = String::new();
-        std::io::stdin().read_to_string(&mut out)?;
-        return Ok(out);
+        std::io::stdin().take(limit).read_to_end(&mut bytes)?;
+    } else {
+        std::fs::File::open(path)?
+            .take(limit)
+            .read_to_end(&mut bytes)?;
     }
-    Ok(std::fs::read_to_string(path)?)
+
+    if bytes.len() as u64 > max_bytes {
+        return Err(safe_fs_tools::Error::InputTooLarge {
+            size_bytes: bytes.len() as u64,
+            max_bytes,
+        });
+    }
+
+    let text =
+        std::str::from_utf8(&bytes).map_err(|_| safe_fs_tools::Error::InvalidUtf8(path.clone()))?;
+    Ok(text.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_text_limited_rejects_large_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("big.diff");
+        std::fs::write(&path, "x".repeat(100)).expect("write");
+
+        let err = load_text_limited(&path, 10).expect_err("should reject");
+        match err {
+            safe_fs_tools::Error::InputTooLarge { .. } => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }

@@ -46,7 +46,7 @@ impl SecretRedactor {
     }
 
     pub fn is_path_denied(&self, relative: &Path) -> bool {
-        self.deny.is_match(relative)
+        self.deny.is_match(normalize_path_for_glob(relative))
     }
 
     pub fn redact_text(&self, input: &str) -> String {
@@ -60,4 +60,18 @@ impl SecretRedactor {
         }
         current.into_owned()
     }
+}
+
+#[cfg(windows)]
+fn normalize_path_for_glob(path: &Path) -> Cow<'_, Path> {
+    let raw = path.to_string_lossy();
+    if !raw.contains('\\') {
+        return Cow::Borrowed(path);
+    }
+    Cow::Owned(std::path::PathBuf::from(raw.replace('\\', "/")))
+}
+
+#[cfg(not(windows))]
+fn normalize_path_for_glob(path: &Path) -> Cow<'_, Path> {
+    Cow::Borrowed(path)
 }

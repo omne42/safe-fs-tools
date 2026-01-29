@@ -622,3 +622,79 @@ fn glob_and_grep_include_symlink_files() {
     assert_eq!(resp.matches.len(), 1);
     assert_eq!(resp.matches[0].path, PathBuf::from("link.txt"));
 }
+
+#[test]
+#[cfg(feature = "glob")]
+fn glob_truncation_is_deterministic_under_max_results() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("b.txt"), "b\n").expect("write");
+    std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_results = 1;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert_eq!(resp.matches, vec![PathBuf::from("a.txt")]);
+    assert!(resp.truncated);
+}
+
+#[test]
+#[cfg(feature = "grep")]
+fn grep_truncation_is_deterministic_under_max_results() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("b.txt"), "needle\n").expect("write");
+    std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_results = 1;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("a.txt"));
+    assert!(resp.truncated);
+}
+
+#[test]
+#[cfg(windows)]
+fn deny_globs_match_backslash_separators() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+    std::fs::write(dir.path().join(".git").join("config"), "secret").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from(r".git\config"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}

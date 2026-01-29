@@ -22,11 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enforce `limits.max_read_bytes` for `edit`/`patch` file reads (and use bounded reads for `read`/`grep`).
 - `delete` unlinks symlinks (does not follow link targets).
 - Add stable `Error::code()` for programmatic classification.
+- Add `Error::InputTooLarge` (code: `input_too_large`) for oversized CLI inputs.
 - Add `Context` method wrappers and crate-root re-exports for easier library consumption.
 - Add `SandboxPolicy::single_root` helper for simpler library integration.
 - Add `Context::from_policy_path` helper for a one-call policy+context load (via `policy-io`).
 - CLI: add `--error-format json` for structured errors.
+- CLI: add `--max-patch-bytes` to cap patch stdin/file input size (defaults to `limits.max_read_bytes`).
+- CLI: include `error.details` in JSON errors for common error kinds.
 - Add `docs/example-survey.md` (notes from `example/` repositories).
+- Add `docs/db-vfs.md` (DB-backed VFS decision + TODOs).
 - Add optional cargo features: `glob`/`grep`/`patch` (default on) and `policy-io`.
 
 ### Changed
@@ -34,12 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump crate editions to Rust 2024.
 - Enforce roots are absolute directories (policy validation + context init).
 - `glob`/`grep` now include symlinked files (still do not traverse symlinked directories).
+- `glob`/`grep` traversal now uses deterministic entry ordering (stable behavior under truncation caps).
 - IO errors produced by operations include operation/path context where available.
+- Atomic write on Windows now uses `ReplaceFileW` for true replacement semantics.
 
 ### Fixed
 
 - `--no-default-features` now builds cleanly (gate `walkdir` error variant behind traversal features).
 - `secrets.deny_globs` can no longer be bypassed via symlink paths (deny rules are applied before resolving symlink targets).
+- On Windows, glob/deny-glob matching now handles `\\` path separators.
 - Redaction replacement strings are now treated literally (no `$1` / `$name` capture expansion).
 - `edit`/`patch` now write atomically (temp file + rename) and preserve existing file permissions.
 - Atomic write temp files are created with restrictive permissions on Unix to avoid transient exposure.
