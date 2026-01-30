@@ -22,6 +22,7 @@ Important boundaries:
 - `root.path` must be an absolute path to an existing directory (absolute-path validation happens in `SandboxPolicy::validate`; existence/directory checks happen in `Context::new`).
 - Relative paths are resolved by `root.path.join(path)`; absolute paths are accepted but must still end up inside the selected root (paths that are lexically outside the root are rejected before filesystem canonicalization).
 - Directory traversal (`glob`/`grep`) uses `walkdir` with `follow_links(false)` and is best-effort: unreadable entries are skipped.
+- Directory traversal does **not** read or respect `.gitignore` (only policy deny/skip rules).
 - Symlinked **files** are treated as files, but their resolved targets must stay within the selected root; symlinked **directories** are not traversed.
 - `glob` results are sorted by path; `grep` results are sorted by `(path, line)`.
 - On Windows, glob matching (for `glob` patterns, `grep --glob`, `traversal.skip_globs`, and `secrets.deny_globs`) is explicitly case-insensitive.

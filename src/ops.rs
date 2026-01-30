@@ -1,8 +1,6 @@
-use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(feature = "glob", feature = "grep"))]
 use std::time::{Duration, Instant};
 
@@ -18,7 +16,6 @@ use crate::error::{Error, Result};
 use crate::policy::{RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
 
-static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(feature = "glob", feature = "grep"))]
 const TRAVERSAL_GLOB_PROBE_NAME: &str = ".safe-fs-tools-probe";
 
@@ -29,24 +26,15 @@ fn derive_requested_path(
     resolved: &Path,
 ) -> PathBuf {
     let relative_requested = if input.is_absolute() {
-        if let Ok(relative) = resolved.strip_prefix(root_path) {
-            relative.to_path_buf()
-        } else if let Ok(relative) = resolved.strip_prefix(canonical_root) {
-            relative.to_path_buf()
-        } else if let (Some(parent), Some(file_name)) = (resolved.parent(), resolved.file_name()) {
-            match parent.canonicalize() {
-                Ok(canonical_parent) => {
-                    let normalized = canonical_parent.join(file_name);
-                    normalized
-                        .strip_prefix(canonical_root)
-                        .unwrap_or(&normalized)
-                        .to_path_buf()
-                }
-                Err(_) => resolved.to_path_buf(),
-            }
-        } else {
-            resolved.to_path_buf()
-        }
+        let normalized_resolved = crate::path_utils::normalize_path_lexical(resolved);
+        let normalized_root_path = crate::path_utils::normalize_path_lexical(root_path);
+        let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
+
+        strip_prefix_case_insensitive(&normalized_resolved, &normalized_root_path)
+            .or_else(|| {
+                strip_prefix_case_insensitive(&normalized_resolved, &normalized_canonical_root)
+            })
+            .unwrap_or_else(|| resolved.to_path_buf())
     } else {
         input.to_path_buf()
     };
@@ -57,6 +45,71 @@ fn derive_requested_path(
     } else {
         normalized
     }
+}
+
+#[cfg(windows)]
+fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
+    use std::path::{Component, Prefix};
+
+    fn lower(s: &std::ffi::OsStr) -> String {
+        s.to_string_lossy().to_lowercase()
+    }
+
+    fn prefixes_eq(a: Prefix<'_>, b: Prefix<'_>) -> bool {
+        use std::path::Prefix::*;
+
+        match (a, b) {
+            (Disk(a), Disk(b))
+            | (Disk(a), VerbatimDisk(b))
+            | (VerbatimDisk(a), Disk(b))
+            | (VerbatimDisk(a), VerbatimDisk(b)) => {
+                a.to_ascii_lowercase() == b.to_ascii_lowercase()
+            }
+            (UNC(a_server, a_share), UNC(b_server, b_share))
+            | (UNC(a_server, a_share), VerbatimUNC(b_server, b_share))
+            | (VerbatimUNC(a_server, a_share), UNC(b_server, b_share))
+            | (VerbatimUNC(a_server, a_share), VerbatimUNC(b_server, b_share)) => {
+                lower(a_server) == lower(b_server) && lower(a_share) == lower(b_share)
+            }
+            (Verbatim(a), Verbatim(b)) => lower(a) == lower(b),
+            (DeviceNS(a), DeviceNS(b)) => lower(a) == lower(b),
+            _ => false,
+        }
+    }
+
+    let mut path_components = path.components();
+    for prefix_comp in prefix.components() {
+        let path_comp = path_components.next()?;
+
+        let ok = match (path_comp, prefix_comp) {
+            (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
+            (Component::RootDir, Component::RootDir) => true,
+            (Component::Normal(a), Component::Normal(b)) => lower(a) == lower(b),
+            (Component::CurDir, Component::CurDir) => true,
+            (Component::ParentDir, Component::ParentDir) => true,
+            _ => false,
+        };
+
+        if !ok {
+            return None;
+        }
+    }
+
+    let mut out = PathBuf::new();
+    for comp in path_components {
+        match comp {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => out.push(".."),
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(out)
+}
+
+#[cfg(not(windows))]
+fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
+    path.strip_prefix(prefix).ok().map(PathBuf::from)
 }
 
 #[cfg(windows)]
@@ -126,6 +179,7 @@ fn elapsed_ms(started: &Instant) -> u64 {
     }
 }
 
+#[cfg(all(test, unix))]
 fn open_private_temp_file(path: &Path) -> std::io::Result<fs::File> {
     let mut open_options = fs::OpenOptions::new();
     open_options.write(true).create_new(true);
@@ -188,58 +242,37 @@ fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> 
             relative.display()
         ))
     })?;
-    let file_name = path.file_name().ok_or_else(|| {
+    let _ = path.file_name().ok_or_else(|| {
         Error::InvalidPath(format!(
             "invalid path {}: missing file name",
             relative.display()
         ))
     })?;
 
-    let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    for attempt in 0..100u32 {
-        let mut tmp_name = OsString::from(".");
-        tmp_name.push(file_name);
-        tmp_name.push(format!(
-            ".safe-fs-tools.tmp.{}.{}.{}",
-            std::process::id(),
-            counter,
-            attempt
-        ));
-        let tmp_path = parent.join(&tmp_name);
+    let mut tmp_file = tempfile::Builder::new()
+        .prefix(".safe-fs-tools.")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .map_err(|err| Error::io_path("create_temp", relative, err))?;
 
-        let mut tmp_file = match open_private_temp_file(&tmp_path) {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(Error::io_path("create_temp", relative, err)),
-        };
+    tmp_file
+        .as_file_mut()
+        .write_all(bytes)
+        .map_err(|err| Error::io_path("write", relative, err))?;
+    tmp_file
+        .as_file_mut()
+        .sync_all()
+        .map_err(|err| Error::io_path("sync", relative, err))?;
 
-        if let Err(err) = tmp_file.write_all(bytes) {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(Error::io_path("write", relative, err));
-        }
-        if let Err(err) = tmp_file.sync_all() {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(Error::io_path("sync", relative, err));
-        }
-        drop(tmp_file);
+    let tmp_path = tmp_file.into_temp_path();
 
-        if let Err(err) = fs::set_permissions(&tmp_path, perms.clone()) {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(Error::io_path("set_permissions", relative, err));
-        }
+    fs::set_permissions(&tmp_path, perms)
+        .map_err(|err| Error::io_path("set_permissions", relative, err))?;
 
-        if let Err(err) = replace_file(&tmp_path, path) {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(Error::io_path("replace_file", relative, err));
-        }
+    replace_file(tmp_path.as_ref(), path)
+        .map_err(|err| Error::io_path("replace_file", relative, err))?;
 
-        return Ok(());
-    }
-
-    Err(Error::InvalidPath(format!(
-        "failed to create unique temp file for {}",
-        relative.display()
-    )))
+    Ok(())
 }
 
 #[cfg(windows)]

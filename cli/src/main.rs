@@ -175,12 +175,14 @@ fn tool_error_details_with(
                 "kind".to_string(),
                 serde_json::Value::String("invalid_policy".to_string()),
             );
-            if !redact_paths {
-                out.insert(
-                    "message".to_string(),
-                    serde_json::Value::String(message.clone()),
-                );
-            }
+            out.insert(
+                "message".to_string(),
+                serde_json::Value::String(if redact_paths {
+                    "invalid policy".to_string()
+                } else {
+                    message.clone()
+                }),
+            );
             Some(serde_json::Value::Object(out))
         }
         safe_fs_tools::Error::InvalidPath(message) => {
@@ -189,12 +191,14 @@ fn tool_error_details_with(
                 "kind".to_string(),
                 serde_json::Value::String("invalid_path".to_string()),
             );
-            if !redact_paths {
-                out.insert(
-                    "message".to_string(),
-                    serde_json::Value::String(message.clone()),
-                );
-            }
+            out.insert(
+                "message".to_string(),
+                serde_json::Value::String(if redact_paths {
+                    "invalid path".to_string()
+                } else {
+                    message.clone()
+                }),
+            );
             Some(serde_json::Value::Object(out))
         }
         safe_fs_tools::Error::RootNotFound(root_id) => Some(serde_json::json!({
@@ -673,6 +677,20 @@ mod tests {
     }
 
     #[test]
+    fn tool_error_details_includes_safe_invalid_path_message_when_redacting() {
+        let err = safe_fs_tools::Error::InvalidPath("bad path".to_string());
+        let details = tool_error_details_with(&err, None, true, false).expect("details");
+        assert_eq!(
+            details.get("kind").and_then(|v| v.as_str()),
+            Some("invalid_path")
+        );
+        assert_eq!(
+            details.get("message").and_then(|v| v.as_str()),
+            Some("invalid path")
+        );
+    }
+
+    #[test]
     fn tool_error_details_covers_root_not_found() {
         let err = safe_fs_tools::Error::RootNotFound("missing".to_string());
         let details = tool_error_details(&err).expect("details");
@@ -683,6 +701,20 @@ mod tests {
         assert_eq!(
             details.get("root_id").and_then(|v| v.as_str()),
             Some("missing")
+        );
+    }
+
+    #[test]
+    fn tool_error_details_includes_safe_invalid_policy_message_when_redacting() {
+        let err = safe_fs_tools::Error::InvalidPolicy("bad policy".to_string());
+        let details = tool_error_details_with(&err, None, true, false).expect("details");
+        assert_eq!(
+            details.get("kind").and_then(|v| v.as_str()),
+            Some("invalid_policy")
+        );
+        assert_eq!(
+            details.get("message").and_then(|v| v.as_str()),
+            Some("invalid policy")
         );
     }
 

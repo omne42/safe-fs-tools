@@ -86,6 +86,79 @@ fn read_absolute_paths_return_root_relative_requested_path() {
 }
 
 #[test]
+#[cfg(windows)]
+fn deny_globs_apply_to_absolute_paths_even_when_parent_is_missing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.deny_globs = vec!["missing/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let mut root = dir.path().to_string_lossy().into_owned();
+    let original_root = root.clone();
+    let mut did_toggle = false;
+    let drive_letter_index = if root.starts_with(r"\\?\") && root.len() >= 5 {
+        Some(4)
+    } else if root.len() >= 2 && root.as_bytes()[1] == b':' {
+        Some(0)
+    } else if root.starts_with(r"\\") && root.len() >= 3 {
+        Some(2)
+    } else {
+        None
+    };
+
+    if let Some(idx) = drive_letter_index {
+        if let Some(ch) = root.as_bytes().get(idx).copied().map(|b| b as char)
+            && ch.is_ascii_alphabetic()
+        {
+            let new_ch = if ch.is_ascii_lowercase() {
+                ch.to_ascii_uppercase()
+            } else {
+                ch.to_ascii_lowercase()
+            };
+            root.replace_range(idx..idx + 1, &new_ch.to_string());
+            did_toggle = true;
+        }
+    }
+
+    if !did_toggle {
+        if let Some((idx, ch)) = root
+            .char_indices()
+            .find(|(_idx, ch)| ch.is_ascii_alphabetic())
+        {
+            let new_ch = if ch.is_ascii_lowercase() {
+                ch.to_ascii_uppercase()
+            } else {
+                ch.to_ascii_lowercase()
+            };
+            root.replace_range(idx..idx + 1, &new_ch.to_string());
+            did_toggle = true;
+        }
+    }
+
+    assert_ne!(root, original_root, "expected to toggle root path casing");
+
+    let abs = PathBuf::from(root).join("missing").join("file.txt");
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: abs,
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(path) => {
+            assert_eq!(path, PathBuf::from("missing").join("file.txt"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn read_redacts_literal_replacement_without_expanding_capture_groups() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("hello.txt");

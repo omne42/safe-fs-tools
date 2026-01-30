@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs: clarify `glob`/`grep` truncation semantics when `limits.max_results` is hit.
 - Docs: clarify atomic write durability semantics.
 - Docs: clarify `SandboxPolicy::validate` is structural (no filesystem IO).
+- Docs: clarify `glob`/`grep` traversal does not read `.gitignore`.
 - Internal: share traversal loop between `glob` and `grep` to reduce drift.
 
 ### Fixed
@@ -90,9 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI `--redact-paths` now omits raw `io` error messages in JSON `error.details` and includes structured `io_kind`/`raw_os_error` instead.
 - `outside_root` and related `canonicalize` errors now report the normalized requested path (avoids leaking absolute root paths for relative inputs).
 - Root-level traversal (`glob`/`grep`) errors no longer leak absolute paths via `walkdir` errors.
-- Absolute path normalization no longer fails when deriving `requested_path` requires canonicalizing a missing/unreadable parent directory.
+- `requested_path` derivation for absolute inputs no longer depends on canonicalizing missing/unreadable parents; it uses lexical normalization and root-relative stripping when possible.
 - Paths that are lexically outside the selected root are now rejected before filesystem canonicalization, reducing filesystem probing side-channels for missing/outside paths.
 - `requested_path` no longer serializes as an empty string for `.` inputs.
 - `canonical_path_in_root` no longer returns an empty `path` for the root itself; it uses `.` for consistency in errors/responses.
 - `grep` line truncation now respects UTF-8 character boundaries (avoids replacement characters).
 - CLI: redacted JSON error formatting no longer re-loads the policy file; it reuses the already-loaded policy roots for consistent path redaction.
+- CLI: redacted JSON error details now include safe `message` strings for `invalid_path`/`invalid_policy`.
+- Atomic write temp file names are now randomized to reduce pre-creation attacks in untrusted workspaces.
