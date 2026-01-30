@@ -10,7 +10,7 @@ use safe_fs_tools::ops::{GrepRequest, grep};
 #[cfg(feature = "patch")]
 use safe_fs_tools::ops::{PatchRequest, apply_unified_patch};
 use safe_fs_tools::policy::{
-    Limits, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules,
+    Limits, PathRules, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules,
 };
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -37,6 +37,7 @@ fn test_policy(root: &std::path::Path, mode: RootMode) -> SandboxPolicy {
             replacement: "***REDACTED***".to_string(),
         },
         traversal: TraversalRules::default(),
+        paths: PathRules::default(),
     }
 }
 
@@ -83,6 +84,32 @@ fn read_absolute_paths_return_root_relative_requested_path() {
     .expect("read");
 
     assert_eq!(response.requested_path, Some(PathBuf::from("hello.txt")));
+}
+
+#[test]
+fn absolute_paths_can_be_disabled_by_policy() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let abs_path = dir.path().join("hello.txt");
+    std::fs::write(&abs_path, "hello\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.paths.allow_absolute = false;
+    let ctx = Context::new(policy).expect("ctx");
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: abs_path,
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -1152,6 +1179,7 @@ fn policy_rejects_duplicate_root_ids() {
         limits: Limits::default(),
         secrets: SecretRules::default(),
         traversal: TraversalRules::default(),
+        paths: PathRules::default(),
     };
 
     let err = Context::new(policy).expect_err("should reject");
@@ -1389,6 +1417,7 @@ fn policy_rejects_relative_root_paths() {
         limits: Limits::default(),
         secrets: SecretRules::default(),
         traversal: TraversalRules::default(),
+        paths: PathRules::default(),
     };
 
     let err = Context::new(policy).expect_err("should reject");
@@ -1444,6 +1473,7 @@ fn context_rejects_file_roots() {
         limits: Limits::default(),
         secrets: SecretRules::default(),
         traversal: TraversalRules::default(),
+        paths: PathRules::default(),
     };
 
     let err = Context::new(policy).expect_err("should reject");

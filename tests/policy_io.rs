@@ -44,6 +44,7 @@ read = true
                 limits: Default::default(),
                 secrets: Default::default(),
                 traversal: Default::default(),
+                paths: Default::default(),
             })
             .expect("serialize json"),
         )
@@ -52,10 +53,12 @@ read = true
         let toml_policy = safe_fs_tools::policy_io::load_policy(&toml_path).expect("load toml");
         assert_eq!(toml_policy.roots.len(), 1);
         assert!(toml_policy.permissions.read);
+        assert!(toml_policy.paths.allow_absolute);
 
         let json_policy = safe_fs_tools::policy_io::load_policy(&json_path).expect("load json");
         assert_eq!(json_policy.roots.len(), 1);
         assert!(json_policy.permissions.read);
+        assert!(json_policy.paths.allow_absolute);
 
         let ctx = Context::from_policy_path(&toml_path).expect("ctx");
         assert!(ctx.policy().permissions.read);

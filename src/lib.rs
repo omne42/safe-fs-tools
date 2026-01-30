@@ -14,4 +14,6 @@ pub use ops::{
     ScanLimitReason, apply_unified_patch, delete_file, edit_range, glob_paths, grep, read_file,
 };
 
-pub use policy::{Limits, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules};
+pub use policy::{
+    Limits, PathRules, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules,
+};

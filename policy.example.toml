@@ -11,6 +11,10 @@ edit = false
 patch = false
 delete = false
 
+[paths]
+# When false, tool request paths must be root-relative (absolute paths are rejected).
+allow_absolute = false
+
 [limits]
 max_read_bytes = 1048576
 # Optional cap for patch input (unified diff, bytes). Omit to default to max_read_bytes.

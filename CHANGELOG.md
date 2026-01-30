@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `glob`/`grep` responses now include `scan_limit_reason` (`entries`/`files`/`time`/`results`) when a cap is hit.
 - `glob`/`grep` responses now include traversal diagnostics (`scanned_entries`, `skipped_walk_errors`, `skipped_io_errors`, `skipped_dangling_symlink_targets`).
 - Add `traversal.skip_globs` to skip paths during traversal (`glob`/`grep`) without denying direct access.
+- Add `paths.allow_absolute` to optionally reject absolute request paths (require root-relative tool inputs).
 - Enforce `limits.max_read_bytes` for `edit`/`patch` file reads (and use bounded reads for `read`/`grep`).
 - `delete` unlinks symlinks (does not follow link targets).
 - Add stable `Error::code()` for programmatic classification.

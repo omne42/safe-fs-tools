@@ -20,7 +20,7 @@ Important boundaries:
 
 - Roots are configured explicitly in `SandboxPolicy.roots` and canonicalized in `ops::Context::new`.
 - `root.path` must be an absolute path to an existing directory (absolute-path validation happens in `SandboxPolicy::validate`; existence/directory checks happen in `Context::new`).
-- Relative paths are resolved by `root.path.join(path)`; absolute paths are accepted but must still end up inside the selected root (paths that are lexically outside the root are rejected before filesystem canonicalization).
+- Relative paths are resolved by `root.path.join(path)`; absolute paths are accepted by default (`policy.paths.allow_absolute=true`) but must still end up inside the selected root (paths that are lexically outside the root are rejected before filesystem canonicalization). Set `policy.paths.allow_absolute=false` to require root-relative inputs.
 - Directory traversal (`glob`/`grep`) uses `walkdir` with `follow_links(false)` and is best-effort: unreadable entries are skipped.
 - Directory traversal does **not** read or respect `.gitignore` (only policy deny/skip rules). See `docs/example-survey.md` for related tradeoffs in other projects.
 - Symlinked **files** are treated as files, but their resolved targets must stay within the selected root; symlinked **directories** are not traversed.

@@ -124,6 +124,27 @@ pub struct TraversalRules {
     pub skip_globs: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathRules {
+    /// Whether absolute request paths are accepted.
+    ///
+    /// When `false`, all request paths must be root-relative.
+    #[serde(default = "default_allow_absolute_paths")]
+    pub allow_absolute: bool,
+}
+
+const fn default_allow_absolute_paths() -> bool {
+    true
+}
+
+impl Default for PathRules {
+    fn default() -> Self {
+        Self {
+            allow_absolute: default_allow_absolute_paths(),
+        }
+    }
+}
+
 fn default_secret_deny_globs() -> Vec<String> {
     vec![
         ".git/**".to_string(),
@@ -160,6 +181,8 @@ pub struct SandboxPolicy {
     pub secrets: SecretRules,
     #[serde(default)]
     pub traversal: TraversalRules,
+    #[serde(default)]
+    pub paths: PathRules,
 }
 
 impl SandboxPolicy {
@@ -174,6 +197,7 @@ impl SandboxPolicy {
             limits: Limits::default(),
             secrets: SecretRules::default(),
             traversal: TraversalRules::default(),
+            paths: PathRules::default(),
         }
     }
 
@@ -269,6 +293,11 @@ impl SandboxPolicy {
         let root = self.root(root_id)?;
         if path.as_os_str().is_empty() {
             return Err(Error::InvalidPath("path is empty".to_string()));
+        }
+        if path.is_absolute() && !self.paths.allow_absolute {
+            return Err(Error::InvalidPath(
+                "absolute request paths are not allowed by policy".to_string(),
+            ));
         }
         #[cfg(windows)]
         {
