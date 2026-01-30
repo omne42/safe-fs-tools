@@ -111,15 +111,50 @@ fn tool_error_details_with(
     redact_paths: bool,
 ) -> Option<serde_json::Value> {
     match tool {
-        safe_fs_tools::Error::Io(err) => Some(serde_json::json!({
-            "kind": "io",
-            "message": err.to_string(),
-        })),
-        safe_fs_tools::Error::IoPath { op, path, .. } => Some(serde_json::json!({
-            "kind": "io_path",
-            "op": op,
-            "path": format_path_for_error(path, redaction, redact_paths),
-        })),
+        safe_fs_tools::Error::Io(err) => {
+            if redact_paths {
+                let mut out = serde_json::Map::new();
+                out.insert(
+                    "kind".to_string(),
+                    serde_json::Value::String("io".to_string()),
+                );
+                out.insert(
+                    "io_kind".to_string(),
+                    serde_json::Value::String(format!("{:?}", err.kind())),
+                );
+                if let Some(raw_os_error) = err.raw_os_error() {
+                    out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
+                }
+                Some(serde_json::Value::Object(out))
+            } else {
+                Some(serde_json::json!({
+                    "kind": "io",
+                    "message": err.to_string(),
+                }))
+            }
+        }
+        safe_fs_tools::Error::IoPath { op, path, source } => {
+            let mut out = serde_json::Map::new();
+            out.insert(
+                "kind".to_string(),
+                serde_json::Value::String("io_path".to_string()),
+            );
+            out.insert("op".to_string(), serde_json::Value::String(op.to_string()));
+            out.insert(
+                "path".to_string(),
+                serde_json::Value::String(format_path_for_error(path, redaction, redact_paths)),
+            );
+            if redact_paths {
+                out.insert(
+                    "io_kind".to_string(),
+                    serde_json::Value::String(format!("{:?}", source.kind())),
+                );
+                if let Some(raw_os_error) = source.raw_os_error() {
+                    out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
+                }
+            }
+            Some(serde_json::Value::Object(out))
+        }
         safe_fs_tools::Error::InvalidPolicy(message) => {
             let mut out = serde_json::Map::new();
             out.insert(
@@ -617,6 +652,66 @@ mod tests {
         assert_eq!(
             details.get("path").and_then(|v| v.as_str()),
             Some("missing")
+        );
+
+        let rendered = details.to_string();
+        assert!(
+            !rendered.contains(&dir.path().display().to_string()),
+            "expected redacted details to not contain absolute root path: {rendered}"
+        );
+    }
+
+    #[test]
+    fn tool_error_details_redacts_io_message() {
+        let err = safe_fs_tools::Error::Io(std::io::Error::from_raw_os_error(2));
+        let details = tool_error_details_with(&err, None, true).expect("details");
+        assert_eq!(details.get("kind").and_then(|v| v.as_str()), Some("io"));
+        assert!(
+            details.get("message").is_none(),
+            "expected io message omitted in redacted mode"
+        );
+        assert!(
+            details.get("io_kind").and_then(|v| v.as_str()).is_some(),
+            "expected io_kind"
+        );
+        assert_eq!(
+            details.get("raw_os_error").and_then(|v| v.as_i64()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn tool_error_details_redacts_io_path_details() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
+            "root",
+            dir.path(),
+            safe_fs_tools::policy::RootMode::ReadOnly,
+        );
+        let redaction = PathRedaction::from_policy(&policy);
+
+        let err = safe_fs_tools::Error::IoPath {
+            op: "open",
+            path: dir.path().join("file.txt"),
+            source: std::io::Error::from_raw_os_error(2),
+        };
+        let details = tool_error_details_with(&err, Some(&redaction), true).expect("details");
+        assert_eq!(
+            details.get("kind").and_then(|v| v.as_str()),
+            Some("io_path")
+        );
+        assert_eq!(details.get("op").and_then(|v| v.as_str()), Some("open"));
+        assert_eq!(
+            details.get("path").and_then(|v| v.as_str()),
+            Some("file.txt")
+        );
+        assert!(
+            details.get("io_kind").and_then(|v| v.as_str()).is_some(),
+            "expected io_kind"
+        );
+        assert_eq!(
+            details.get("raw_os_error").and_then(|v| v.as_i64()),
+            Some(2)
         );
 
         let rendered = details.to_string();

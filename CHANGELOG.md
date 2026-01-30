@@ -69,3 +69,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI `--redact-paths` no longer includes raw `walkdir` error messages in JSON `error.details` (which could leak absolute paths).
 - On Windows, lexical path normalization no longer drops drive/UNC prefixes (fixes `..` handling for absolute paths).
 - Invalid `secrets.redact_regexes` patterns are now rejected as `invalid_policy` (instead of `invalid_regex`).
+- CLI `--redact-paths` now omits raw `io` error messages in JSON `error.details` and includes structured `io_kind`/`raw_os_error` instead.
