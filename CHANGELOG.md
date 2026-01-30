@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `limits.max_walk_files` and report `scanned_files` / `scan_limit_reached` in `glob`/`grep` responses.
 - Add `limits.max_walk_entries` to cap directory traversal work (helps bound huge directory trees with few files).
 - Add `limits.max_walk_ms` traversal time budget for `glob`/`grep` and report `elapsed_ms` in responses.
-- `glob`/`grep` responses now include `scan_limit_reason` (`entries`/`files`/`time`) when traversal caps are hit.
+- `glob`/`grep` responses now include `scan_limit_reason` (`entries`/`files`/`time`/`results`) when a cap is hit.
 - `glob`/`grep` responses now include traversal diagnostics (`scanned_entries`, `skipped_walk_errors`, `skipped_io_errors`, `skipped_dangling_symlink_targets`).
 - Add `traversal.skip_globs` to skip paths during traversal (`glob`/`grep`) without denying direct access.
 - Enforce `limits.max_read_bytes` for `edit`/`patch` file reads (and use bounded reads for `read`/`grep`).
@@ -93,3 +93,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Absolute path normalization no longer fails when deriving `requested_path` requires canonicalizing a missing/unreadable parent directory.
 - Paths that are lexically outside the selected root are now rejected before filesystem canonicalization, reducing filesystem probing side-channels for missing/outside paths.
 - `requested_path` no longer serializes as an empty string for `.` inputs.
+- `canonical_path_in_root` no longer returns an empty `path` for the root itself; it uses `.` for consistency in errors/responses.
+- `grep` line truncation now respects UTF-8 character boundaries (avoids replacement characters).
+- CLI: redacted JSON error formatting no longer re-loads the policy file; it reuses the already-loaded policy roots for consistent path redaction.

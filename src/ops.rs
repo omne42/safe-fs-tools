@@ -428,9 +428,10 @@ mod tests {
         let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
         let ctx = Context::new(policy).expect("ctx");
 
-        let (_canonical, _relative, requested_path) = ctx
+        let (_canonical, relative, requested_path) = ctx
             .canonical_path_in_root("root", Path::new("."))
             .expect("canonicalize");
+        assert_eq!(relative, PathBuf::from("."));
         assert_eq!(requested_path, PathBuf::from("."));
     }
 
@@ -638,6 +639,11 @@ impl Context {
             .strip_prefix(canonical_root)
             .unwrap_or(&canonical)
             .to_path_buf();
+        let relative = if relative.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            relative
+        };
         if self.redactor.is_path_denied(&relative) {
             return Err(Error::SecretPathDenied(relative));
         }
@@ -794,6 +800,7 @@ pub enum ScanLimitReason {
     Entries,
     Files,
     Time,
+    Results,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1172,6 +1179,8 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                 matches.push(file.relative_path);
                 if matches.len() >= ctx.policy.limits.max_results {
                     diag.truncated = true;
+                    diag.scan_limit_reached = true;
+                    diag.scan_limit_reason = Some(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
             }
@@ -1367,10 +1376,12 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 if !ok {
                     continue;
                 }
-                let line_bytes = line.as_bytes();
-                let line_truncated = line_bytes.len() > ctx.policy.limits.max_line_bytes;
-                let end = line_bytes.len().min(ctx.policy.limits.max_line_bytes);
-                let text = String::from_utf8_lossy(&line_bytes[..end]).to_string();
+                let line_truncated = line.len() > ctx.policy.limits.max_line_bytes;
+                let mut end = line.len().min(ctx.policy.limits.max_line_bytes);
+                while end > 0 && !line.is_char_boundary(end) {
+                    end = end.saturating_sub(1);
+                }
+                let text = line[..end].to_string();
                 let text = ctx.redactor.redact_text(&text);
                 matches.push(GrepMatch {
                     path: file.relative_path.clone(),
@@ -1380,6 +1391,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 });
                 if matches.len() >= ctx.policy.limits.max_results {
                     diag.truncated = true;
+                    diag.scan_limit_reached = true;
+                    diag.scan_limit_reason = Some(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
             }

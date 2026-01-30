@@ -25,12 +25,12 @@ Important boundaries:
 - Symlinked **files** are treated as files, but their resolved targets must stay within the selected root; symlinked **directories** are not traversed.
 - `glob` results are sorted by path; `grep` results are sorted by `(path, line)`.
 - On Windows, glob matching (for `glob` patterns, `grep --glob`, `traversal.skip_globs`, and `secrets.deny_globs`) is explicitly case-insensitive.
-- `limits.max_results` caps how many matches `glob`/`grep` will return. When hit, the operation stops scanning early and returns `truncated=true`. Matches are still returned in the sorted output order described above, but the set itself is only a deterministic *partial* result (based on traversal order), and is **not** guaranteed to equal “the first N” matches of the full (sorted) result set.
+- `limits.max_results` caps how many matches `glob`/`grep` will return. When hit, the operation stops scanning early and returns `truncated=true`, `scan_limit_reached=true`, `scan_limit_reason=results`. Matches are still returned in the sorted output order described above, but the set itself is only a deterministic *partial* result (based on traversal order), and is **not** guaranteed to equal “the first N” matches of the full (sorted) result set.
 - `limits.max_walk_entries` caps how many directory entries `glob`/`grep` will traverse (responses include `scanned_entries`).
 - `limits.max_walk_files` caps how many file entries `glob`/`grep` will consider (responses include `scanned_files`).
 - `scanned_files` is a best-effort diagnostic counter and may include files later skipped by deny/skip rules, glob filters, or IO errors.
 - `limits.max_walk_ms` optionally caps wall-clock traversal time for `glob`/`grep` (responses include `elapsed_ms`).
-- When a traversal cap is hit, responses set `scan_limit_reached=true` and `scan_limit_reason` (`entries`/`files`/`time`).
+- When a cap is hit, responses set `scan_limit_reached=true` and `scan_limit_reason` (`entries`/`files`/`time`/`results`).
 - `limits.max_read_bytes` is a hard cap (no implicit truncation). `read`/`edit`/`patch` fail if the operation would exceed the cap; `grep` skips files above the cap.
 - `limits.max_patch_bytes` optionally caps unified-diff patch *input* size (defaults to `limits.max_read_bytes` if unset).
 - For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).

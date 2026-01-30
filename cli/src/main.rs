@@ -471,21 +471,24 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     let error_format = cli.error_format;
-    if let Err(err) = run(&cli) {
+    let redact_paths = cli.redact_paths || cli.redact_paths_strict;
+    let strict_redact_paths = cli.redact_paths_strict;
+    let mut redaction = None::<PathRedaction>;
+
+    let result = match safe_fs_tools::policy_io::load_policy(&cli.policy) {
+        Ok(policy) => {
+            if matches!(error_format, ErrorFormat::Json) && redact_paths {
+                redaction = Some(PathRedaction::from_policy(&policy));
+            }
+            run_with_policy(&cli, policy)
+        }
+        Err(err) => Err(CliError::Tool(err)),
+    };
+
+    if let Err(err) = result {
         match error_format {
             ErrorFormat::Text => eprintln!("{err}"),
             ErrorFormat::Json => {
-                let redact_paths = cli.redact_paths || cli.redact_paths_strict;
-                let strict_redact_paths = cli.redact_paths_strict;
-
-                let redaction = if redact_paths {
-                    safe_fs_tools::policy_io::load_policy(&cli.policy)
-                        .ok()
-                        .map(|policy| PathRedaction::from_policy(&policy))
-                } else {
-                    None
-                };
-
                 let mut error = serde_json::Map::new();
                 error.insert(
                     "code".to_string(),
@@ -526,8 +529,7 @@ fn main() {
     }
 }
 
-fn run(cli: &Cli) -> Result<(), CliError> {
-    let policy = safe_fs_tools::policy_io::load_policy(&cli.policy)?;
+fn run_with_policy(cli: &Cli, policy: safe_fs_tools::SandboxPolicy) -> Result<(), CliError> {
     let policy_patch_limit = policy
         .limits
         .max_patch_bytes
