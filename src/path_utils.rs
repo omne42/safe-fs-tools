@@ -20,7 +20,14 @@ pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
 
 pub(crate) fn build_glob(pattern: &str) -> std::result::Result<globset::Glob, globset::Error> {
     let normalized_pattern = normalize_glob_pattern(pattern);
-    let mut builder = GlobBuilder::new(normalized_pattern.as_ref());
+    let mut normalized_pattern = normalized_pattern.as_ref();
+    while normalized_pattern.starts_with("./") {
+        normalized_pattern = &normalized_pattern[2..];
+    }
+    if normalized_pattern.is_empty() {
+        normalized_pattern = ".";
+    }
+    let mut builder = GlobBuilder::new(normalized_pattern);
     builder.literal_separator(true);
     #[cfg(windows)]
     builder.case_insensitive(true);

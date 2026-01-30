@@ -86,6 +86,116 @@ fn read_absolute_paths_return_root_relative_requested_path() {
 }
 
 #[test]
+#[cfg(feature = "glob")]
+fn glob_patterns_support_leading_dot_slash() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("src")).expect("mkdir");
+    std::fs::write(dir.path().join("src").join("a.txt"), "a\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "./src/*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert_eq!(resp.matches, vec![PathBuf::from("src/a.txt")]);
+}
+
+#[test]
+#[cfg(feature = "grep")]
+fn grep_globs_support_leading_dot_slash() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("src")).expect("mkdir");
+    std::fs::write(dir.path().join("src").join("a.txt"), "needle\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: Some("./src/*.txt".to_string()),
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("src/a.txt"));
+}
+
+#[test]
+fn deny_globs_support_leading_dot_slash() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+    std::fs::write(dir.path().join(".git").join("config"), "secret").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.deny_globs = vec!["./.git/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from(".git").join("config"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(feature = "grep")]
+fn traversal_skip_globs_support_leading_dot_slash() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("node_modules")).expect("mkdir");
+    std::fs::write(dir.path().join("keep.txt"), "needle\n").expect("write");
+    std::fs::write(dir.path().join("node_modules").join("skip.txt"), "needle\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.traversal.skip_globs = vec!["./node_modules/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.scanned_files, 1);
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("keep.txt"));
+
+    let read = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("node_modules").join("skip.txt"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect("read");
+    assert!(read.content.contains("needle"));
+}
+
+#[test]
 #[cfg(windows)]
 fn deny_globs_apply_to_absolute_paths_even_when_parent_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -108,3 +108,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Atomic write temp file names are now randomized to reduce pre-creation attacks in untrusted workspaces.
 - Internal: add a regression test locking traversal skip-glob directory probe semantics.
 - `read` line-range mode now reports `file_too_large.size_bytes` using file metadata when available (instead of scanned bytes).
+- Glob patterns now normalize leading `./` for `glob`/`grep` and policy glob rules (`secrets.deny_globs`, `traversal.skip_globs`).
