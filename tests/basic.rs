@@ -462,6 +462,56 @@ fn grep_skips_unreadable_files() {
 }
 
 #[test]
+#[cfg(feature = "glob")]
+fn glob_respects_max_walk_ms_time_budget() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_walk_ms = Some(0);
+
+    let ctx = Context::new(policy).expect("ctx");
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "**/*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert!(resp.truncated);
+    assert!(resp.scan_limit_reached);
+    assert!(resp.matches.is_empty());
+}
+
+#[test]
+#[cfg(feature = "grep")]
+fn grep_respects_max_walk_ms_time_budget() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_walk_ms = Some(0);
+
+    let ctx = Context::new(policy).expect("ctx");
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert!(resp.truncated);
+    assert!(resp.scan_limit_reached);
+    assert!(resp.matches.is_empty());
+}
+
+#[test]
 #[cfg(feature = "patch")]
 fn edit_patch_delete_roundtrip() {
     let dir = tempfile::tempdir().expect("tempdir");

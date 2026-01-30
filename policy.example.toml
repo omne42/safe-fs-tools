@@ -17,6 +17,8 @@ max_write_bytes = 1048576
 max_results = 2000
 max_walk_entries = 500000
 max_walk_files = 200000
+# Optional wall-clock traversal budget for `glob`/`grep` (ms). Omit for no budget.
+# max_walk_ms = 1000
 max_line_bytes = 4096
 
 [secrets]

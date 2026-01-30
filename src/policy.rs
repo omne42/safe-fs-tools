@@ -48,6 +48,12 @@ pub struct Limits {
     pub max_walk_entries: usize,
     #[serde(default = "default_max_walk_files")]
     pub max_walk_files: usize,
+    /// Optional wall-clock traversal budget for `glob`/`grep` (milliseconds).
+    ///
+    /// - `None` => no time budget enforcement.
+    /// - `Some(0)` => immediately stop traversal (useful for tests / hard disable).
+    #[serde(default)]
+    pub max_walk_ms: Option<u64>,
     #[serde(default = "default_max_line_bytes")]
     pub max_line_bytes: usize,
 }
@@ -84,6 +90,7 @@ impl Default for Limits {
             max_results: default_max_results(),
             max_walk_entries: default_max_walk_entries(),
             max_walk_files: default_max_walk_files(),
+            max_walk_ms: None,
             max_line_bytes: default_max_line_bytes(),
         }
     }

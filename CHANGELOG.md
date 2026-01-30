@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Split CLI into `safe-fs-tools-cli` so the library has no CLI-format dependencies.
 - Add `limits.max_walk_files` and report `scanned_files` / `scan_limit_reached` in `glob`/`grep` responses.
 - Add `limits.max_walk_entries` to cap directory traversal work (helps bound huge directory trees with few files).
+- Add `limits.max_walk_ms` traversal time budget for `glob`/`grep` and report `elapsed_ms` in responses.
 - `glob`/`grep` responses now include traversal diagnostics (`scanned_entries`, `skipped_walk_errors`, `skipped_io_errors`, `skipped_dangling_symlink_targets`).
 - Add `traversal.skip_globs` to skip paths during traversal (`glob`/`grep`) without denying direct access.
 - Enforce `limits.max_read_bytes` for `edit`/`patch` file reads (and use bounded reads for `read`/`grep`).

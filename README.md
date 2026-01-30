@@ -26,6 +26,7 @@ Important boundaries:
 - `glob` results are sorted by path; `grep` results are sorted by `(path, line)`.
 - `limits.max_walk_entries` caps how many directory entries `glob`/`grep` will traverse (responses include `scanned_entries` and `scan_limit_reached`).
 - `limits.max_walk_files` caps how many files `glob`/`grep` will scan (responses include `scanned_files` and `scan_limit_reached`; the limit can be reached by either cap).
+- `limits.max_walk_ms` optionally caps wall-clock traversal time for `glob`/`grep` (responses include `elapsed_ms` and may set `scan_limit_reached`).
 - `limits.max_read_bytes` is a hard cap (no implicit truncation). `read`/`edit`/`patch` fail if the operation would exceed the cap; `grep` skips files above the cap.
 - For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).
 - `delete` removes the path itself (does not follow symlinks); it validates the parent directory is within the selected root.

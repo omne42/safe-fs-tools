@@ -3,6 +3,8 @@ use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(any(feature = "glob", feature = "grep"))]
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "patch")]
 use diffy::{Patch, apply};
@@ -39,6 +41,16 @@ fn normalize_path_lexical(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn elapsed_ms(started: &Instant) -> u64 {
+    let ms = started.elapsed().as_millis();
+    if ms > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        ms as u64
+    }
 }
 
 fn open_private_temp_file(path: &Path) -> std::io::Result<fs::File> {
@@ -579,6 +591,9 @@ pub struct GlobResponse {
     pub scanned_files: u64,
     #[serde(default)]
     pub scan_limit_reached: bool,
+    /// Elapsed wall-clock time spent in this call (milliseconds).
+    #[serde(default)]
+    pub elapsed_ms: u64,
     #[serde(default)]
     pub scanned_entries: u64,
     #[serde(default)]
@@ -687,6 +702,8 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             "glob is disabled by policy".to_string(),
         ));
     }
+    let started = Instant::now();
+    let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let root_path = ctx.canonical_root(&request.root_id)?.clone();
     let matcher = compile_glob(&request.pattern)?;
 
@@ -711,6 +728,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                     truncated,
                     scanned_files,
                     scan_limit_reached,
+                    elapsed_ms: elapsed_ms(&started),
                     scanned_entries,
                     skipped_walk_errors,
                     skipped_io_errors,
@@ -727,6 +745,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             truncated,
             scanned_files,
             scan_limit_reached,
+            elapsed_ms: elapsed_ms(&started),
             scanned_entries,
             skipped_walk_errors,
             skipped_io_errors,
@@ -757,6 +776,11 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                 || (is_dir && ctx.is_traversal_path_skipped(&probe)))
         })
     {
+        if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
+            truncated = true;
+            scan_limit_reached = true;
+            break;
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
@@ -852,6 +876,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         truncated,
         scanned_files,
         scan_limit_reached,
+        elapsed_ms: elapsed_ms(&started),
         scanned_entries,
         skipped_walk_errors,
         skipped_io_errors,
@@ -890,6 +915,9 @@ pub struct GrepResponse {
     pub scanned_files: u64,
     #[serde(default)]
     pub scan_limit_reached: bool,
+    /// Elapsed wall-clock time spent in this call (milliseconds).
+    #[serde(default)]
+    pub elapsed_ms: u64,
     #[serde(default)]
     pub scanned_entries: u64,
     #[serde(default)]
@@ -916,6 +944,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             "grep is disabled by policy".to_string(),
         ));
     }
+    let started = Instant::now();
+    let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let root_path = ctx.canonical_root(&request.root_id)?.clone();
     let walk_root = match request
         .glob
@@ -936,6 +966,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     skipped_non_utf8_files: 0,
                     scanned_files: 0,
                     scan_limit_reached: false,
+                    elapsed_ms: elapsed_ms(&started),
                     scanned_entries: 0,
                     skipped_walk_errors: 0,
                     skipped_io_errors: 0,
@@ -954,6 +985,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             skipped_non_utf8_files: 0,
             scanned_files: 0,
             scan_limit_reached: false,
+            elapsed_ms: elapsed_ms(&started),
             scanned_entries: 0,
             skipped_walk_errors: 0,
             skipped_io_errors: 0,
@@ -1006,6 +1038,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 || (is_dir && ctx.is_traversal_path_skipped(&probe)))
         })
     {
+        if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
+            truncated = true;
+            scan_limit_reached = true;
+            break;
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
@@ -1151,6 +1188,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         skipped_non_utf8_files,
         scanned_files,
         scan_limit_reached,
+        elapsed_ms: elapsed_ms(&started),
         scanned_entries,
         skipped_walk_errors,
         skipped_io_errors,
