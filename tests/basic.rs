@@ -59,6 +59,7 @@ fn read_redacts_matches() {
     .expect("read");
 
     assert_eq!(response.path, PathBuf::from("hello.txt"));
+    assert_eq!(response.requested_path, Some(PathBuf::from("hello.txt")));
     assert!(response.content.contains("***REDACTED***"));
     assert!(!response.content.contains("abc123"));
 }
@@ -528,7 +529,7 @@ fn edit_patch_delete_roundtrip() {
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
-    edit_range(
+    let edit = edit_range(
         &ctx,
         EditRequest {
             root_id: "root".to_string(),
@@ -539,6 +540,7 @@ fn edit_patch_delete_roundtrip() {
         },
     )
     .expect("edit");
+    assert_eq!(edit.requested_path, Some(PathBuf::from("file.txt")));
 
     let after_edit = std::fs::read_to_string(&path).expect("read");
     assert!(after_edit.contains("TWO"));
@@ -546,7 +548,7 @@ fn edit_patch_delete_roundtrip() {
     let updated = "one\nTWO\nTHREE\n";
     let patch = diffy::create_patch(&after_edit, updated);
 
-    apply_unified_patch(
+    let patch_resp = apply_unified_patch(
         &ctx,
         PatchRequest {
             root_id: "root".to_string(),
@@ -555,6 +557,7 @@ fn edit_patch_delete_roundtrip() {
         },
     )
     .expect("patch");
+    assert_eq!(patch_resp.requested_path, Some(PathBuf::from("file.txt")));
 
     let after_patch = std::fs::read_to_string(&path).expect("read");
     assert_eq!(after_patch, updated);
@@ -972,6 +975,21 @@ fn policy_rejects_relative_root_paths() {
     match err {
         safe_fs_tools::Error::InvalidPolicy(msg) => {
             assert!(msg.contains("root.path must be absolute"))
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn policy_rejects_zero_max_patch_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_patch_bytes = Some(0);
+
+    let err = Context::new(policy).expect_err("should reject");
+    match err {
+        safe_fs_tools::Error::InvalidPolicy(msg) => {
+            assert!(msg.contains("limits.max_patch_bytes must be > 0"))
         }
         other => panic!("unexpected error: {other:?}"),
     }

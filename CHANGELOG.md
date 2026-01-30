@@ -28,11 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add stable `Error::code()` for programmatic classification.
 - Add `Error::InputTooLarge` (code: `input_too_large`) for oversized CLI inputs.
 - Add `limits.max_patch_bytes` to cap unified-diff patch input size (defaults to `limits.max_read_bytes`).
+- `read`/`edit`/`patch` responses now include `requested_path` (normalized input path).
 - Add `Context` method wrappers and crate-root re-exports for easier library consumption.
 - Add `SandboxPolicy::single_root` helper for simpler library integration.
 - Add `Context::from_policy_path` helper for a one-call policy+context load (via `policy-io`).
 - CLI: add `--error-format json` for structured errors.
 - CLI: add `--max-patch-bytes` to cap patch stdin/file input size.
+- CLI: add `--redact-paths` to best-effort redact absolute paths in JSON error output.
 - CLI: include `error.details` in JSON errors for most tool error kinds.
 - Add `docs/example-survey.md` (notes from `example/` repositories).
 - Add `docs/db-vfs.md` (DB-backed VFS decision + TODOs).

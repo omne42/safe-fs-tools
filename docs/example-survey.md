@@ -54,3 +54,9 @@ It exists to justify and keep `safe-fs-tools`' boundaries explicit and minimal.
 ## 必读重要意见.md
 
 - `example/必读重要意见.md`: project-level notes (CLI-first, no TUI for early stage; prefer Rust 2024 edition and up-to-date deps). Not a filesystem semantics reference, but useful for aligning packaging choices.
+
+## Notes for safe-fs-tools (tradeoffs)
+
+- **Symlink traversal**: `safe-fs-tools` chooses `follow_links(false)` (CodexMonitor-style) for `glob`/`grep` to avoid crawling symlinked directories, which simplifies root-boundary reasoning. `codex` file-search can enable `follow_links(true)` for UX/search completeness, but that comes with more complex boundary expectations.
+- **Search implementation**: projects like `oh-my-opencode-slim` delegate content search to `rg` and enforce time/output limits in the wrapper. `safe-fs-tools` keeps a library-first, dependency-light implementation (WalkDir + bounded reads) so redaction/deny-globs/limits apply uniformly across library + CLI without shelling out.
+- **Patch semantics**: `ai`’s `apply_patch` tool is operation-based (and streams deltas) rather than unified-diff based. `safe-fs-tools` intentionally sticks to unified-diff patching (`diffy`) to keep filesystem semantics explicit and minimal.

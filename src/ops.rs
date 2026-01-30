@@ -366,7 +366,11 @@ impl Context {
             .is_some_and(|skip| globset_is_match(skip, relative))
     }
 
-    fn canonical_path_in_root(&self, root_id: &str, path: &Path) -> Result<(PathBuf, PathBuf)> {
+    fn canonical_path_in_root(
+        &self,
+        root_id: &str,
+        path: &Path,
+    ) -> Result<(PathBuf, PathBuf, PathBuf)> {
         let resolved = self.policy.resolve_path(root_id, path)?;
         let root = self.policy.root(root_id)?;
         let canonical_root = self.canonical_root(root_id)?;
@@ -393,8 +397,9 @@ impl Context {
         } else {
             path.to_path_buf()
         };
-        if self.redactor.is_path_denied(&relative_requested) {
-            return Err(Error::SecretPathDenied(relative_requested));
+        let requested_path = normalize_path_lexical(&relative_requested);
+        if self.redactor.is_path_denied(&requested_path) {
+            return Err(Error::SecretPathDenied(requested_path));
         }
 
         let canonical = match resolved.canonicalize() {
@@ -440,7 +445,7 @@ impl Context {
         if self.redactor.is_path_denied(&relative) {
             return Err(Error::SecretPathDenied(relative));
         }
-        Ok((canonical, relative))
+        Ok((canonical, relative, requested_path))
     }
 
     fn ensure_can_write(&self, root_id: &str, op: &str) -> Result<()> {
@@ -467,6 +472,8 @@ pub struct ReadRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadResponse {
     pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_path: Option<PathBuf>,
     /// Always `false`: `read` fails instead of truncating.
     pub truncated: bool,
     pub bytes_read: u64,
@@ -484,7 +491,8 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
         ));
     }
 
-    let (path, relative) = ctx.canonical_path_in_root(&request.root_id, &request.path)?;
+    let (path, relative, requested_path) =
+        ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
     let (bytes_read, content) = match (request.start_line, request.end_line) {
         (None, None) => {
@@ -569,6 +577,7 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
 
     Ok(ReadResponse {
         path: relative,
+        requested_path: Some(requested_path),
         truncated: false,
         bytes_read,
         content,
@@ -848,7 +857,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             continue;
         }
         let relative = if file_type.is_symlink() {
-            let (canonical, _canonical_relative) =
+            let (canonical, _canonical_relative, _requested_path) =
                 match ctx.canonical_path_in_root(&request.root_id, entry.path()) {
                     Ok(ok) => ok,
                     Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
@@ -1128,7 +1137,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             continue;
         }
         let (path, relative_path) = if file_type.is_symlink() {
-            let (canonical, _canonical_relative) =
+            let (canonical, _canonical_relative, _requested_path) =
                 match ctx.canonical_path_in_root(&request.root_id, entry.path()) {
                     Ok(ok) => ok,
                     Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
@@ -1252,6 +1261,8 @@ pub struct EditRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditResponse {
     pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_path: Option<PathBuf>,
     pub bytes_written: u64,
 }
 
@@ -1262,7 +1273,8 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         ));
     }
     ctx.ensure_can_write(&request.root_id, "edit")?;
-    let (path, relative) = ctx.canonical_path_in_root(&request.root_id, &request.path)?;
+    let (path, relative, requested_path) =
+        ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
     if request.start_line == 0 || request.end_line == 0 || request.start_line > request.end_line {
         return Err(Error::InvalidPath(format!(
@@ -1351,6 +1363,7 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
     write_bytes_atomic(&path, &relative, out.as_bytes())?;
     Ok(EditResponse {
         path: relative,
+        requested_path: Some(requested_path),
         bytes_written: out.len() as u64,
     })
 }
@@ -1365,6 +1378,8 @@ pub struct PatchRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchResponse {
     pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_path: Option<PathBuf>,
     pub bytes_written: u64,
 }
 
@@ -1385,7 +1400,8 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         ));
     }
     ctx.ensure_can_write(&request.root_id, "patch")?;
-    let (path, relative) = ctx.canonical_path_in_root(&request.root_id, &request.path)?;
+    let (path, relative, requested_path) =
+        ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
     let max_patch_bytes = ctx
         .policy
@@ -1415,6 +1431,7 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
     write_bytes_atomic(&path, &relative, updated.as_bytes())?;
     Ok(PatchResponse {
         path: relative,
+        requested_path: Some(requested_path),
         bytes_written: updated.len() as u64,
     })
 }

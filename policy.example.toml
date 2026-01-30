@@ -23,6 +23,14 @@ max_walk_files = 200000
 # max_walk_ms = 1000
 max_line_bytes = 4096
 
+# Suggested tighter budgets for server / untrusted workloads (example only):
+# max_read_bytes = 262144
+# max_write_bytes = 262144
+# max_results = 500
+# max_walk_entries = 50000
+# max_walk_files = 10000
+# max_walk_ms = 500
+
 [secrets]
 deny_globs = [
   ".git/**",
