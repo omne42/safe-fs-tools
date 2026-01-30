@@ -307,7 +307,33 @@ mod tests {
             assert_eq!(derive_safe_traversal_prefix("C:/foo/*"), None);
             assert_eq!(derive_safe_traversal_prefix("c:foo/*"), None);
             assert_eq!(derive_safe_traversal_prefix("C:"), None);
+            assert_eq!(derive_safe_traversal_prefix("src/c:foo/*"), None);
+            assert_eq!(derive_safe_traversal_prefix("a/b/c:tmp/**"), None);
         }
+    }
+
+    #[test]
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    fn walk_traversal_files_rejects_walk_root_outside_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+        let ctx = Context::new(policy).expect("ctx");
+
+        let root_path = ctx.canonical_root("root").expect("root").clone();
+        let walk_root = root_path.parent().expect("parent").to_path_buf();
+
+        let err = walk_traversal_files(
+            &ctx,
+            "root",
+            &root_path,
+            &walk_root,
+            &Instant::now(),
+            None,
+            |_file, _diag| Ok(std::ops::ControlFlow::Continue(())),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "invalid_path");
     }
 
     #[test]
@@ -779,6 +805,19 @@ fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
         if segment.is_empty() || segment == "." {
             continue;
         }
+        #[cfg(windows)]
+        {
+            use std::path::Component;
+
+            if matches!(
+                Path::new(segment).components().next(),
+                Some(Component::Prefix(_))
+            ) {
+                // Windows drive/prefix components in later segments can cause `PathBuf::push/join`
+                // to discard prior components, allowing traversal outside the selected root.
+                return None;
+            }
+        }
         if segment == ".." {
             return None;
         }
@@ -857,6 +896,12 @@ fn walk_traversal_files(
         &mut TraversalDiagnostics,
     ) -> Result<std::ops::ControlFlow<()>>,
 ) -> Result<TraversalDiagnostics> {
+    if !walk_root.starts_with(root_path) {
+        return Err(Error::InvalidPath(
+            "derived traversal root escapes selected root".to_string(),
+        ));
+    }
+
     let mut diag = TraversalDiagnostics::default();
 
     for entry in walkdir_traversal_iter(ctx, root_path, walk_root) {

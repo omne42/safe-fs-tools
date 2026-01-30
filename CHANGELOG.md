@@ -74,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lexical normalization now preserves repeated leading `..` segments (e.g. `../../b`), improving path reporting and deny-glob behavior.
 - On Windows, glob/deny-glob matching now handles `\\` path separators.
 - On Windows, prefix-optimized traversal rejects drive-letter glob prefixes (e.g. `C:/...`) to prevent escaping the selected root.
+- On Windows, prefix-optimized traversal also rejects embedded drive prefixes (e.g. `src/C:foo/*`) to prevent escaping the selected root.
 - On Windows, drive-relative paths (e.g. `C:foo`) are now rejected by `SandboxPolicy::resolve_path`.
 - Redaction replacement strings are now treated literally (no `$1` / `$name` capture expansion).
 - `edit`/`patch` now write atomically (temp file + rename) and preserve existing file permissions.
