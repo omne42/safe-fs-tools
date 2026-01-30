@@ -29,7 +29,9 @@ Important boundaries:
 - `limits.max_walk_ms` optionally caps wall-clock traversal time for `glob`/`grep` (responses include `elapsed_ms`).
 - When a traversal cap is hit, responses set `scan_limit_reached=true` and `scan_limit_reason` (`entries`/`files`/`time`).
 - `limits.max_read_bytes` is a hard cap (no implicit truncation). `read`/`edit`/`patch` fail if the operation would exceed the cap; `grep` skips files above the cap.
+- `limits.max_patch_bytes` optionally caps unified-diff patch *input* size (defaults to `limits.max_read_bytes` if unset).
 - For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).
+- `read`/`edit`/`patch` return the canonicalized path relative to the root; for symlinked files this may be the resolved target path (not the symlink path).
 - `delete` removes the path itself (does not follow symlinks); it validates the parent directory is within the selected root.
 - `secrets.deny_globs` hides paths from `glob`/`grep` and denies direct access (`read`/`edit`/`patch`/`delete`). Deny checks apply to both the requested path (after `.`/`..` normalization) and the canonicalized resolved path.
 - `traversal.skip_globs` skips paths during traversal (`glob`/`grep`) for performance, but does **not** deny direct access.
@@ -47,7 +49,7 @@ Non-goals (by design):
 
 All commands require a policy file (`.toml` or `.json`) and output JSON on success (errors are printed to stderr and exit with code 1). Use `--error-format json` for machine-parsable errors.
 
-For `patch`, you can also cap the patch *input* size (stdin or file) via `--max-patch-bytes` (defaults to `policy.limits.max_read_bytes`).
+For `patch`, you can also cap the patch *input* size (stdin or file) via `--max-patch-bytes` (defaults to `policy.limits.max_patch_bytes` if set, otherwise `policy.limits.max_read_bytes`).
 
 ```bash
 safe-fs-tools --policy policy.toml read  --root workspace path/to/file.txt

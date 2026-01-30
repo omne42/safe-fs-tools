@@ -645,6 +645,42 @@ fn edit_preserves_crlf() {
 }
 
 #[test]
+fn edit_respects_max_write_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("small.txt");
+    std::fs::write(&path, "one\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.limits.max_write_bytes = 1;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("small.txt"),
+            start_line: 1,
+            end_line: 1,
+            replacement: "X".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::FileTooLarge {
+            path,
+            size_bytes,
+            max_bytes,
+        } => {
+            assert_eq!(path, PathBuf::from("small.txt"));
+            assert_eq!(size_bytes, 2, "expected newline-preserving output size");
+            assert_eq!(max_bytes, 1);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn edit_preserves_unix_permissions() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -822,6 +858,7 @@ fn patch_respects_max_read_bytes() {
 
     let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
     policy.limits.max_read_bytes = 8;
+    policy.limits.max_patch_bytes = Some(1024);
     let ctx = Context::new(policy).expect("ctx");
 
     let err = apply_unified_patch(
@@ -836,6 +873,33 @@ fn patch_respects_max_read_bytes() {
 
     match err {
         safe_fs_tools::Error::FileTooLarge { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(feature = "patch")]
+fn patch_rejects_too_large_patch_input() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.limits.max_patch_bytes = Some(10);
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            patch: "x".repeat(11),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InputTooLarge { .. } => {}
         other => panic!("unexpected error: {other:?}"),
     }
 }

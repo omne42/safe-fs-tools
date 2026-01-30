@@ -40,6 +40,12 @@ pub struct Permissions {
 pub struct Limits {
     #[serde(default = "default_max_read_bytes")]
     pub max_read_bytes: u64,
+    /// Optional cap for unified-diff patch *input* size (bytes).
+    ///
+    /// - `None` => defaults to `max_read_bytes`.
+    /// - `Some(0)` is invalid and rejected by policy validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_patch_bytes: Option<u64>,
     #[serde(default = "default_max_write_bytes")]
     pub max_write_bytes: u64,
     #[serde(default = "default_max_results")]
@@ -86,6 +92,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_read_bytes: default_max_read_bytes(),
+            max_patch_bytes: None,
             max_write_bytes: default_max_write_bytes(),
             max_results: default_max_results(),
             max_walk_entries: default_max_walk_entries(),
@@ -175,6 +182,13 @@ impl SandboxPolicy {
         if self.limits.max_read_bytes == 0 {
             return Err(Error::InvalidPolicy(
                 "limits.max_read_bytes must be > 0".to_string(),
+            ));
+        }
+        if let Some(max_patch_bytes) = self.limits.max_patch_bytes
+            && max_patch_bytes == 0
+        {
+            return Err(Error::InvalidPolicy(
+                "limits.max_patch_bytes must be > 0".to_string(),
             ));
         }
         if self.limits.max_write_bytes == 0 {

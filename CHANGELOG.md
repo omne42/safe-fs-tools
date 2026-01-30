@@ -27,11 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `delete` unlinks symlinks (does not follow link targets).
 - Add stable `Error::code()` for programmatic classification.
 - Add `Error::InputTooLarge` (code: `input_too_large`) for oversized CLI inputs.
+- Add `limits.max_patch_bytes` to cap unified-diff patch input size (defaults to `limits.max_read_bytes`).
 - Add `Context` method wrappers and crate-root re-exports for easier library consumption.
 - Add `SandboxPolicy::single_root` helper for simpler library integration.
 - Add `Context::from_policy_path` helper for a one-call policy+context load (via `policy-io`).
 - CLI: add `--error-format json` for structured errors.
-- CLI: add `--max-patch-bytes` to cap patch stdin/file input size (defaults to `limits.max_read_bytes`).
+- CLI: add `--max-patch-bytes` to cap patch stdin/file input size.
 - CLI: include `error.details` in JSON errors for most tool error kinds.
 - Add `docs/example-survey.md` (notes from `example/` repositories).
 - Add `docs/db-vfs.md` (DB-backed VFS decision + TODOs).
@@ -44,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `glob`/`grep` now include symlinked files (still do not traverse symlinked directories).
 - `glob`/`grep` traversal now uses deterministic entry ordering (stable behavior under truncation caps).
 - `glob`/`grep` may narrow traversal scope based on a literal prefix in the glob pattern.
+- `edit` now checks `limits.max_write_bytes` before constructing the edited output.
+- `patch` now enforces patch input size via `limits.max_patch_bytes`/`limits.max_read_bytes` (rejects oversized patch input with `input_too_large`).
+- CLI `--max-patch-bytes` defaults to `limits.max_patch_bytes` if set (else `limits.max_read_bytes`) and is capped by policy.
 - IO errors produced by operations include operation/path context where available.
 - Atomic write on Windows now uses `ReplaceFileW` for true replacement semantics.
 

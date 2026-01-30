@@ -136,7 +136,9 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = ErrorFormat::Text)]
     error_format: ErrorFormat,
 
-    /// Max bytes for patch input (stdin or file). Defaults to policy.limits.max_read_bytes.
+    /// Max bytes for patch input (stdin or file).
+    ///
+    /// Defaults to `policy.limits.max_patch_bytes` if set, otherwise `policy.limits.max_read_bytes`.
     #[arg(long)]
     max_patch_bytes: Option<u64>,
 
@@ -228,7 +230,14 @@ fn main() {
 
 fn run(cli: &Cli) -> Result<(), CliError> {
     let policy = safe_fs_tools::policy_io::load_policy(&cli.policy)?;
-    let max_patch_bytes = cli.max_patch_bytes.unwrap_or(policy.limits.max_read_bytes);
+    let policy_patch_limit = policy
+        .limits
+        .max_patch_bytes
+        .unwrap_or(policy.limits.max_read_bytes);
+    let max_patch_bytes = cli
+        .max_patch_bytes
+        .map(|bytes| bytes.min(policy_patch_limit))
+        .unwrap_or(policy_patch_limit);
     let ctx = Context::new(policy)?;
 
     let value = match &cli.command {

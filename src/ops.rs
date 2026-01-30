@@ -1288,6 +1288,11 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         )));
     }
 
+    let removed_bytes: u64 = lines[start..=end]
+        .iter()
+        .map(|line| line.len() as u64)
+        .sum();
+
     let newline = if lines[end].ends_with("\r\n") {
         "\r\n"
     } else if lines[end].ends_with('\n') {
@@ -1322,6 +1327,17 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         replacement.push_str(newline);
     }
 
+    let output_bytes = (content.len() as u64)
+        .saturating_sub(removed_bytes)
+        .saturating_add(replacement.len() as u64);
+    if output_bytes > ctx.policy.limits.max_write_bytes {
+        return Err(Error::FileTooLarge {
+            path: relative.clone(),
+            size_bytes: output_bytes,
+            max_bytes: ctx.policy.limits.max_write_bytes,
+        });
+    }
+
     let mut out = String::with_capacity(content.len().saturating_add(replacement.len()));
     for (idx, line) in lines.iter().enumerate() {
         if idx == start {
@@ -1330,14 +1346,6 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         if idx < start || idx > end {
             out.push_str(line);
         }
-    }
-
-    if out.len() as u64 > ctx.policy.limits.max_write_bytes {
-        return Err(Error::FileTooLarge {
-            path: relative.clone(),
-            size_bytes: out.len() as u64,
-            max_bytes: ctx.policy.limits.max_write_bytes,
-        });
     }
 
     write_bytes_atomic(&path, &relative, out.as_bytes())?;
@@ -1378,6 +1386,19 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
     }
     ctx.ensure_can_write(&request.root_id, "patch")?;
     let (path, relative) = ctx.canonical_path_in_root(&request.root_id, &request.path)?;
+
+    let max_patch_bytes = ctx
+        .policy
+        .limits
+        .max_patch_bytes
+        .unwrap_or(ctx.policy.limits.max_read_bytes);
+    let patch_bytes = request.patch.len() as u64;
+    if patch_bytes > max_patch_bytes {
+        return Err(Error::InputTooLarge {
+            size_bytes: patch_bytes,
+            max_bytes: max_patch_bytes,
+        });
+    }
 
     let content = read_string_limited(&path, &relative, ctx.policy.limits.max_read_bytes)?;
     let parsed = Patch::from_str(&request.patch).map_err(|err| Error::Patch(err.to_string()))?;
