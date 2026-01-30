@@ -112,26 +112,25 @@ fn tool_error_details_with(
 ) -> Option<serde_json::Value> {
     match tool {
         safe_fs_tools::Error::Io(err) => {
-            if redact_paths {
-                let mut out = serde_json::Map::new();
-                out.insert(
-                    "kind".to_string(),
-                    serde_json::Value::String("io".to_string()),
-                );
-                out.insert(
-                    "io_kind".to_string(),
-                    serde_json::Value::String(format!("{:?}", err.kind())),
-                );
-                if let Some(raw_os_error) = err.raw_os_error() {
-                    out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
-                }
-                Some(serde_json::Value::Object(out))
-            } else {
-                Some(serde_json::json!({
-                    "kind": "io",
-                    "message": err.to_string(),
-                }))
+            let mut out = serde_json::Map::new();
+            out.insert(
+                "kind".to_string(),
+                serde_json::Value::String("io".to_string()),
+            );
+            out.insert(
+                "io_kind".to_string(),
+                serde_json::Value::String(format!("{:?}", err.kind())),
+            );
+            if let Some(raw_os_error) = err.raw_os_error() {
+                out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
             }
+            if !redact_paths {
+                out.insert(
+                    "message".to_string(),
+                    serde_json::Value::String(err.to_string()),
+                );
+            }
+            Some(serde_json::Value::Object(out))
         }
         safe_fs_tools::Error::IoPath { op, path, source } => {
             let mut out = serde_json::Map::new();
@@ -144,14 +143,18 @@ fn tool_error_details_with(
                 "path".to_string(),
                 serde_json::Value::String(format_path_for_error(path, redaction, redact_paths)),
             );
-            if redact_paths {
+            out.insert(
+                "io_kind".to_string(),
+                serde_json::Value::String(format!("{:?}", source.kind())),
+            );
+            if let Some(raw_os_error) = source.raw_os_error() {
+                out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
+            }
+            if !redact_paths {
                 out.insert(
-                    "io_kind".to_string(),
-                    serde_json::Value::String(format!("{:?}", source.kind())),
+                    "message".to_string(),
+                    serde_json::Value::String(source.to_string()),
                 );
-                if let Some(raw_os_error) = source.raw_os_error() {
-                    out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
-                }
             }
             Some(serde_json::Value::Object(out))
         }
@@ -809,6 +812,25 @@ mod tests {
     }
 
     #[test]
+    fn tool_error_details_includes_io_details_when_not_redacting() {
+        let err = safe_fs_tools::Error::Io(std::io::Error::from_raw_os_error(2));
+        let details = tool_error_details_with(&err, None, false).expect("details");
+        assert_eq!(details.get("kind").and_then(|v| v.as_str()), Some("io"));
+        assert!(
+            details.get("message").and_then(|v| v.as_str()).is_some(),
+            "expected io message in non-redacted mode"
+        );
+        assert!(
+            details.get("io_kind").and_then(|v| v.as_str()).is_some(),
+            "expected io_kind"
+        );
+        assert_eq!(
+            details.get("raw_os_error").and_then(|v| v.as_i64()),
+            Some(2)
+        );
+    }
+
+    #[test]
     fn tool_error_details_redacts_io_path_details() {
         let dir = tempfile::tempdir().expect("tempdir");
         let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
@@ -846,6 +868,37 @@ mod tests {
         assert!(
             !rendered.contains(&dir.path().display().to_string()),
             "expected redacted details to not contain absolute root path: {rendered}"
+        );
+    }
+
+    #[test]
+    fn tool_error_details_includes_io_path_details_when_not_redacting() {
+        let err = safe_fs_tools::Error::IoPath {
+            op: "open",
+            path: PathBuf::from("file.txt"),
+            source: std::io::Error::from_raw_os_error(2),
+        };
+        let details = tool_error_details_with(&err, None, false).expect("details");
+        assert_eq!(
+            details.get("kind").and_then(|v| v.as_str()),
+            Some("io_path")
+        );
+        assert_eq!(details.get("op").and_then(|v| v.as_str()), Some("open"));
+        assert_eq!(
+            details.get("path").and_then(|v| v.as_str()),
+            Some("file.txt")
+        );
+        assert!(
+            details.get("message").and_then(|v| v.as_str()).is_some(),
+            "expected message in non-redacted mode"
+        );
+        assert!(
+            details.get("io_kind").and_then(|v| v.as_str()).is_some(),
+            "expected io_kind"
+        );
+        assert_eq!(
+            details.get("raw_os_error").and_then(|v| v.as_i64()),
+            Some(2)
         );
     }
 }

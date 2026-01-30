@@ -645,7 +645,7 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
                 }
             }
 
-            if current_line < start_line || current_line < end_line {
+            if current_line < end_line {
                 return Err(Error::InvalidPath(format!(
                     "line range {}..{} out of bounds (file has {} lines)",
                     start_line, end_line, current_line
@@ -717,8 +717,12 @@ pub struct GlobResponse {
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn compile_glob(pattern: &str) -> Result<GlobSet> {
-    let glob = GlobBuilder::new(crate::path_utils::normalize_glob_pattern(pattern).as_ref())
-        .literal_separator(true)
+    let normalized_pattern = crate::path_utils::normalize_glob_pattern(pattern);
+    let mut glob_builder = GlobBuilder::new(normalized_pattern.as_ref());
+    glob_builder.literal_separator(true);
+    #[cfg(windows)]
+    glob_builder.case_insensitive(true);
+    let glob = glob_builder
         .build()
         .map_err(|err| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {err}")))?;
     let mut builder = GlobSetBuilder::new();
@@ -735,14 +739,16 @@ fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option<GlobSet>> 
     }
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
-        let glob = GlobBuilder::new(crate::path_utils::normalize_glob_pattern(pattern).as_ref())
-            .literal_separator(true)
-            .build()
-            .map_err(|err| {
-                Error::InvalidPolicy(format!(
-                    "invalid traversal.skip_globs glob {pattern:?}: {err}"
-                ))
-            })?;
+        let normalized_pattern = crate::path_utils::normalize_glob_pattern(pattern);
+        let mut glob_builder = GlobBuilder::new(normalized_pattern.as_ref());
+        glob_builder.literal_separator(true);
+        #[cfg(windows)]
+        glob_builder.case_insensitive(true);
+        let glob = glob_builder.build().map_err(|err| {
+            Error::InvalidPolicy(format!(
+                "invalid traversal.skip_globs glob {pattern:?}: {err}"
+            ))
+        })?;
         builder.add(glob);
     }
     let set = builder

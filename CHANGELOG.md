@@ -56,7 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal: consolidate lexical path normalization into a shared helper to avoid drift between ops and deny-glob matching.
 - Atomic write on Windows now uses `ReplaceFileW` for true replacement semantics.
 - On Windows, `secrets.deny_globs` matching is now explicitly case-insensitive.
+- On Windows, `glob` patterns and `traversal.skip_globs` matching are now explicitly case-insensitive.
+- CLI: JSON `error.details` for `io`/`io_path` now always include `io_kind` and `raw_os_error` (even without `--redact-paths`).
 - Docs: clarify `glob`/`grep` truncation semantics when `limits.max_results` is hit.
+- Docs: clarify atomic write durability semantics.
 
 ### Fixed
 

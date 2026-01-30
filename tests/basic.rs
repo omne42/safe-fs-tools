@@ -1452,3 +1452,52 @@ fn deny_globs_are_case_insensitive_on_windows() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+#[cfg(all(windows, feature = "glob"))]
+fn glob_patterns_are_case_insensitive_on_windows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "A.TXT".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert_eq!(resp.matches, vec![PathBuf::from("a.txt")]);
+}
+
+#[test]
+#[cfg(all(windows, feature = "glob"))]
+fn traversal_skip_globs_are_case_insensitive_on_windows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+    std::fs::write(dir.path().join(".git").join("config"), "secret").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.traversal.skip_globs = vec![".GIT/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "**/*".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert!(
+        !resp
+            .matches
+            .iter()
+            .any(|path| path == PathBuf::from(".git/config")),
+        "expected traversal.skip_globs to exclude .git/config: {:?}",
+        resp.matches
+    );
+}
