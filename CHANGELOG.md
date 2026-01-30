@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `Error::InputTooLarge` (code: `input_too_large`) for oversized CLI inputs.
 - Add `limits.max_patch_bytes` to cap unified-diff patch input size (defaults to `limits.max_read_bytes`).
 - `read`/`edit`/`patch` responses now include `requested_path` (normalized input path).
+- `delete` responses now include `requested_path` (normalized input path).
 - Add `Context` method wrappers and crate-root re-exports for easier library consumption.
 - Add `SandboxPolicy::single_root` helper for simpler library integration.
 - Add `Context::from_policy_path` helper for a one-call policy+context load (via `policy-io`).
@@ -71,3 +72,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Invalid `secrets.redact_regexes` patterns are now rejected as `invalid_policy` (instead of `invalid_regex`).
 - CLI `--redact-paths` now omits raw `io` error messages in JSON `error.details` and includes structured `io_kind`/`raw_os_error` instead.
 - `outside_root` and related `canonicalize` errors now report the normalized requested path (avoids leaking absolute root paths for relative inputs).
+- Root-level traversal (`glob`/`grep`) errors no longer leak absolute paths via `walkdir` errors.

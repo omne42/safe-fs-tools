@@ -19,6 +19,14 @@ pub enum Error {
     #[error("walkdir error: {0}")]
     WalkDir(#[from] walkdir::Error),
 
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    #[error("walkdir error ({path}): {source}")]
+    WalkDirRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("invalid policy: {0}")]
     InvalidPolicy(String),
 
@@ -79,6 +87,8 @@ impl Error {
             Error::IoPath { .. } => "io",
             #[cfg(any(feature = "glob", feature = "grep"))]
             Error::WalkDir(_) => "walkdir",
+            #[cfg(any(feature = "glob", feature = "grep"))]
+            Error::WalkDirRoot { .. } => "walkdir",
             Error::InvalidPolicy(_) => "invalid_policy",
             Error::InvalidPath(_) => "invalid_path",
             Error::RootNotFound(_) => "root_not_found",

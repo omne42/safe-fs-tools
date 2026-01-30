@@ -409,6 +409,43 @@ fn glob_skips_walkdir_errors() {
 }
 
 #[test]
+#[cfg(all(unix, feature = "glob"))]
+fn glob_root_walkdir_error_does_not_leak_absolute_paths() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let blocked = dir.path().join("blocked");
+    std::fs::create_dir(&blocked).expect("mkdir");
+    std::fs::write(blocked.join("b.txt"), "b\n").expect("write");
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let err = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "blocked/*.txt".to_string(),
+        },
+    )
+    .expect_err("should fail");
+
+    match &err {
+        safe_fs_tools::Error::WalkDirRoot { path, .. } => {
+            assert!(!path.is_absolute());
+            assert_eq!(path, &PathBuf::from("blocked"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let rendered = err.to_string();
+    assert!(
+        !rendered.contains(&dir.path().display().to_string()),
+        "expected error to not contain absolute root path: {rendered}"
+    );
+
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).expect("chmod back");
+}
+
+#[test]
 #[cfg(all(unix, feature = "grep"))]
 fn grep_skips_walkdir_errors() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -436,6 +473,45 @@ fn grep_skips_walkdir_errors() {
     assert!(
         resp.skipped_walk_errors > 0,
         "expected at least one walk error"
+    );
+
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).expect("chmod back");
+}
+
+#[test]
+#[cfg(all(unix, feature = "grep"))]
+fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let blocked = dir.path().join("blocked");
+    std::fs::create_dir(&blocked).expect("mkdir");
+    std::fs::write(blocked.join("b.txt"), "needle\n").expect("write");
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let err = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: Some("blocked/**/*.txt".to_string()),
+        },
+    )
+    .expect_err("should fail");
+
+    match &err {
+        safe_fs_tools::Error::WalkDirRoot { path, .. } => {
+            assert!(!path.is_absolute());
+            assert_eq!(path, &PathBuf::from("blocked"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let rendered = err.to_string();
+    assert!(
+        !rendered.contains(&dir.path().display().to_string()),
+        "expected error to not contain absolute root path: {rendered}"
     );
 
     std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).expect("chmod back");
@@ -567,7 +643,7 @@ fn edit_patch_delete_roundtrip() {
     let after_patch = std::fs::read_to_string(&path).expect("read");
     assert_eq!(after_patch, updated);
 
-    delete_file(
+    let delete = delete_file(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
@@ -575,6 +651,7 @@ fn edit_patch_delete_roundtrip() {
         },
     )
     .expect("delete");
+    assert_eq!(delete.requested_path, Some(PathBuf::from("file.txt")));
 
     assert!(!path.exists());
 }
@@ -948,7 +1025,7 @@ fn delete_unlinks_symlink_without_deleting_target() {
     symlink(&target, &link).expect("symlink");
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
-    delete_file(
+    let resp = delete_file(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
@@ -956,6 +1033,7 @@ fn delete_unlinks_symlink_without_deleting_target() {
         },
     )
     .expect("delete");
+    assert_eq!(resp.requested_path, Some(PathBuf::from("link.txt")));
 
     assert!(!link.exists());
     assert!(target.exists());
@@ -973,7 +1051,7 @@ fn delete_unlinks_symlink_even_if_target_is_outside_root() {
     symlink(outside.path(), &link).expect("symlink");
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
-    delete_file(
+    let resp = delete_file(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
@@ -981,6 +1059,7 @@ fn delete_unlinks_symlink_even_if_target_is_outside_root() {
         },
     )
     .expect("delete");
+    assert_eq!(resp.requested_path, Some(PathBuf::from("outside-link.txt")));
 
     assert!(!link.exists());
     assert!(outside.path().exists());

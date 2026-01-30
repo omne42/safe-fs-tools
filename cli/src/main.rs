@@ -230,6 +230,32 @@ fn tool_error_details_with(
             "size_bytes": size_bytes,
             "max_bytes": max_bytes,
         })),
+        safe_fs_tools::Error::WalkDirRoot { path, source } => {
+            let mut out = serde_json::Map::new();
+            out.insert(
+                "kind".to_string(),
+                serde_json::Value::String("walkdir".to_string()),
+            );
+            out.insert(
+                "path".to_string(),
+                serde_json::Value::String(format_path_for_error(path, redaction, redact_paths)),
+            );
+            if redact_paths {
+                out.insert(
+                    "io_kind".to_string(),
+                    serde_json::Value::String(format!("{:?}", source.kind())),
+                );
+                if let Some(raw_os_error) = source.raw_os_error() {
+                    out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
+                }
+            } else {
+                out.insert(
+                    "message".to_string(),
+                    serde_json::Value::String(source.to_string()),
+                );
+            }
+            Some(serde_json::Value::Object(out))
+        }
         safe_fs_tools::Error::WalkDir(err) => {
             if redact_paths {
                 let mut out = serde_json::Map::new();
@@ -308,7 +334,9 @@ fn tool_public_message(
         safe_fs_tools::Error::Patch(_) => tool.to_string(),
         safe_fs_tools::Error::InvalidRegex(_) => tool.to_string(),
         safe_fs_tools::Error::InputTooLarge { .. } => tool.to_string(),
-        safe_fs_tools::Error::WalkDir(_) => "walkdir error".to_string(),
+        safe_fs_tools::Error::WalkDirRoot { .. } | safe_fs_tools::Error::WalkDir(_) => {
+            "walkdir error".to_string()
+        }
     }
 }
 

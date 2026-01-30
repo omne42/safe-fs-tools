@@ -245,6 +245,29 @@ fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
     }
 }
 
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn walkdir_root_error(root_path: &Path, walk_root: &Path, err: walkdir::Error) -> Error {
+    let relative = match walk_root.strip_prefix(root_path) {
+        Ok(relative) if !relative.as_os_str().is_empty() => relative.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+
+    let source = match err.io_error().and_then(|io| io.raw_os_error()) {
+        Some(raw_os_error) => std::io::Error::from_raw_os_error(raw_os_error),
+        None => std::io::Error::new(
+            err.io_error()
+                .map(|io| io.kind())
+                .unwrap_or(std::io::ErrorKind::Other),
+            "walkdir error",
+        ),
+    };
+
+    Error::WalkDirRoot {
+        path: relative,
+        source,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,7 +875,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             Ok(entry) => entry,
             Err(err) => {
                 if err.depth() == 0 {
-                    return Err(err.into());
+                    return Err(walkdir_root_error(&root_path, &walk_root, err));
                 }
                 if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
                     truncated = true;
@@ -1132,7 +1155,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             Ok(entry) => entry,
             Err(err) => {
                 if err.depth() == 0 {
-                    return Err(err.into());
+                    return Err(walkdir_root_error(&root_path, &walk_root, err));
                 }
                 if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
                     truncated = true;
@@ -1487,6 +1510,8 @@ pub struct DeleteRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteResponse {
     pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_path: Option<PathBuf>,
 }
 
 pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
@@ -1553,5 +1578,8 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
     }
 
     fs::remove_file(&resolved).map_err(|err| Error::io_path("remove_file", &relative, err))?;
-    Ok(DeleteResponse { path: relative })
+    Ok(DeleteResponse {
+        path: relative,
+        requested_path: Some(requested_path),
+    })
 }
