@@ -111,6 +111,122 @@ fn read_rejects_outside_root() {
 }
 
 #[test]
+#[cfg(unix)]
+fn read_rejects_dangling_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    let link_target = outside.path().join("missing.txt");
+    symlink(&link_target, dir.path().join("link.txt")).expect("symlink");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("link.txt"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn edit_rejects_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::NamedTempFile::new().expect("tmp");
+    std::fs::write(outside.path(), "one\n").expect("write");
+
+    symlink(outside.path(), dir.path().join("link.txt")).expect("symlink");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("link.txt"),
+            start_line: 1,
+            end_line: 1,
+            replacement: "ONE".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(all(unix, feature = "patch"))]
+fn patch_rejects_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::NamedTempFile::new().expect("tmp");
+    std::fs::write(outside.path(), "one\n").expect("write");
+
+    symlink(outside.path(), dir.path().join("link.txt")).expect("symlink");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("link.txt"),
+            patch: diffy::create_patch("one\n", "ONE\n").to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn edit_rejects_symlink_escape_via_ancestor_dir() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    std::fs::write(outside.path().join("file.txt"), "one\n").expect("write");
+
+    symlink(outside.path(), dir.path().join("sub")).expect("symlink dir");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("sub/file.txt"),
+            start_line: 1,
+            end_line: 1,
+            replacement: "ONE".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 #[cfg(feature = "patch")]
 fn edit_patch_delete_roundtrip() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "patch")]
@@ -17,6 +17,27 @@ use crate::policy::{RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
 
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn normalize_path_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    // If we're at the filesystem root, `..` is a no-op. For relative paths, keep it.
+                    if out.as_os_str().is_empty() {
+                        out.push("..");
+                    }
+                }
+            }
+            Component::Normal(part) => out.push(part),
+            Component::RootDir => out.push(comp.as_os_str()),
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+        }
+    }
+    out
+}
 
 fn open_private_temp_file(path: &Path) -> std::io::Result<fs::File> {
     let mut open_options = fs::OpenOptions::new();
@@ -323,9 +344,36 @@ impl Context {
             return Err(Error::SecretPathDenied(relative_requested));
         }
 
-        let canonical = resolved
-            .canonicalize()
-            .map_err(|err| Error::io_path("canonicalize", &resolved, err))?;
+        let canonical = match resolved.canonicalize() {
+            Ok(canonical) => canonical,
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound
+                    && let Ok(meta) = fs::symlink_metadata(&resolved)
+                    && meta.file_type().is_symlink()
+                {
+                    let symlink_target = fs::read_link(&resolved).ok();
+                    let parent = resolved.parent();
+                    let canonical_parent = parent.and_then(|path| path.canonicalize().ok());
+                    if let (Some(symlink_target), Some(canonical_parent)) =
+                        (symlink_target, canonical_parent)
+                    {
+                        let resolved_target = if symlink_target.is_absolute() {
+                            symlink_target
+                        } else {
+                            canonical_parent.join(symlink_target)
+                        };
+                        let resolved_target = normalize_path_lexical(&resolved_target);
+                        if !resolved_target.starts_with(canonical_root) {
+                            return Err(Error::OutsideRoot {
+                                root_id: root_id.to_string(),
+                                path: resolved,
+                            });
+                        }
+                    }
+                }
+                return Err(Error::io_path("canonicalize", &resolved, err));
+            }
+        };
         if !canonical.starts_with(canonical_root) {
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
