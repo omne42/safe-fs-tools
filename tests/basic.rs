@@ -109,7 +109,10 @@ fn read_rejects_outside_root() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        safe_fs_tools::Error::OutsideRoot { path, .. } => {
+            assert!(path.is_absolute());
+            assert_eq!(path.file_name(), outside.path().file_name());
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -137,7 +140,9 @@ fn read_rejects_dangling_symlink_escape() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        safe_fs_tools::Error::OutsideRoot { path, .. } => {
+            assert_eq!(path, PathBuf::from("link.txt"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -903,6 +908,30 @@ fn patch_rejects_too_large_patch_input() {
 
     match err {
         safe_fs_tools::Error::InputTooLarge { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn delete_absolute_paths_report_relative_requested_path_on_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let abs = dir.path().join("missing").join("file.txt");
+    let err = delete_file(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: abs,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::IoPath { op, path, .. } => {
+            assert_eq!(op, "canonicalize");
+            assert_eq!(path, PathBuf::from("missing").join("file.txt"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }

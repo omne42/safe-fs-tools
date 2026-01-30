@@ -466,18 +466,18 @@ impl Context {
                         if !resolved_target.starts_with(canonical_root) {
                             return Err(Error::OutsideRoot {
                                 root_id: root_id.to_string(),
-                                path: resolved,
+                                path: requested_path,
                             });
                         }
                     }
                 }
-                return Err(Error::io_path("canonicalize", &resolved, err));
+                return Err(Error::io_path("canonicalize", requested_path, err));
             }
         };
         if !canonical.starts_with(canonical_root) {
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
-                path: resolved,
+                path: requested_path,
             });
         }
         let relative = canonical
@@ -1498,7 +1498,18 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
     ctx.ensure_can_write(&request.root_id, "delete")?;
 
     let resolved = ctx.policy.resolve_path(&request.root_id, &request.path)?;
+    let root = ctx.policy.root(&request.root_id)?;
     let canonical_root = ctx.canonical_root(&request.root_id)?;
+    let relative_requested = if request.path.is_absolute() {
+        resolved
+            .strip_prefix(&root.path)
+            .or_else(|_| resolved.strip_prefix(canonical_root))
+            .map(|path| path.to_path_buf())
+            .unwrap_or_else(|_| resolved.clone())
+    } else {
+        request.path.clone()
+    };
+    let requested_path = normalize_path_lexical(&relative_requested);
 
     let file_name = resolved
         .file_name()
@@ -1516,13 +1527,14 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
             request.path
         ))
     })?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|err| Error::io_path("canonicalize", parent, err))?;
+    let canonical_parent = match parent.canonicalize() {
+        Ok(canonical) => canonical,
+        Err(err) => return Err(Error::io_path("canonicalize", requested_path, err)),
+    };
     if !canonical_parent.starts_with(canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
-            path: resolved.clone(),
+            path: requested_path,
         });
     }
 
