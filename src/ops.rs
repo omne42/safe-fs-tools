@@ -33,11 +33,17 @@ fn derive_requested_path(
         let normalized_root_path = crate::path_utils::normalize_path_lexical(root_path);
         let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
 
-        strip_prefix_case_insensitive(&normalized_resolved, &normalized_root_path)
-            .or_else(|| {
-                strip_prefix_case_insensitive(&normalized_resolved, &normalized_canonical_root)
-            })
-            .unwrap_or_else(|| resolved.to_path_buf())
+        crate::path_utils::strip_prefix_case_insensitive(
+            &normalized_resolved,
+            &normalized_root_path,
+        )
+        .or_else(|| {
+            crate::path_utils::strip_prefix_case_insensitive(
+                &normalized_resolved,
+                &normalized_canonical_root,
+            )
+        })
+        .unwrap_or_else(|| resolved.to_path_buf())
     } else {
         input.to_path_buf()
     };
@@ -48,128 +54,6 @@ fn derive_requested_path(
     } else {
         normalized
     }
-}
-
-#[cfg(windows)]
-fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
-    use std::path::{Component, Prefix};
-
-    fn lower(s: &std::ffi::OsStr) -> String {
-        s.to_string_lossy().to_lowercase()
-    }
-
-    fn prefixes_eq(a: Prefix<'_>, b: Prefix<'_>) -> bool {
-        use std::path::Prefix::*;
-
-        match (a, b) {
-            (Disk(a), Disk(b))
-            | (Disk(a), VerbatimDisk(b))
-            | (VerbatimDisk(a), Disk(b))
-            | (VerbatimDisk(a), VerbatimDisk(b)) => {
-                a.to_ascii_lowercase() == b.to_ascii_lowercase()
-            }
-            (UNC(a_server, a_share), UNC(b_server, b_share))
-            | (UNC(a_server, a_share), VerbatimUNC(b_server, b_share))
-            | (VerbatimUNC(a_server, a_share), UNC(b_server, b_share))
-            | (VerbatimUNC(a_server, a_share), VerbatimUNC(b_server, b_share)) => {
-                lower(a_server) == lower(b_server) && lower(a_share) == lower(b_share)
-            }
-            (Verbatim(a), Verbatim(b)) => lower(a) == lower(b),
-            (DeviceNS(a), DeviceNS(b)) => lower(a) == lower(b),
-            _ => false,
-        }
-    }
-
-    let mut path_components = path.components();
-    for prefix_comp in prefix.components() {
-        let path_comp = path_components.next()?;
-
-        let ok = match (path_comp, prefix_comp) {
-            (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
-            (Component::RootDir, Component::RootDir) => true,
-            (Component::Normal(a), Component::Normal(b)) => lower(a) == lower(b),
-            (Component::CurDir, Component::CurDir) => true,
-            (Component::ParentDir, Component::ParentDir) => true,
-            _ => false,
-        };
-
-        if !ok {
-            return None;
-        }
-    }
-
-    let mut out = PathBuf::new();
-    for comp in path_components {
-        match comp {
-            Component::Normal(part) => out.push(part),
-            Component::CurDir => {}
-            Component::ParentDir => out.push(".."),
-            Component::RootDir | Component::Prefix(_) => return None,
-        }
-    }
-    Some(out)
-}
-
-#[cfg(not(windows))]
-fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
-    path.strip_prefix(prefix).ok().map(PathBuf::from)
-}
-
-#[cfg(windows)]
-fn path_starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
-    use std::path::{Component, Prefix};
-
-    fn lower(s: &std::ffi::OsStr) -> String {
-        s.to_string_lossy().to_lowercase()
-    }
-
-    fn prefixes_eq(a: Prefix<'_>, b: Prefix<'_>) -> bool {
-        use std::path::Prefix::*;
-
-        match (a, b) {
-            (Disk(a), Disk(b))
-            | (Disk(a), VerbatimDisk(b))
-            | (VerbatimDisk(a), Disk(b))
-            | (VerbatimDisk(a), VerbatimDisk(b)) => {
-                a.to_ascii_lowercase() == b.to_ascii_lowercase()
-            }
-            (UNC(a_server, a_share), UNC(b_server, b_share))
-            | (UNC(a_server, a_share), VerbatimUNC(b_server, b_share))
-            | (VerbatimUNC(a_server, a_share), UNC(b_server, b_share))
-            | (VerbatimUNC(a_server, a_share), VerbatimUNC(b_server, b_share)) => {
-                lower(a_server) == lower(b_server) && lower(a_share) == lower(b_share)
-            }
-            (Verbatim(a), Verbatim(b)) => lower(a) == lower(b),
-            (DeviceNS(a), DeviceNS(b)) => lower(a) == lower(b),
-            _ => false,
-        }
-    }
-
-    let mut path_components = path.components();
-    for prefix_comp in prefix.components() {
-        let Some(path_comp) = path_components.next() else {
-            return false;
-        };
-
-        let ok = match (path_comp, prefix_comp) {
-            (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
-            (Component::RootDir, Component::RootDir) => true,
-            (Component::Normal(a), Component::Normal(b)) => lower(a) == lower(b),
-            (Component::CurDir, Component::CurDir) => true,
-            (Component::ParentDir, Component::ParentDir) => true,
-            _ => false,
-        };
-
-        if !ok {
-            return false;
-        }
-    }
-    true
-}
-
-#[cfg(not(windows))]
-fn path_starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
-    path.starts_with(prefix)
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -667,9 +551,13 @@ impl Context {
         let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
         let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
 
-        if !path_starts_with_case_insensitive(&normalized_resolved, &normalized_root_path)
-            && !path_starts_with_case_insensitive(&normalized_resolved, &normalized_canonical_root)
-        {
+        if !crate::path_utils::starts_with_case_insensitive(
+            &normalized_resolved,
+            &normalized_root_path,
+        ) && !crate::path_utils::starts_with_case_insensitive(
+            &normalized_resolved,
+            &normalized_canonical_root,
+        ) {
             let requested_path = if path.is_absolute() {
                 normalized_resolved
             } else {
@@ -804,6 +692,7 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
                 )));
             }
 
+            let file_size_bytes = fs::metadata(&path).ok().map(|meta| meta.len());
             let file =
                 fs::File::open(&path).map_err(|err| Error::io_path("open", &relative, err))?;
             let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
@@ -825,9 +714,10 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
 
                 scanned_bytes = scanned_bytes.saturating_add(n as u64);
                 if scanned_bytes > ctx.policy.limits.max_read_bytes {
+                    let size_bytes = file_size_bytes.unwrap_or(scanned_bytes).max(scanned_bytes);
                     return Err(Error::FileTooLarge {
                         path: relative.clone(),
-                        size_bytes: scanned_bytes,
+                        size_bytes,
                         max_bytes: ctx.policy.limits.max_read_bytes,
                     });
                 }
@@ -1724,9 +1614,13 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
     let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
     let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
 
-    let is_lexically_within_root =
-        path_starts_with_case_insensitive(&normalized_resolved, &normalized_root_path)
-            || path_starts_with_case_insensitive(&normalized_resolved, &normalized_canonical_root);
+    let is_lexically_within_root = crate::path_utils::starts_with_case_insensitive(
+        &normalized_resolved,
+        &normalized_root_path,
+    ) || crate::path_utils::starts_with_case_insensitive(
+        &normalized_resolved,
+        &normalized_canonical_root,
+    );
 
     let requested_path = if is_lexically_within_root || !request.path.is_absolute() {
         derive_requested_path(&root.path, canonical_root, &request.path, &resolved)

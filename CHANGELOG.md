@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `docs/example-survey.md` (notes from `example/` repositories).
 - Add `docs/db-vfs.md` (DB-backed VFS decision + TODOs).
 - Add optional cargo features: `glob`/`grep`/`patch` (default on) and `policy-io`.
+- Library: expose `path_utils::{starts_with_case_insensitive, strip_prefix_case_insensitive}` helpers (useful for Windows-safe prefix comparisons).
 
 ### Changed
 
@@ -66,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs: clarify `SandboxPolicy::validate` is structural (no filesystem IO).
 - Docs: clarify `glob`/`grep` traversal does not read `.gitignore`.
 - Docs: clarify `grep` match text may be empty when `limits.max_line_bytes` is smaller than a UTF-8 character.
+- CLI: success JSON output is now compact by default; use `--pretty` for pretty-printed output.
 - Internal: share traversal loop between `glob` and `grep` to reduce drift.
 
 ### Fixed
@@ -102,3 +104,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI: on Windows, `--redact-paths` now strips root prefixes case-insensitively for more consistent relative paths.
 - Atomic write temp file names are now randomized to reduce pre-creation attacks in untrusted workspaces.
 - Internal: add a regression test locking traversal skip-glob directory probe semantics.
+- `read` line-range mode now reports `file_too_large.size_bytes` using file metadata when available (instead of scanned bytes).

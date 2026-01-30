@@ -53,7 +53,7 @@ Non-goals (by design):
 
 ## CLI
 
-All commands require a policy file (`.toml` or `.json`) and output JSON on success (errors are printed to stderr and exit with code 1). Use `--error-format json` for machine-parsable errors.
+All commands require a policy file (`.toml` or `.json`) and output JSON on success (errors are printed to stderr and exit with code 1). Use `--pretty` for pretty-printed JSON, and `--error-format json` for machine-parsable errors.
 
 For `patch`, you can also cap the patch *input* size (stdin or file) via `--max-patch-bytes` (defaults to `policy.limits.max_patch_bytes` if set, otherwise `policy.limits.max_read_bytes`).
 
