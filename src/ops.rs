@@ -1031,14 +1031,15 @@ fn walk_traversal_files(
         }
         diag.scanned_files = diag.scanned_files.saturating_add(1);
 
-        let relative = entry.path().strip_prefix(root_path).unwrap_or(entry.path());
-        if ctx.redactor.is_path_denied(relative) {
+        let relative = crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path)
+            .unwrap_or_else(|| entry.path().to_path_buf());
+        if ctx.redactor.is_path_denied(&relative) {
             continue;
         }
 
         let file = if file_type.is_symlink() {
             let (canonical, _canonical_relative, _requested_path) =
-                match ctx.canonical_path_in_root(root_id, entry.path()) {
+                match ctx.canonical_path_in_root(root_id, &relative) {
                     Ok(ok) => ok,
                     Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
                     Err(Error::IoPath {
@@ -1073,12 +1074,12 @@ fn walk_traversal_files(
             }
             TraversalFile {
                 path: canonical,
-                relative_path: relative.to_path_buf(),
+                relative_path: relative,
             }
         } else {
             TraversalFile {
                 path: entry.path().to_path_buf(),
-                relative_path: relative.to_path_buf(),
+                relative_path: relative,
             }
         };
 

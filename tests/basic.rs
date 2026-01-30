@@ -1653,6 +1653,43 @@ fn glob_and_grep_include_symlink_files() {
 }
 
 #[test]
+#[cfg(all(unix, feature = "glob", feature = "grep"))]
+fn glob_and_grep_include_symlink_files_when_absolute_paths_are_disallowed() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("target.txt"), "hello\n").expect("write");
+    symlink(dir.path().join("target.txt"), dir.path().join("link.txt")).expect("symlink");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.paths.allow_absolute = false;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let glob = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "link.txt".to_string(),
+        },
+    )
+    .expect("glob");
+    assert_eq!(glob.matches, vec![PathBuf::from("link.txt")]);
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "hello".to_string(),
+            regex: false,
+            glob: Some("link.txt".to_string()),
+        },
+    )
+    .expect("grep");
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("link.txt"));
+}
+
+#[test]
 #[cfg(feature = "glob")]
 fn glob_truncation_is_deterministic_under_max_results() {
     let dir = tempfile::tempdir().expect("tempdir");
