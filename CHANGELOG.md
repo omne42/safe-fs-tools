@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs: clarify `glob`/`grep` truncation semantics when `limits.max_results` is hit.
 - Docs: clarify atomic write durability semantics.
 - Docs: clarify `SandboxPolicy::validate` is structural (no filesystem IO).
+- Internal: share traversal loop between `glob` and `grep` to reduce drift.
 
 ### Fixed
 

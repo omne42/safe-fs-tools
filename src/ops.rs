@@ -797,6 +797,184 @@ fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
     }
 }
 
+#[cfg(any(feature = "glob", feature = "grep"))]
+#[derive(Debug, Default, Clone)]
+struct TraversalDiagnostics {
+    truncated: bool,
+    scanned_files: u64,
+    scanned_entries: u64,
+    scan_limit_reached: bool,
+    scan_limit_reason: Option<ScanLimitReason>,
+    skipped_walk_errors: u64,
+    skipped_io_errors: u64,
+    skipped_dangling_symlink_targets: u64,
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+struct TraversalFile {
+    path: PathBuf,
+    relative_path: PathBuf,
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn walkdir_traversal_iter<'a>(
+    ctx: &'a Context,
+    root_path: &'a Path,
+    walk_root: &'a Path,
+) -> impl Iterator<Item = walkdir::Result<walkdir::DirEntry>> + 'a {
+    WalkDir::new(walk_root)
+        .follow_root_links(false)
+        .follow_links(false)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(move |entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            let is_dir = entry.file_type().is_dir();
+            let relative = entry.path().strip_prefix(root_path).unwrap_or(entry.path());
+            let probe = relative.join(TRAVERSAL_GLOB_PROBE_NAME);
+            if ctx.redactor.is_path_denied(relative)
+                || (is_dir && ctx.redactor.is_path_denied(&probe))
+            {
+                return false;
+            }
+            !(ctx.is_traversal_path_skipped(relative)
+                || (is_dir && ctx.is_traversal_path_skipped(&probe)))
+        })
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn walk_traversal_files(
+    ctx: &Context,
+    root_id: &str,
+    root_path: &Path,
+    walk_root: &Path,
+    started: &Instant,
+    max_walk: Option<Duration>,
+    mut on_file: impl FnMut(
+        TraversalFile,
+        &mut TraversalDiagnostics,
+    ) -> Result<std::ops::ControlFlow<()>>,
+) -> Result<TraversalDiagnostics> {
+    let mut diag = TraversalDiagnostics::default();
+
+    for entry in walkdir_traversal_iter(ctx, root_path, walk_root) {
+        if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
+            diag.truncated = true;
+            diag.scan_limit_reached = true;
+            if diag.scan_limit_reason.is_none() {
+                diag.scan_limit_reason = Some(ScanLimitReason::Time);
+            }
+            break;
+        }
+
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                if err.depth() == 0 {
+                    return Err(walkdir_root_error(root_path, walk_root, err));
+                }
+                if diag.scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
+                    diag.truncated = true;
+                    diag.scan_limit_reached = true;
+                    if diag.scan_limit_reason.is_none() {
+                        diag.scan_limit_reason = Some(ScanLimitReason::Entries);
+                    }
+                    break;
+                }
+                diag.scanned_entries = diag.scanned_entries.saturating_add(1);
+                diag.skipped_walk_errors = diag.skipped_walk_errors.saturating_add(1);
+                continue;
+            }
+        };
+
+        if entry.depth() > 0 {
+            if diag.scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
+                diag.truncated = true;
+                diag.scan_limit_reached = true;
+                if diag.scan_limit_reason.is_none() {
+                    diag.scan_limit_reason = Some(ScanLimitReason::Entries);
+                }
+                break;
+            }
+            diag.scanned_entries = diag.scanned_entries.saturating_add(1);
+        }
+
+        let file_type = entry.file_type();
+        if !(file_type.is_file() || file_type.is_symlink()) {
+            continue;
+        }
+        if diag.scanned_files as usize >= ctx.policy.limits.max_walk_files {
+            diag.truncated = true;
+            diag.scan_limit_reached = true;
+            if diag.scan_limit_reason.is_none() {
+                diag.scan_limit_reason = Some(ScanLimitReason::Files);
+            }
+            break;
+        }
+        diag.scanned_files = diag.scanned_files.saturating_add(1);
+
+        let relative = entry.path().strip_prefix(root_path).unwrap_or(entry.path());
+        if ctx.redactor.is_path_denied(relative) {
+            continue;
+        }
+
+        let file = if file_type.is_symlink() {
+            let (canonical, _canonical_relative, _requested_path) =
+                match ctx.canonical_path_in_root(root_id, entry.path()) {
+                    Ok(ok) => ok,
+                    Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
+                    Err(Error::IoPath {
+                        op: "canonicalize",
+                        source,
+                        ..
+                    }) if source.kind() == std::io::ErrorKind::NotFound => {
+                        diag.skipped_dangling_symlink_targets =
+                            diag.skipped_dangling_symlink_targets.saturating_add(1);
+                        continue;
+                    }
+                    Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+                        diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                };
+            let meta = match fs::metadata(&canonical) {
+                Ok(meta) => meta,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    diag.skipped_dangling_symlink_targets =
+                        diag.skipped_dangling_symlink_targets.saturating_add(1);
+                    continue;
+                }
+                Err(_) => {
+                    diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
+                    continue;
+                }
+            };
+            if !meta.is_file() {
+                continue;
+            }
+            TraversalFile {
+                path: canonical,
+                relative_path: relative.to_path_buf(),
+            }
+        } else {
+            TraversalFile {
+                path: entry.path().to_path_buf(),
+                relative_path: relative.to_path_buf(),
+            }
+        };
+
+        match on_file(file, &mut diag)? {
+            std::ops::ControlFlow::Continue(()) => {}
+            std::ops::ControlFlow::Break(()) => break,
+        }
+    }
+
+    Ok(diag)
+}
+
 #[cfg(not(feature = "glob"))]
 pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let _ = ctx;
@@ -819,14 +997,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let matcher = compile_glob(&request.pattern)?;
 
     let mut matches = Vec::<PathBuf>::new();
-    let mut truncated = false;
-    let mut scanned_files: u64 = 0;
-    let mut scanned_entries: u64 = 0;
-    let mut scan_limit_reached = false;
-    let mut scan_limit_reason: Option<ScanLimitReason> = None;
-    let mut skipped_walk_errors: u64 = 0;
-    let mut skipped_io_errors: u64 = 0;
-    let mut skipped_dangling_symlink_targets: u64 = 0;
+    let mut diag = TraversalDiagnostics::default();
     let walk_root = match derive_safe_traversal_prefix(&request.pattern) {
         Some(prefix) => {
             let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
@@ -837,15 +1008,15 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             {
                 return Ok(GlobResponse {
                     matches,
-                    truncated,
-                    scanned_files,
-                    scan_limit_reached,
-                    scan_limit_reason,
+                    truncated: diag.truncated,
+                    scanned_files: diag.scanned_files,
+                    scan_limit_reached: diag.scan_limit_reached,
+                    scan_limit_reason: diag.scan_limit_reason,
                     elapsed_ms: elapsed_ms(&started),
-                    scanned_entries,
-                    skipped_walk_errors,
-                    skipped_io_errors,
-                    skipped_dangling_symlink_targets,
+                    scanned_entries: diag.scanned_entries,
+                    skipped_walk_errors: diag.skipped_walk_errors,
+                    skipped_io_errors: diag.skipped_io_errors,
+                    skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
                 });
             }
             root_path.join(prefix)
@@ -855,159 +1026,48 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     if !walk_root.exists() {
         return Ok(GlobResponse {
             matches,
-            truncated,
-            scanned_files,
-            scan_limit_reached,
-            scan_limit_reason,
+            truncated: diag.truncated,
+            scanned_files: diag.scanned_files,
+            scan_limit_reached: diag.scan_limit_reached,
+            scan_limit_reason: diag.scan_limit_reason,
             elapsed_ms: elapsed_ms(&started),
-            scanned_entries,
-            skipped_walk_errors,
-            skipped_io_errors,
-            skipped_dangling_symlink_targets,
+            scanned_entries: diag.scanned_entries,
+            skipped_walk_errors: diag.skipped_walk_errors,
+            skipped_io_errors: diag.skipped_io_errors,
+            skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
         });
     }
-    for entry in WalkDir::new(&walk_root)
-        .follow_root_links(false)
-        .follow_links(false)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_entry(|entry| {
-            if entry.depth() == 0 {
-                return true;
-            }
-            let is_dir = entry.file_type().is_dir();
-            let relative = entry
-                .path()
-                .strip_prefix(&root_path)
-                .unwrap_or(entry.path());
-            let probe = relative.join(TRAVERSAL_GLOB_PROBE_NAME);
-            if ctx.redactor.is_path_denied(relative)
-                || (is_dir && ctx.redactor.is_path_denied(&probe))
-            {
-                return false;
-            }
-            !(ctx.is_traversal_path_skipped(relative)
-                || (is_dir && ctx.is_traversal_path_skipped(&probe)))
-        })
-    {
-        if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
-            truncated = true;
-            scan_limit_reached = true;
-            if scan_limit_reason.is_none() {
-                scan_limit_reason = Some(ScanLimitReason::Time);
-            }
-            break;
-        }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                if err.depth() == 0 {
-                    return Err(walkdir_root_error(&root_path, &walk_root, err));
+    diag = walk_traversal_files(
+        ctx,
+        &request.root_id,
+        &root_path,
+        &walk_root,
+        &started,
+        max_walk,
+        |file, diag| {
+            if globset_is_match(&matcher, &file.relative_path) {
+                matches.push(file.relative_path);
+                if matches.len() >= ctx.policy.limits.max_results {
+                    diag.truncated = true;
+                    return Ok(std::ops::ControlFlow::Break(()));
                 }
-                if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
-                    truncated = true;
-                    scan_limit_reached = true;
-                    if scan_limit_reason.is_none() {
-                        scan_limit_reason = Some(ScanLimitReason::Entries);
-                    }
-                    break;
-                }
-                scanned_entries = scanned_entries.saturating_add(1);
-                skipped_walk_errors = skipped_walk_errors.saturating_add(1);
-                continue;
             }
-        };
-        if entry.depth() > 0 {
-            if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
-                truncated = true;
-                scan_limit_reached = true;
-                if scan_limit_reason.is_none() {
-                    scan_limit_reason = Some(ScanLimitReason::Entries);
-                }
-                break;
-            }
-            scanned_entries = scanned_entries.saturating_add(1);
-        }
-        let file_type = entry.file_type();
-        if !(file_type.is_file() || file_type.is_symlink()) {
-            continue;
-        }
-        if scanned_files as usize >= ctx.policy.limits.max_walk_files {
-            truncated = true;
-            scan_limit_reached = true;
-            if scan_limit_reason.is_none() {
-                scan_limit_reason = Some(ScanLimitReason::Files);
-            }
-            break;
-        }
-        scanned_files = scanned_files.saturating_add(1);
-        let relative = entry
-            .path()
-            .strip_prefix(&root_path)
-            .unwrap_or(entry.path());
-        if ctx.redactor.is_path_denied(relative) {
-            continue;
-        }
-        let relative = if file_type.is_symlink() {
-            let (canonical, _canonical_relative, _requested_path) =
-                match ctx.canonical_path_in_root(&request.root_id, entry.path()) {
-                    Ok(ok) => ok,
-                    Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
-                    Err(Error::IoPath {
-                        op: "canonicalize",
-                        source,
-                        ..
-                    }) if source.kind() == std::io::ErrorKind::NotFound => {
-                        skipped_dangling_symlink_targets =
-                            skipped_dangling_symlink_targets.saturating_add(1);
-                        continue;
-                    }
-                    Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
-                        skipped_io_errors = skipped_io_errors.saturating_add(1);
-                        continue;
-                    }
-                    Err(err) => return Err(err),
-                };
-            let meta = match fs::metadata(&canonical) {
-                Ok(meta) => meta,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    skipped_dangling_symlink_targets =
-                        skipped_dangling_symlink_targets.saturating_add(1);
-                    continue;
-                }
-                Err(_) => {
-                    skipped_io_errors = skipped_io_errors.saturating_add(1);
-                    continue;
-                }
-            };
-            if !meta.is_file() {
-                continue;
-            }
-            relative.to_path_buf()
-        } else {
-            relative.to_path_buf()
-        };
-        if globset_is_match(&matcher, &relative) {
-            matches.push(relative);
-            if matches.len() >= ctx.policy.limits.max_results {
-                truncated = true;
-                break;
-            }
-        }
-    }
+            Ok(std::ops::ControlFlow::Continue(()))
+        },
+    )?;
 
     matches.sort();
     Ok(GlobResponse {
         matches,
-        truncated,
-        scanned_files,
-        scan_limit_reached,
-        scan_limit_reason,
+        truncated: diag.truncated,
+        scanned_files: diag.scanned_files,
+        scan_limit_reached: diag.scan_limit_reached,
+        scan_limit_reason: diag.scan_limit_reason,
         elapsed_ms: elapsed_ms(&started),
-        scanned_entries,
-        skipped_walk_errors,
-        skipped_io_errors,
-        skipped_dangling_symlink_targets,
+        scanned_entries: diag.scanned_entries,
+        skipped_walk_errors: diag.skipped_walk_errors,
+        skipped_io_errors: diag.skipped_io_errors,
+        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
     })
 }
 
@@ -1135,209 +1195,90 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     };
 
     let mut matches = Vec::<GrepMatch>::new();
-    let mut truncated = false;
     let mut skipped_too_large_files: u64 = 0;
     let mut skipped_non_utf8_files: u64 = 0;
-    let mut scanned_files: u64 = 0;
-    let mut scanned_entries: u64 = 0;
-    let mut scan_limit_reached = false;
-    let mut scan_limit_reason: Option<ScanLimitReason> = None;
-    let mut skipped_walk_errors: u64 = 0;
-    let mut skipped_io_errors: u64 = 0;
-    let mut skipped_dangling_symlink_targets: u64 = 0;
 
-    for entry in WalkDir::new(&walk_root)
-        .follow_root_links(false)
-        .follow_links(false)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_entry(|entry| {
-            if entry.depth() == 0 {
-                return true;
-            }
-            let is_dir = entry.file_type().is_dir();
-            let relative = entry
-                .path()
-                .strip_prefix(&root_path)
-                .unwrap_or(entry.path());
-            let probe = relative.join(TRAVERSAL_GLOB_PROBE_NAME);
-            if ctx.redactor.is_path_denied(relative)
-                || (is_dir && ctx.redactor.is_path_denied(&probe))
+    let diag = walk_traversal_files(
+        ctx,
+        &request.root_id,
+        &root_path,
+        &walk_root,
+        &started,
+        max_walk,
+        |file, diag| {
+            if let Some(glob) = &file_glob
+                && !globset_is_match(glob, &file.relative_path)
             {
-                return false;
+                return Ok(std::ops::ControlFlow::Continue(()));
             }
-            !(ctx.is_traversal_path_skipped(relative)
-                || (is_dir && ctx.is_traversal_path_skipped(&probe)))
-        })
-    {
-        if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
-            truncated = true;
-            scan_limit_reached = true;
-            if scan_limit_reason.is_none() {
-                scan_limit_reason = Some(ScanLimitReason::Time);
-            }
-            break;
-        }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                if err.depth() == 0 {
-                    return Err(walkdir_root_error(&root_path, &walk_root, err));
-                }
-                if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
-                    truncated = true;
-                    scan_limit_reached = true;
-                    if scan_limit_reason.is_none() {
-                        scan_limit_reason = Some(ScanLimitReason::Entries);
-                    }
-                    break;
-                }
-                scanned_entries = scanned_entries.saturating_add(1);
-                skipped_walk_errors = skipped_walk_errors.saturating_add(1);
-                continue;
-            }
-        };
-        if entry.depth() > 0 {
-            if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
-                truncated = true;
-                scan_limit_reached = true;
-                if scan_limit_reason.is_none() {
-                    scan_limit_reason = Some(ScanLimitReason::Entries);
-                }
-                break;
-            }
-            scanned_entries = scanned_entries.saturating_add(1);
-        }
-        let file_type = entry.file_type();
-        if !(file_type.is_file() || file_type.is_symlink()) {
-            continue;
-        }
-        if scanned_files as usize >= ctx.policy.limits.max_walk_files {
-            truncated = true;
-            scan_limit_reached = true;
-            if scan_limit_reason.is_none() {
-                scan_limit_reason = Some(ScanLimitReason::Files);
-            }
-            break;
-        }
-        scanned_files = scanned_files.saturating_add(1);
-        let relative = entry
-            .path()
-            .strip_prefix(&root_path)
-            .unwrap_or(entry.path());
-        if ctx.redactor.is_path_denied(relative) {
-            continue;
-        }
-        let (path, relative_path) = if file_type.is_symlink() {
-            let (canonical, _canonical_relative, _requested_path) =
-                match ctx.canonical_path_in_root(&request.root_id, entry.path()) {
-                    Ok(ok) => ok,
-                    Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
-                    Err(Error::IoPath {
-                        op: "canonicalize",
-                        source,
-                        ..
-                    }) if source.kind() == std::io::ErrorKind::NotFound => {
-                        skipped_dangling_symlink_targets =
-                            skipped_dangling_symlink_targets.saturating_add(1);
-                        continue;
-                    }
-                    Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
-                        skipped_io_errors = skipped_io_errors.saturating_add(1);
-                        continue;
-                    }
-                    Err(err) => return Err(err),
-                };
-            let meta = match fs::metadata(&canonical) {
-                Ok(meta) => meta,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    skipped_dangling_symlink_targets =
-                        skipped_dangling_symlink_targets.saturating_add(1);
-                    continue;
-                }
-                Err(_) => {
-                    skipped_io_errors = skipped_io_errors.saturating_add(1);
-                    continue;
-                }
-            };
-            if !meta.is_file() {
-                continue;
-            }
-            (canonical, relative.to_path_buf())
-        } else {
-            (entry.path().to_path_buf(), relative.to_path_buf())
-        };
-        if let Some(glob) = &file_glob
-            && !globset_is_match(glob, &relative_path)
-        {
-            continue;
-        }
 
-        let bytes =
-            match read_bytes_limited(&path, &relative_path, ctx.policy.limits.max_read_bytes) {
+            let bytes = match read_bytes_limited(
+                &file.path,
+                &file.relative_path,
+                ctx.policy.limits.max_read_bytes,
+            ) {
                 Ok(bytes) => bytes,
                 Err(Error::FileTooLarge { .. }) => {
                     skipped_too_large_files = skipped_too_large_files.saturating_add(1);
-                    continue;
+                    return Ok(std::ops::ControlFlow::Continue(()));
                 }
                 Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
-                    skipped_io_errors = skipped_io_errors.saturating_add(1);
-                    continue;
+                    diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
+                    return Ok(std::ops::ControlFlow::Continue(()));
                 }
                 Err(err) => return Err(err),
             };
-        let content = match std::str::from_utf8(&bytes) {
-            Ok(content) => content,
-            Err(_) => {
-                skipped_non_utf8_files = skipped_non_utf8_files.saturating_add(1);
-                continue;
-            }
-        };
-
-        for (idx, line) in content.lines().enumerate() {
-            let ok = match &regex {
-                Some(regex) => regex.is_match(line),
-                None => line.contains(&request.query),
+            let content = match std::str::from_utf8(&bytes) {
+                Ok(content) => content,
+                Err(_) => {
+                    skipped_non_utf8_files = skipped_non_utf8_files.saturating_add(1);
+                    return Ok(std::ops::ControlFlow::Continue(()));
+                }
             };
-            if !ok {
-                continue;
-            }
-            let line_bytes = line.as_bytes();
-            let line_truncated = line_bytes.len() > ctx.policy.limits.max_line_bytes;
-            let end = line_bytes.len().min(ctx.policy.limits.max_line_bytes);
-            let text = String::from_utf8_lossy(&line_bytes[..end]).to_string();
-            let text = ctx.redactor.redact_text(&text);
-            matches.push(GrepMatch {
-                path: relative_path.clone(),
-                line: idx.saturating_add(1) as u64,
-                text,
-                line_truncated,
-            });
-            if matches.len() >= ctx.policy.limits.max_results {
-                truncated = true;
-                break;
-            }
-        }
 
-        if truncated {
-            break;
-        }
-    }
+            for (idx, line) in content.lines().enumerate() {
+                let ok = match &regex {
+                    Some(regex) => regex.is_match(line),
+                    None => line.contains(&request.query),
+                };
+                if !ok {
+                    continue;
+                }
+                let line_bytes = line.as_bytes();
+                let line_truncated = line_bytes.len() > ctx.policy.limits.max_line_bytes;
+                let end = line_bytes.len().min(ctx.policy.limits.max_line_bytes);
+                let text = String::from_utf8_lossy(&line_bytes[..end]).to_string();
+                let text = ctx.redactor.redact_text(&text);
+                matches.push(GrepMatch {
+                    path: file.relative_path.clone(),
+                    line: idx.saturating_add(1) as u64,
+                    text,
+                    line_truncated,
+                });
+                if matches.len() >= ctx.policy.limits.max_results {
+                    diag.truncated = true;
+                    return Ok(std::ops::ControlFlow::Break(()));
+                }
+            }
+
+            Ok(std::ops::ControlFlow::Continue(()))
+        },
+    )?;
 
     matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
     Ok(GrepResponse {
         matches,
-        truncated,
+        truncated: diag.truncated,
         skipped_too_large_files,
         skipped_non_utf8_files,
-        scanned_files,
-        scan_limit_reached,
-        scan_limit_reason,
+        scanned_files: diag.scanned_files,
+        scan_limit_reached: diag.scan_limit_reached,
+        scan_limit_reason: diag.scan_limit_reason,
         elapsed_ms: elapsed_ms(&started),
-        scanned_entries,
-        skipped_walk_errors,
-        skipped_io_errors,
-        skipped_dangling_symlink_targets,
+        scanned_entries: diag.scanned_entries,
+        skipped_walk_errors: diag.skipped_walk_errors,
+        skipped_io_errors: diag.skipped_io_errors,
+        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
     })
 }
 
