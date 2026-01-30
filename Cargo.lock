@@ -354,6 +354,7 @@ dependencies = [
  "safe-fs-tools",
  "serde_json",
  "tempfile",
+ "walkdir",
 ]
 
 [[package]]

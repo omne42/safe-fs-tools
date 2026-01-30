@@ -195,10 +195,40 @@ fn tool_error_details_with(
             "size_bytes": size_bytes,
             "max_bytes": max_bytes,
         })),
-        safe_fs_tools::Error::WalkDir(err) => Some(serde_json::json!({
-            "kind": "walkdir",
-            "message": err.to_string(),
-        })),
+        safe_fs_tools::Error::WalkDir(err) => {
+            if redact_paths {
+                let mut out = serde_json::Map::new();
+                out.insert(
+                    "kind".to_string(),
+                    serde_json::Value::String("walkdir".to_string()),
+                );
+                if let Some(path) = err.path() {
+                    out.insert(
+                        "path".to_string(),
+                        serde_json::Value::String(format_path_for_error(
+                            path,
+                            redaction,
+                            redact_paths,
+                        )),
+                    );
+                }
+                if let Some(io_error) = err.io_error() {
+                    out.insert(
+                        "io_kind".to_string(),
+                        serde_json::Value::String(format!("{:?}", io_error.kind())),
+                    );
+                    if let Some(raw_os_error) = io_error.raw_os_error() {
+                        out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
+                    }
+                }
+                Some(serde_json::Value::Object(out))
+            } else {
+                Some(serde_json::json!({
+                    "kind": "walkdir",
+                    "message": err.to_string(),
+                }))
+            }
+        }
     }
 }
 
@@ -554,6 +584,45 @@ mod tests {
         assert_eq!(
             PathBuf::from(formatted),
             PathBuf::from("sub").join("file.txt")
+        );
+    }
+
+    #[test]
+    fn tool_error_details_redacts_walkdir_message() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
+            "root",
+            dir.path(),
+            safe_fs_tools::policy::RootMode::ReadOnly,
+        );
+        let redaction = PathRedaction::from_policy(&policy);
+
+        let missing = dir.path().join("missing");
+        let walk_err = walkdir::WalkDir::new(&missing)
+            .into_iter()
+            .filter_map(|entry| entry.err())
+            .next()
+            .expect("walkdir error");
+        let err = safe_fs_tools::Error::WalkDir(walk_err);
+
+        let details = tool_error_details_with(&err, Some(&redaction), true).expect("details");
+        assert_eq!(
+            details.get("kind").and_then(|v| v.as_str()),
+            Some("walkdir")
+        );
+        assert!(
+            details.get("message").is_none(),
+            "expected walkdir message omitted in redacted mode"
+        );
+        assert_eq!(
+            details.get("path").and_then(|v| v.as_str()),
+            Some("missing")
+        );
+
+        let rendered = details.to_string();
+        assert!(
+            !rendered.contains(&dir.path().display().to_string()),
+            "expected redacted details to not contain absolute root path: {rendered}"
         );
     }
 }
