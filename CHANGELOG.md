@@ -58,8 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Windows, `secrets.deny_globs` matching is now explicitly case-insensitive.
 - On Windows, `glob` patterns and `traversal.skip_globs` matching are now explicitly case-insensitive.
 - CLI: JSON `error.details` for `io`/`io_path` now always include `io_kind` and `raw_os_error` (even without `--redact-paths`).
+- CLI: add `--redact-paths-strict` for stricter path redaction in JSON errors.
+- `policy-io`: `load_policy` now enforces a maximum policy file size (default 4 MiB); use `load_policy_limited` for custom limits.
 - Docs: clarify `glob`/`grep` truncation semantics when `limits.max_results` is hit.
 - Docs: clarify atomic write durability semantics.
+- Docs: clarify `SandboxPolicy::validate` is structural (no filesystem IO).
 
 ### Fixed
 

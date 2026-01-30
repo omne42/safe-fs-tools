@@ -19,7 +19,7 @@ Important boundaries:
 ## Semantics
 
 - Roots are configured explicitly in `SandboxPolicy.roots` and canonicalized in `ops::Context::new`.
-- `root.path` must be an absolute path to an existing directory (validated in `SandboxPolicy::validate` + `Context::new`).
+- `root.path` must be an absolute path to an existing directory (absolute-path validation happens in `SandboxPolicy::validate`; existence/directory checks happen in `Context::new`).
 - Relative paths are resolved by `root.path.join(path)`; absolute paths are accepted but must still end up inside the selected root.
 - Directory traversal (`glob`/`grep`) uses `walkdir` with `follow_links(false)` and is best-effort: unreadable entries are skipped.
 - Symlinked **files** are treated as files, but their resolved targets must stay within the selected root; symlinked **directories** are not traversed.
@@ -56,7 +56,9 @@ All commands require a policy file (`.toml` or `.json`) and output JSON on succe
 
 For `patch`, you can also cap the patch *input* size (stdin or file) via `--max-patch-bytes` (defaults to `policy.limits.max_patch_bytes` if set, otherwise `policy.limits.max_read_bytes`).
 
-If you expose tool stderr to untrusted users, use `--error-format json --redact-paths` to avoid leaking absolute paths in error output (best-effort).
+Security note: the CLI is **not** a hard sandbox boundary. The `--policy` path and `patch` input file path are outside the policy model and must be provided by a trusted wrapper.
+
+If you expose tool stderr to untrusted users, use `--error-format json --redact-paths` to avoid leaking absolute paths in error output (best-effort). Paths outside configured roots may still reveal sensitive file names; use `--redact-paths-strict` for stricter redaction.
 
 ```bash
 safe-fs-tools --policy policy.toml read  --root workspace path/to/file.txt
@@ -107,6 +109,8 @@ Then use:
 ```rust
 let policy = safe_fs_tools::policy_io::load_policy("./policy.toml")?;
 ```
+
+`load_policy` enforces a maximum policy file size (4 MiB). Use `load_policy_limited(path, max_bytes)` for custom limits.
 
 Or, if you just want a ready-to-use context:
 

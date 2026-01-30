@@ -75,6 +75,7 @@ fn format_path_for_error(
     path: &Path,
     redaction: Option<&PathRedaction>,
     redact_paths: bool,
+    strict_redact_paths: bool,
 ) -> String {
     if !redact_paths {
         return path.display().to_string();
@@ -96,19 +97,24 @@ fn format_path_for_error(
         }
     }
 
+    if strict_redact_paths {
+        return "<redacted>".to_string();
+    }
+
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "<redacted>".to_string())
 }
 
 fn tool_error_details(tool: &safe_fs_tools::Error) -> Option<serde_json::Value> {
-    tool_error_details_with(tool, None, false)
+    tool_error_details_with(tool, None, false, false)
 }
 
 fn tool_error_details_with(
     tool: &safe_fs_tools::Error,
     redaction: Option<&PathRedaction>,
     redact_paths: bool,
+    strict_redact_paths: bool,
 ) -> Option<serde_json::Value> {
     match tool {
         safe_fs_tools::Error::Io(err) => {
@@ -141,7 +147,12 @@ fn tool_error_details_with(
             out.insert("op".to_string(), serde_json::Value::String(op.to_string()));
             out.insert(
                 "path".to_string(),
-                serde_json::Value::String(format_path_for_error(path, redaction, redact_paths)),
+                serde_json::Value::String(format_path_for_error(
+                    path,
+                    redaction,
+                    redact_paths,
+                    strict_redact_paths,
+                )),
             );
             out.insert(
                 "io_kind".to_string(),
@@ -193,7 +204,7 @@ fn tool_error_details_with(
         safe_fs_tools::Error::OutsideRoot { root_id, path } => Some(serde_json::json!({
             "kind": "outside_root",
             "root_id": root_id,
-            "path": format_path_for_error(path, redaction, redact_paths),
+            "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
         })),
         safe_fs_tools::Error::NotPermitted(message) => Some(serde_json::json!({
             "kind": "not_permitted",
@@ -201,7 +212,7 @@ fn tool_error_details_with(
         })),
         safe_fs_tools::Error::SecretPathDenied(path) => Some(serde_json::json!({
             "kind": "secret_path_denied",
-            "path": format_path_for_error(path, redaction, redact_paths),
+            "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
         })),
         safe_fs_tools::Error::FileTooLarge {
             path,
@@ -209,13 +220,13 @@ fn tool_error_details_with(
             max_bytes,
         } => Some(serde_json::json!({
             "kind": "file_too_large",
-            "path": format_path_for_error(path, redaction, redact_paths),
+            "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
             "size_bytes": size_bytes,
             "max_bytes": max_bytes,
         })),
         safe_fs_tools::Error::InvalidUtf8(path) => Some(serde_json::json!({
             "kind": "invalid_utf8",
-            "path": format_path_for_error(path, redaction, redact_paths),
+            "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
         })),
         safe_fs_tools::Error::Patch(message) => Some(serde_json::json!({
             "kind": "patch",
@@ -241,7 +252,12 @@ fn tool_error_details_with(
             );
             out.insert(
                 "path".to_string(),
-                serde_json::Value::String(format_path_for_error(path, redaction, redact_paths)),
+                serde_json::Value::String(format_path_for_error(
+                    path,
+                    redaction,
+                    redact_paths,
+                    strict_redact_paths,
+                )),
             );
             out.insert(
                 "io_kind".to_string(),
@@ -272,6 +288,7 @@ fn tool_error_details_with(
                             path,
                             redaction,
                             redact_paths,
+                            strict_redact_paths,
                         )),
                     );
                 }
@@ -311,6 +328,7 @@ fn tool_public_message(
     tool: &safe_fs_tools::Error,
     redaction: Option<&PathRedaction>,
     redact_paths: bool,
+    strict_redact_paths: bool,
 ) -> String {
     if !redact_paths {
         return tool.to_string();
@@ -319,7 +337,7 @@ fn tool_public_message(
     match tool {
         safe_fs_tools::Error::Io(_) => tool.to_string(),
         safe_fs_tools::Error::IoPath { op, path, .. } => {
-            let path = format_path_for_error(path, redaction, redact_paths);
+            let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
             format!("io error during {op} ({path})")
         }
         safe_fs_tools::Error::InvalidPolicy(_) => "invalid policy".to_string(),
@@ -330,7 +348,7 @@ fn tool_public_message(
         }
         safe_fs_tools::Error::NotPermitted(_) => tool.to_string(),
         safe_fs_tools::Error::SecretPathDenied(path) => {
-            let path = format_path_for_error(path, redaction, redact_paths);
+            let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
             format!("path is denied by secret rules: {path}")
         }
         safe_fs_tools::Error::FileTooLarge {
@@ -338,11 +356,11 @@ fn tool_public_message(
             size_bytes,
             max_bytes,
         } => {
-            let path = format_path_for_error(path, redaction, redact_paths);
+            let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
             format!("file is too large ({size_bytes} bytes; max {max_bytes} bytes): {path}")
         }
         safe_fs_tools::Error::InvalidUtf8(path) => {
-            let path = format_path_for_error(path, redaction, redact_paths);
+            let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
             format!("invalid utf-8 in file: {path}")
         }
         safe_fs_tools::Error::Patch(_) => tool.to_string(),
@@ -384,6 +402,13 @@ struct Cli {
     /// Useful when stderr is exposed to untrusted users; avoids leaking absolute paths.
     #[arg(long)]
     redact_paths: bool,
+
+    /// Strict path redaction in JSON errors.
+    ///
+    /// Hides file names for absolute paths that are outside configured roots. This implies
+    /// `--redact-paths` and is intended for scenarios where even file names are sensitive.
+    #[arg(long)]
+    redact_paths_strict: bool,
 
     /// Max bytes for patch input (stdin or file).
     ///
@@ -450,7 +475,10 @@ fn main() {
         match error_format {
             ErrorFormat::Text => eprintln!("{err}"),
             ErrorFormat::Json => {
-                let redaction = if cli.redact_paths {
+                let redact_paths = cli.redact_paths || cli.redact_paths_strict;
+                let strict_redact_paths = cli.redact_paths_strict;
+
+                let redaction = if redact_paths {
                     safe_fs_tools::policy_io::load_policy(&cli.policy)
                         .ok()
                         .map(|policy| PathRedaction::from_policy(&policy))
@@ -466,16 +494,19 @@ fn main() {
                 error.insert(
                     "message".to_string(),
                     serde_json::Value::String(match &err {
-                        CliError::Tool(tool) => {
-                            tool_public_message(tool, redaction.as_ref(), cli.redact_paths)
-                        }
+                        CliError::Tool(tool) => tool_public_message(
+                            tool,
+                            redaction.as_ref(),
+                            redact_paths,
+                            strict_redact_paths,
+                        ),
                         CliError::Json(_) => err.to_string(),
                     }),
                 );
 
                 if let CliError::Tool(tool) = &err {
-                    let details = if cli.redact_paths {
-                        tool_error_details_with(tool, redaction.as_ref(), true)
+                    let details = if redact_paths {
+                        tool_error_details_with(tool, redaction.as_ref(), true, strict_redact_paths)
                     } else {
                         tool_error_details(tool)
                     };
@@ -664,11 +695,27 @@ mod tests {
         let redaction = PathRedaction::from_policy(&policy);
         let path = dir.path().join("sub").join("file.txt");
 
-        let formatted = format_path_for_error(&path, Some(&redaction), true);
+        let formatted = format_path_for_error(&path, Some(&redaction), true, false);
         assert_eq!(
             PathBuf::from(formatted),
             PathBuf::from("sub").join("file.txt")
         );
+    }
+
+    #[test]
+    fn format_path_for_error_strict_redaction_hides_file_names_outside_roots() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let other = tempfile::tempdir().expect("tempdir");
+        let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
+            "root",
+            dir.path(),
+            safe_fs_tools::policy::RootMode::ReadOnly,
+        );
+        let redaction = PathRedaction::from_policy(&policy);
+        let path = other.path().join(".env");
+
+        let formatted = format_path_for_error(&path, Some(&redaction), true, true);
+        assert_eq!(formatted, "<redacted>");
     }
 
     #[test]
@@ -689,7 +736,8 @@ mod tests {
             .expect("walkdir error");
         let err = safe_fs_tools::Error::WalkDir(walk_err);
 
-        let details = tool_error_details_with(&err, Some(&redaction), true).expect("details");
+        let details =
+            tool_error_details_with(&err, Some(&redaction), true, false).expect("details");
         assert_eq!(
             details.get("kind").and_then(|v| v.as_str()),
             Some("walkdir")
@@ -725,7 +773,8 @@ mod tests {
             source: std::io::Error::from_raw_os_error(2),
         };
 
-        let details = tool_error_details_with(&err, Some(&redaction), true).expect("details");
+        let details =
+            tool_error_details_with(&err, Some(&redaction), true, false).expect("details");
         assert_eq!(
             details.get("kind").and_then(|v| v.as_str()),
             Some("walkdir")
@@ -763,7 +812,7 @@ mod tests {
             source: std::io::Error::from_raw_os_error(2),
         };
 
-        let details = tool_error_details_with(&err, None, false).expect("details");
+        let details = tool_error_details_with(&err, None, false, false).expect("details");
         assert_eq!(
             details.get("kind").and_then(|v| v.as_str()),
             Some("walkdir")
@@ -795,7 +844,7 @@ mod tests {
     #[test]
     fn tool_error_details_redacts_io_message() {
         let err = safe_fs_tools::Error::Io(std::io::Error::from_raw_os_error(2));
-        let details = tool_error_details_with(&err, None, true).expect("details");
+        let details = tool_error_details_with(&err, None, true, false).expect("details");
         assert_eq!(details.get("kind").and_then(|v| v.as_str()), Some("io"));
         assert!(
             details.get("message").is_none(),
@@ -814,7 +863,7 @@ mod tests {
     #[test]
     fn tool_error_details_includes_io_details_when_not_redacting() {
         let err = safe_fs_tools::Error::Io(std::io::Error::from_raw_os_error(2));
-        let details = tool_error_details_with(&err, None, false).expect("details");
+        let details = tool_error_details_with(&err, None, false, false).expect("details");
         assert_eq!(details.get("kind").and_then(|v| v.as_str()), Some("io"));
         assert!(
             details.get("message").and_then(|v| v.as_str()).is_some(),
@@ -845,7 +894,8 @@ mod tests {
             path: dir.path().join("file.txt"),
             source: std::io::Error::from_raw_os_error(2),
         };
-        let details = tool_error_details_with(&err, Some(&redaction), true).expect("details");
+        let details =
+            tool_error_details_with(&err, Some(&redaction), true, false).expect("details");
         assert_eq!(
             details.get("kind").and_then(|v| v.as_str()),
             Some("io_path")
@@ -878,7 +928,7 @@ mod tests {
             path: PathBuf::from("file.txt"),
             source: std::io::Error::from_raw_os_error(2),
         };
-        let details = tool_error_details_with(&err, None, false).expect("details");
+        let details = tool_error_details_with(&err, None, false, false).expect("details");
         assert_eq!(
             details.get("kind").and_then(|v| v.as_str()),
             Some("io_path")

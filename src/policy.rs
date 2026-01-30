@@ -177,6 +177,13 @@ impl SandboxPolicy {
         }
     }
 
+    /// Validate policy structure and limit values.
+    ///
+    /// This is a purely *structural* validation: it does **not** perform any filesystem IO
+    /// (e.g. it does not check whether roots exist or are directories).
+    ///
+    /// Root existence and directory checks happen in `ops::Context::new`, which also canonicalizes
+    /// the configured root paths.
     pub fn validate(&self) -> Result<()> {
         if self.roots.is_empty() {
             return Err(Error::InvalidPolicy("roots is empty".to_string()));

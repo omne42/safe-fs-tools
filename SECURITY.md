@@ -23,6 +23,7 @@ Policy limits (e.g. `limits.max_read_bytes`, `limits.max_results`, `limits.max_w
 - OS sandbox escapes (because this is not an OS sandbox)
 - Attacks requiring arbitrary code execution inside the same process
 - Malicious behavior by the caller (policy is caller-controlled)
+- CLI argument hardening: the CLI assumes the policy path and patch input are provided by a trusted wrapper.
 
 ## Reporting
 
