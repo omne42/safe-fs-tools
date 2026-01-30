@@ -98,7 +98,9 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
     let meta = fs::symlink_metadata(&resolved)
         .map_err(|err| Error::io_path("metadata", &relative, err))?;
     if meta.is_dir() {
-        return Err(Error::InvalidPath("delete only supports files".to_string()));
+        return Err(Error::InvalidPath(
+            "delete does not support directories".to_string(),
+        ));
     }
 
     fs::remove_file(&resolved).map_err(|err| Error::io_path("remove_file", &relative, err))?;

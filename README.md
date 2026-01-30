@@ -27,8 +27,8 @@ Important boundaries:
 - Symlinked **files** are treated as files, but their resolved targets must stay within the selected root; symlinked **directories** are not traversed.
 - `glob` results are sorted by path; `grep` results are sorted by `(path, line)`.
 - On Windows, glob matching (for `glob` patterns, `grep --glob`, `traversal.skip_globs`, and `secrets.deny_globs`) is explicitly case-insensitive.
-- On Windows, `path` inputs containing `:` in a normal path component are rejected (prevents NTFS alternate data stream access like `file.txt:stream`).
-- On Windows, path hardening is limited to the checks described here (e.g. ADS rejection) plus best-effort root-boundary enforcement; for untrusted inputs, prefer `paths.allow_absolute=false` to require root-relative tool paths.
+- On Windows, `SandboxPolicy::resolve_path` rejects drive-relative paths (e.g. `C:foo`) and `:` in normal components (blocks NTFS alternate data streams like `file.txt:stream`).
+- On Windows, path hardening is limited to these checks plus best-effort root-boundary enforcement; for untrusted inputs, prefer `paths.allow_absolute=false` to require root-relative tool paths.
 - Glob patterns are treated as root-relative; a leading `./` is ignored. Patterns starting with `/` or containing `..` are rejected.
 - `limits.max_results` caps how many matches `glob`/`grep` will return. When hit, the operation stops scanning early and returns `truncated=true`, `scan_limit_reached=true`, `scan_limit_reason=results`. Matches are still returned in the sorted output order described above, but the set itself is only a deterministic *partial* result (based on traversal order), and is **not** guaranteed to equal “the first N” matches of the full (sorted) result set.
 - `limits.max_walk_entries` caps how many directory entries `glob`/`grep` will traverse (responses include `scanned_entries`).

@@ -77,8 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal: make `Context::canonical_path_in_root` easier to audit without changing behavior.
 - Docs: clarify `delete` semantics for directories vs special files.
 - Docs: clarify Windows hardening scope for `path` inputs (best-effort; prefer root-relative paths for untrusted inputs).
+- Docs: note `SandboxPolicy::resolve_path` rejects drive-relative Windows paths (e.g. `C:foo`).
 - Internal: split `ops` implementation into smaller modules for readability.
 - Tests: split the large `basic` integration test into smaller per-area test files.
+- Internal: make the `delete` directory error message more precise.
 
 ### Fixed
 

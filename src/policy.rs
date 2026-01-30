@@ -292,6 +292,10 @@ impl SandboxPolicy {
     /// This does **not** enforce any root boundary checks; it only joins paths.
     /// Use `ops::Context` (or equivalent checks) to ensure the resolved path
     /// stays within the root.
+    ///
+    /// On Windows, this also rejects drive-relative paths (e.g. `C:foo`) and
+    /// paths containing `:` in a normal component (blocks NTFS alternate data
+    /// streams like `file.txt:stream`).
     pub fn resolve_path(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
         let root = self.root(root_id)?;
         if path.as_os_str().is_empty() {
