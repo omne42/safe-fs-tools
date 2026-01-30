@@ -482,6 +482,10 @@ fn glob_respects_max_walk_ms_time_budget() {
 
     assert!(resp.truncated);
     assert!(resp.scan_limit_reached);
+    assert_eq!(
+        resp.scan_limit_reason,
+        Some(safe_fs_tools::ops::ScanLimitReason::Time)
+    );
     assert!(resp.matches.is_empty());
 }
 
@@ -508,6 +512,10 @@ fn grep_respects_max_walk_ms_time_budget() {
 
     assert!(resp.truncated);
     assert!(resp.scan_limit_reached);
+    assert_eq!(
+        resp.scan_limit_reason,
+        Some(safe_fs_tools::ops::ScanLimitReason::Time)
+    );
     assert!(resp.matches.is_empty());
 }
 

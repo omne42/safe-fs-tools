@@ -583,6 +583,14 @@ pub struct GlobRequest {
     pub pattern: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanLimitReason {
+    Entries,
+    Files,
+    Time,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobResponse {
     pub matches: Vec<PathBuf>,
@@ -591,6 +599,8 @@ pub struct GlobResponse {
     pub scanned_files: u64,
     #[serde(default)]
     pub scan_limit_reached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_limit_reason: Option<ScanLimitReason>,
     /// Elapsed wall-clock time spent in this call (milliseconds).
     #[serde(default)]
     pub elapsed_ms: u64,
@@ -712,6 +722,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let mut scanned_files: u64 = 0;
     let mut scanned_entries: u64 = 0;
     let mut scan_limit_reached = false;
+    let mut scan_limit_reason: Option<ScanLimitReason> = None;
     let mut skipped_walk_errors: u64 = 0;
     let mut skipped_io_errors: u64 = 0;
     let mut skipped_dangling_symlink_targets: u64 = 0;
@@ -728,6 +739,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                     truncated,
                     scanned_files,
                     scan_limit_reached,
+                    scan_limit_reason,
                     elapsed_ms: elapsed_ms(&started),
                     scanned_entries,
                     skipped_walk_errors,
@@ -745,6 +757,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             truncated,
             scanned_files,
             scan_limit_reached,
+            scan_limit_reason,
             elapsed_ms: elapsed_ms(&started),
             scanned_entries,
             skipped_walk_errors,
@@ -779,6 +792,9 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
             truncated = true;
             scan_limit_reached = true;
+            if scan_limit_reason.is_none() {
+                scan_limit_reason = Some(ScanLimitReason::Time);
+            }
             break;
         }
         let entry = match entry {
@@ -790,6 +806,9 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                 if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
                     truncated = true;
                     scan_limit_reached = true;
+                    if scan_limit_reason.is_none() {
+                        scan_limit_reason = Some(ScanLimitReason::Entries);
+                    }
                     break;
                 }
                 scanned_entries = scanned_entries.saturating_add(1);
@@ -801,6 +820,9 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
                 truncated = true;
                 scan_limit_reached = true;
+                if scan_limit_reason.is_none() {
+                    scan_limit_reason = Some(ScanLimitReason::Entries);
+                }
                 break;
             }
             scanned_entries = scanned_entries.saturating_add(1);
@@ -812,6 +834,9 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         if scanned_files as usize >= ctx.policy.limits.max_walk_files {
             truncated = true;
             scan_limit_reached = true;
+            if scan_limit_reason.is_none() {
+                scan_limit_reason = Some(ScanLimitReason::Files);
+            }
             break;
         }
         scanned_files = scanned_files.saturating_add(1);
@@ -876,6 +901,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         truncated,
         scanned_files,
         scan_limit_reached,
+        scan_limit_reason,
         elapsed_ms: elapsed_ms(&started),
         scanned_entries,
         skipped_walk_errors,
@@ -915,6 +941,8 @@ pub struct GrepResponse {
     pub scanned_files: u64,
     #[serde(default)]
     pub scan_limit_reached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_limit_reason: Option<ScanLimitReason>,
     /// Elapsed wall-clock time spent in this call (milliseconds).
     #[serde(default)]
     pub elapsed_ms: u64,
@@ -966,6 +994,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     skipped_non_utf8_files: 0,
                     scanned_files: 0,
                     scan_limit_reached: false,
+                    scan_limit_reason: None,
                     elapsed_ms: elapsed_ms(&started),
                     scanned_entries: 0,
                     skipped_walk_errors: 0,
@@ -985,6 +1014,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             skipped_non_utf8_files: 0,
             scanned_files: 0,
             scan_limit_reached: false,
+            scan_limit_reason: None,
             elapsed_ms: elapsed_ms(&started),
             scanned_entries: 0,
             skipped_walk_errors: 0,
@@ -1010,6 +1040,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut scanned_files: u64 = 0;
     let mut scanned_entries: u64 = 0;
     let mut scan_limit_reached = false;
+    let mut scan_limit_reason: Option<ScanLimitReason> = None;
     let mut skipped_walk_errors: u64 = 0;
     let mut skipped_io_errors: u64 = 0;
     let mut skipped_dangling_symlink_targets: u64 = 0;
@@ -1041,6 +1072,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
             truncated = true;
             scan_limit_reached = true;
+            if scan_limit_reason.is_none() {
+                scan_limit_reason = Some(ScanLimitReason::Time);
+            }
             break;
         }
         let entry = match entry {
@@ -1052,6 +1086,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
                     truncated = true;
                     scan_limit_reached = true;
+                    if scan_limit_reason.is_none() {
+                        scan_limit_reason = Some(ScanLimitReason::Entries);
+                    }
                     break;
                 }
                 scanned_entries = scanned_entries.saturating_add(1);
@@ -1063,6 +1100,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
                 truncated = true;
                 scan_limit_reached = true;
+                if scan_limit_reason.is_none() {
+                    scan_limit_reason = Some(ScanLimitReason::Entries);
+                }
                 break;
             }
             scanned_entries = scanned_entries.saturating_add(1);
@@ -1074,6 +1114,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         if scanned_files as usize >= ctx.policy.limits.max_walk_files {
             truncated = true;
             scan_limit_reached = true;
+            if scan_limit_reason.is_none() {
+                scan_limit_reason = Some(ScanLimitReason::Files);
+            }
             break;
         }
         scanned_files = scanned_files.saturating_add(1);
@@ -1188,6 +1231,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         skipped_non_utf8_files,
         scanned_files,
         scan_limit_reached,
+        scan_limit_reason,
         elapsed_ms: elapsed_ms(&started),
         scanned_entries,
         skipped_walk_errors,
