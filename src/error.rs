@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

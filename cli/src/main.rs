@@ -240,15 +240,14 @@ fn tool_error_details_with(
                 "path".to_string(),
                 serde_json::Value::String(format_path_for_error(path, redaction, redact_paths)),
             );
-            if redact_paths {
-                out.insert(
-                    "io_kind".to_string(),
-                    serde_json::Value::String(format!("{:?}", source.kind())),
-                );
-                if let Some(raw_os_error) = source.raw_os_error() {
-                    out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
-                }
-            } else {
+            out.insert(
+                "io_kind".to_string(),
+                serde_json::Value::String(format!("{:?}", source.kind())),
+            );
+            if let Some(raw_os_error) = source.raw_os_error() {
+                out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
+            }
+            if !redact_paths {
                 out.insert(
                     "message".to_string(),
                     serde_json::Value::String(source.to_string()),
@@ -287,6 +286,18 @@ fn tool_error_details_with(
                 Some(serde_json::json!({
                     "kind": "walkdir",
                     "message": err.to_string(),
+                }))
+            }
+        }
+        _ => {
+            if redact_paths {
+                Some(serde_json::json!({
+                    "kind": tool.code(),
+                }))
+            } else {
+                Some(serde_json::json!({
+                    "kind": tool.code(),
+                    "message": tool.to_string(),
                 }))
             }
         }
@@ -336,6 +347,13 @@ fn tool_public_message(
         safe_fs_tools::Error::InputTooLarge { .. } => tool.to_string(),
         safe_fs_tools::Error::WalkDirRoot { .. } | safe_fs_tools::Error::WalkDir(_) => {
             "walkdir error".to_string()
+        }
+        _ => {
+            if redact_paths {
+                tool.code().to_string()
+            } else {
+                tool.to_string()
+            }
         }
     }
 }
@@ -730,6 +748,44 @@ mod tests {
         assert!(
             !rendered.contains(&dir.path().display().to_string()),
             "expected redacted details to not contain absolute root path: {rendered}"
+        );
+    }
+
+    #[test]
+    fn tool_error_details_includes_walkdir_root_message_when_not_redacting() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let err = safe_fs_tools::Error::WalkDirRoot {
+            path: PathBuf::from("missing"),
+            source: std::io::Error::from_raw_os_error(2),
+        };
+
+        let details = tool_error_details_with(&err, None, false).expect("details");
+        assert_eq!(
+            details.get("kind").and_then(|v| v.as_str()),
+            Some("walkdir")
+        );
+        assert_eq!(
+            details.get("path").and_then(|v| v.as_str()),
+            Some("missing")
+        );
+        assert!(
+            details.get("message").and_then(|v| v.as_str()).is_some(),
+            "expected message in non-redacted mode"
+        );
+        assert!(
+            details.get("io_kind").and_then(|v| v.as_str()).is_some(),
+            "expected io_kind"
+        );
+        assert_eq!(
+            details.get("raw_os_error").and_then(|v| v.as_i64()),
+            Some(2)
+        );
+
+        let rendered = details.to_string();
+        assert!(
+            !rendered.contains(&dir.path().display().to_string()),
+            "expected details to not contain absolute root path: {rendered}"
         );
     }
 

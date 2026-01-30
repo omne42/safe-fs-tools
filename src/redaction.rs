@@ -90,10 +90,25 @@ fn normalize_relative_path(path: &Path) -> Cow<'_, Path> {
                 changed = true;
             }
             Component::ParentDir => {
-                if out.pop() {
-                    changed = true;
-                } else {
+                if out.as_os_str().is_empty() {
                     out.push("..");
+                    changed = true;
+                    continue;
+                }
+
+                match out.components().next_back() {
+                    Some(Component::Normal(_)) => {
+                        out.pop();
+                        changed = true;
+                    }
+                    Some(Component::ParentDir) => {
+                        out.push("..");
+                        changed = true;
+                    }
+                    _ => {
+                        out.push("..");
+                        changed = true;
+                    }
                 }
             }
             Component::Normal(part) => out.push(part),
@@ -121,4 +136,25 @@ fn normalize_path_for_glob(path: &Path) -> Cow<'_, Path> {
 #[cfg(not(windows))]
 fn normalize_path_for_glob(path: &Path) -> Cow<'_, Path> {
     normalize_relative_path(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_relative_path_preserves_leading_parent_dirs() {
+        assert_eq!(
+            normalize_relative_path(Path::new("../..")).as_ref(),
+            Path::new("../..")
+        );
+        assert_eq!(
+            normalize_relative_path(Path::new("../../a/../b")).as_ref(),
+            Path::new("../../b")
+        );
+        assert_eq!(
+            normalize_relative_path(Path::new("a/../../b")).as_ref(),
+            Path::new("../b")
+        );
+    }
 }

@@ -39,6 +39,7 @@ Important boundaries:
 - `grep` truncates individual matched lines to `limits.max_line_bytes` and marks matches with `line_truncated=true`.
 - `glob`/`grep` report skip counts (`skipped_walk_errors`, `skipped_io_errors`, `skipped_dangling_symlink_targets`) to make partial results explainable.
 - Errors are classified via a stable `Error::code()` string (useful for JSON error mapping).
+- `Error` is `#[non_exhaustive]`; match it with a wildcard arm and/or prefer `Error::code()` for classification.
 
 Non-goals (by design):
 

@@ -29,11 +29,24 @@ fn normalize_path_lexical(path: &Path) -> PathBuf {
         match comp {
             Component::CurDir => {}
             Component::ParentDir => {
-                if !out.pop() {
-                    // If we're at the filesystem root, `..` is a no-op. For relative paths, keep it.
-                    if out.as_os_str().is_empty() {
+                if out.as_os_str().is_empty() {
+                    out.push("..");
+                    continue;
+                }
+
+                match out.components().next_back() {
+                    Some(Component::Normal(_)) => {
+                        out.pop();
+                    }
+                    Some(Component::ParentDir) => {
                         out.push("..");
                     }
+                    Some(Component::Prefix(_)) => {
+                        out.push("..");
+                    }
+                    // If we're at the filesystem root, `..` is a no-op.
+                    Some(Component::RootDir) | None => {}
+                    _ => {}
                 }
             }
             Component::Normal(part) => out.push(part),
@@ -61,6 +74,38 @@ fn normalize_path_lexical(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+fn derive_requested_path(
+    root_path: &Path,
+    canonical_root: &Path,
+    input: &Path,
+    resolved: &Path,
+) -> PathBuf {
+    let relative_requested = if input.is_absolute() {
+        if let Ok(relative) = resolved.strip_prefix(root_path) {
+            relative.to_path_buf()
+        } else if let Ok(relative) = resolved.strip_prefix(canonical_root) {
+            relative.to_path_buf()
+        } else if let (Some(parent), Some(file_name)) = (resolved.parent(), resolved.file_name()) {
+            match parent.canonicalize() {
+                Ok(canonical_parent) => {
+                    let normalized = canonical_parent.join(file_name);
+                    normalized
+                        .strip_prefix(canonical_root)
+                        .unwrap_or(&normalized)
+                        .to_path_buf()
+                }
+                Err(_) => resolved.to_path_buf(),
+            }
+        } else {
+            resolved.to_path_buf()
+        }
+    } else {
+        input.to_path_buf()
+    };
+
+    normalize_path_lexical(&relative_requested)
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -322,11 +367,45 @@ mod tests {
     }
 
     #[test]
+    fn normalize_path_lexical_preserves_leading_parent_dirs() {
+        assert_eq!(
+            normalize_path_lexical(Path::new("../..")),
+            PathBuf::from("../..")
+        );
+        assert_eq!(
+            normalize_path_lexical(Path::new("../../a/../b")),
+            PathBuf::from("../../b")
+        );
+        assert_eq!(
+            normalize_path_lexical(Path::new("a/../../b")),
+            PathBuf::from("../b")
+        );
+    }
+
+    #[test]
     #[cfg(windows)]
     fn normalize_path_lexical_preserves_prefix_root() {
         assert_eq!(
             normalize_path_lexical(Path::new(r"C:\..\foo")),
             PathBuf::from(r"C:\foo")
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn normalize_path_lexical_preserves_unc_prefix_root() {
+        assert_eq!(
+            normalize_path_lexical(Path::new(r"\\server\share\..\foo")),
+            PathBuf::from(r"\\server\share\foo")
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn normalize_path_lexical_preserves_verbatim_prefix_root() {
+        assert_eq!(
+            normalize_path_lexical(Path::new(r"\\?\C:\..\foo")),
+            PathBuf::from(r"\\?\C:\foo")
         );
     }
 }
@@ -440,31 +519,7 @@ impl Context {
         let root = self.policy.root(root_id)?;
         let canonical_root = self.canonical_root(root_id)?;
 
-        let relative_requested = if path.is_absolute() {
-            if let Ok(relative) = resolved.strip_prefix(&root.path) {
-                relative.to_path_buf()
-            } else if let Ok(relative) = resolved.strip_prefix(canonical_root) {
-                relative.to_path_buf()
-            } else if let (Some(parent), Some(file_name)) =
-                (resolved.parent(), resolved.file_name())
-            {
-                match parent.canonicalize() {
-                    Ok(canonical_parent) => {
-                        let normalized = canonical_parent.join(file_name);
-                        normalized
-                            .strip_prefix(canonical_root)
-                            .unwrap_or(&normalized)
-                            .to_path_buf()
-                    }
-                    Err(_) => resolved.clone(),
-                }
-            } else {
-                resolved.clone()
-            }
-        } else {
-            path.to_path_buf()
-        };
-        let requested_path = normalize_path_lexical(&relative_requested);
+        let requested_path = derive_requested_path(&root.path, canonical_root, path, &resolved);
         if self.redactor.is_path_denied(&requested_path) {
             return Err(Error::SecretPathDenied(requested_path));
         }
@@ -1527,16 +1582,8 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
     let resolved = ctx.policy.resolve_path(&request.root_id, &request.path)?;
     let root = ctx.policy.root(&request.root_id)?;
     let canonical_root = ctx.canonical_root(&request.root_id)?;
-    let relative_requested = if request.path.is_absolute() {
-        resolved
-            .strip_prefix(&root.path)
-            .or_else(|_| resolved.strip_prefix(canonical_root))
-            .map(|path| path.to_path_buf())
-            .unwrap_or_else(|_| resolved.clone())
-    } else {
-        request.path.clone()
-    };
-    let requested_path = normalize_path_lexical(&relative_requested);
+    let requested_path =
+        derive_requested_path(&root.path, canonical_root, &request.path, &resolved);
 
     let file_name = resolved
         .file_name()
