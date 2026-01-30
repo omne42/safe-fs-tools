@@ -690,6 +690,50 @@ mod tests {
     }
 
     #[test]
+    fn tool_error_details_redacts_walkdir_root_message() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
+            "root",
+            dir.path(),
+            safe_fs_tools::policy::RootMode::ReadOnly,
+        );
+        let redaction = PathRedaction::from_policy(&policy);
+
+        let err = safe_fs_tools::Error::WalkDirRoot {
+            path: dir.path().join("missing"),
+            source: std::io::Error::from_raw_os_error(2),
+        };
+
+        let details = tool_error_details_with(&err, Some(&redaction), true).expect("details");
+        assert_eq!(
+            details.get("kind").and_then(|v| v.as_str()),
+            Some("walkdir")
+        );
+        assert!(
+            details.get("message").is_none(),
+            "expected walkdir message omitted in redacted mode"
+        );
+        assert_eq!(
+            details.get("path").and_then(|v| v.as_str()),
+            Some("missing")
+        );
+        assert!(
+            details.get("io_kind").and_then(|v| v.as_str()).is_some(),
+            "expected io_kind"
+        );
+        assert_eq!(
+            details.get("raw_os_error").and_then(|v| v.as_i64()),
+            Some(2)
+        );
+
+        let rendered = details.to_string();
+        assert!(
+            !rendered.contains(&dir.path().display().to_string()),
+            "expected redacted details to not contain absolute root path: {rendered}"
+        );
+    }
+
+    #[test]
     fn tool_error_details_redacts_io_message() {
         let err = safe_fs_tools::Error::Io(std::io::Error::from_raw_os_error(2));
         let details = tool_error_details_with(&err, None, true).expect("details");

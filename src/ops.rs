@@ -448,14 +448,16 @@ impl Context {
             } else if let (Some(parent), Some(file_name)) =
                 (resolved.parent(), resolved.file_name())
             {
-                let canonical_parent = parent
-                    .canonicalize()
-                    .map_err(|err| Error::io_path("canonicalize", parent, err))?;
-                let normalized = canonical_parent.join(file_name);
-                normalized
-                    .strip_prefix(canonical_root)
-                    .unwrap_or(&normalized)
-                    .to_path_buf()
+                match parent.canonicalize() {
+                    Ok(canonical_parent) => {
+                        let normalized = canonical_parent.join(file_name);
+                        normalized
+                            .strip_prefix(canonical_root)
+                            .unwrap_or(&normalized)
+                            .to_path_buf()
+                    }
+                    Err(_) => resolved.clone(),
+                }
             } else {
                 resolved.clone()
             }
