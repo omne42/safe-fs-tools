@@ -638,10 +638,20 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                 match ctx.canonical_path_in_root(&request.root_id, entry.path()) {
                     Ok(ok) => ok,
                     Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
+                    Err(Error::IoPath {
+                        op: "canonicalize",
+                        source,
+                        ..
+                    }) if source.kind() == std::io::ErrorKind::NotFound => {
+                        continue;
+                    }
                     Err(err) => return Err(err),
                 };
-            let meta = fs::metadata(&canonical)
-                .map_err(|err| Error::io_path("metadata", relative, err))?;
+            let meta = match fs::metadata(&canonical) {
+                Ok(meta) => meta,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(Error::io_path("metadata", relative, err)),
+            };
             if !meta.is_file() {
                 continue;
             }
@@ -782,10 +792,20 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 match ctx.canonical_path_in_root(&request.root_id, entry.path()) {
                     Ok(ok) => ok,
                     Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
+                    Err(Error::IoPath {
+                        op: "canonicalize",
+                        source,
+                        ..
+                    }) if source.kind() == std::io::ErrorKind::NotFound => {
+                        continue;
+                    }
                     Err(err) => return Err(err),
                 };
-            let meta = fs::metadata(&canonical)
-                .map_err(|err| Error::io_path("metadata", relative, err))?;
+            let meta = match fs::metadata(&canonical) {
+                Ok(meta) => meta,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(Error::io_path("metadata", relative, err)),
+            };
             if !meta.is_file() {
                 continue;
             }

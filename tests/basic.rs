@@ -227,6 +227,57 @@ fn edit_rejects_symlink_escape_via_ancestor_dir() {
 }
 
 #[test]
+#[cfg(all(unix, feature = "glob"))]
+fn glob_skips_dangling_symlink_targets() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
+
+    let missing = dir.path().join("missing.txt");
+    symlink(&missing, dir.path().join("b.txt")).expect("symlink");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert_eq!(resp.matches, vec![PathBuf::from("a.txt")]);
+}
+
+#[test]
+#[cfg(all(unix, feature = "grep"))]
+fn grep_skips_dangling_symlink_targets() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
+
+    let missing = dir.path().join("missing.txt");
+    symlink(&missing, dir.path().join("b.txt")).expect("symlink");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("a.txt"));
+}
+
+#[test]
 #[cfg(feature = "patch")]
 fn edit_patch_delete_roundtrip() {
     let dir = tempfile::tempdir().expect("tempdir");

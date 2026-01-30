@@ -52,3 +52,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `edit`/`patch` now write atomically (temp file + rename) and preserve existing file permissions.
 - Atomic write temp files are created with restrictive permissions on Unix to avoid transient exposure.
 - Dangling symlinks that would escape a root are now classified as `outside_root` (instead of a generic IO error).
+- `glob`/`grep` no longer fail on dangling symlink targets; they skip the entry.
