@@ -79,14 +79,20 @@ fn open_private_temp_file(path: &Path) -> std::io::Result<fs::File> {
 }
 
 fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<Vec<u8>> {
-    if let Ok(meta) = fs::metadata(path)
-        && meta.len() > max_bytes
-    {
-        return Err(Error::FileTooLarge {
-            path: relative.to_path_buf(),
-            size_bytes: meta.len(),
-            max_bytes,
-        });
+    if let Ok(meta) = fs::metadata(path) {
+        if !meta.is_file() {
+            return Err(Error::InvalidPath(format!(
+                "path {} is not a regular file",
+                relative.display()
+            )));
+        }
+        if meta.len() > max_bytes {
+            return Err(Error::FileTooLarge {
+                path: relative.to_path_buf(),
+                size_bytes: meta.len(),
+                max_bytes,
+            });
+        }
     }
 
     let file = fs::File::open(path).map_err(|err| Error::io_path("open", relative, err))?;
@@ -113,15 +119,21 @@ fn read_string_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<S
 }
 
 fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
+    let meta = fs::metadata(path).map_err(|err| Error::io_path("metadata", relative, err))?;
+    if !meta.is_file() {
+        return Err(Error::InvalidPath(format!(
+            "path {} is not a regular file",
+            relative.display()
+        )));
+    }
+
     // Preserve prior behavior: fail if the original file isn't writable.
     let _ = fs::OpenOptions::new()
         .write(true)
         .open(path)
         .map_err(|err| Error::io_path("open_for_write", relative, err))?;
 
-    let perms = fs::metadata(path)
-        .map_err(|err| Error::io_path("metadata", relative, err))?
-        .permissions();
+    let perms = meta.permissions();
 
     let parent = path.parent().ok_or_else(|| {
         Error::InvalidPath(format!(
@@ -699,7 +711,15 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
                 )));
             }
 
-            let file_size_bytes = fs::metadata(&path).ok().map(|meta| meta.len());
+            let meta =
+                fs::metadata(&path).map_err(|err| Error::io_path("metadata", &relative, err))?;
+            if !meta.is_file() {
+                return Err(Error::InvalidPath(format!(
+                    "path {} is not a regular file",
+                    relative.display()
+                )));
+            }
+            let file_size_bytes = meta.len();
             let file =
                 fs::File::open(&path).map_err(|err| Error::io_path("open", &relative, err))?;
             let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
@@ -721,7 +741,7 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
 
                 scanned_bytes = scanned_bytes.saturating_add(n as u64);
                 if scanned_bytes > ctx.policy.limits.max_read_bytes {
-                    let size_bytes = file_size_bytes.unwrap_or(scanned_bytes).max(scanned_bytes);
+                    let size_bytes = file_size_bytes.max(scanned_bytes);
                     return Err(Error::FileTooLarge {
                         path: relative.clone(),
                         size_bytes,

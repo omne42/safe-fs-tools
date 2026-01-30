@@ -20,6 +20,9 @@ walkdir = { version = "2", optional = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 [features]
 default = ["glob", "grep", "patch"]
 glob = ["dep:walkdir"]

@@ -208,6 +208,9 @@ impl SandboxPolicy {
     ///
     /// Root existence and directory checks happen in `ops::Context::new`, which also canonicalizes
     /// the configured root paths.
+    ///
+    /// Pattern syntax (deny globs / traversal skip globs / redact regexes) is also validated in
+    /// `ops::Context::new` when compiling rule matchers.
     pub fn validate(&self) -> Result<()> {
         if self.roots.is_empty() {
             return Err(Error::InvalidPolicy("roots is empty".to_string()));

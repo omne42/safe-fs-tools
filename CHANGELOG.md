@@ -118,3 +118,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Glob patterns starting with `/` or containing `..` are now rejected early as invalid inputs (instead of being accepted but never matching).
 - On Windows, `walkdir` root errors now compute relative paths case-insensitively for more consistent diagnostics.
 - `glob`/`grep` no longer fail when `paths.allow_absolute=false` and encountering symlinked files during traversal.
+- `read`/`edit`/`patch` now reject non-regular files (FIFOs, sockets, device nodes) to prevent blocking/DoS.

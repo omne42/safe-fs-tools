@@ -18,6 +18,10 @@ Root-boundary checks are best-effort and are **not** hardened against a concurre
 
 Policy limits (e.g. `limits.max_read_bytes`, `limits.max_results`, `limits.max_walk_entries`, `limits.max_walk_files`) are enforced to bound work, but they are **not** a substitute for OS-level resource controls. Pathological inputs (e.g. extremely long lines or huge directory trees) can still cause high CPU/memory usage.
 
+### Special files
+
+Text operations (`read`/`edit`/`patch`) intentionally reject non-regular files (e.g. FIFOs, sockets, device nodes) to avoid blocking behavior and related DoS risks.
+
 ### Out of scope
 
 - OS sandbox escapes (because this is not an OS sandbox)

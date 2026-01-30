@@ -13,6 +13,8 @@ use safe_fs_tools::policy::{
     Limits, PathRules, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules,
 };
 #[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 fn test_policy(root: &std::path::Path, mode: RootMode) -> SandboxPolicy {
@@ -1912,4 +1914,155 @@ fn traversal_skip_globs_are_case_insensitive_on_windows() {
         "expected traversal.skip_globs to exclude .git/config: {:?}",
         resp.matches
     );
+}
+
+#[cfg(unix)]
+fn create_fifo(path: &std::path::Path) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes()).expect("c path");
+    let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+    if rc != 0 {
+        panic!("mkfifo failed: {}", std::io::Error::last_os_error());
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn read_rejects_fifo_special_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fifo = dir.path().join("pipe");
+    create_fifo(&fifo);
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_read_bytes = 8;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let mut fifo_writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .expect("open fifo");
+    fifo_writer.write_all(b"123456789").expect("write");
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("pipe"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn read_line_ranges_reject_fifo_special_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fifo = dir.path().join("pipe");
+    create_fifo(&fifo);
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+
+    let mut fifo_writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .expect("open fifo");
+    fifo_writer.write_all(b"one\ntwo\n").expect("write");
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("pipe"),
+            start_line: Some(1),
+            end_line: Some(1),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn edit_rejects_fifo_special_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fifo = dir.path().join("pipe");
+    create_fifo(&fifo);
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.limits.max_read_bytes = 8;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let mut fifo_writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .expect("open fifo");
+    fifo_writer.write_all(b"123456789").expect("write");
+
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("pipe"),
+            start_line: 1,
+            end_line: 1,
+            replacement: "ONE".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(all(unix, feature = "patch"))]
+fn patch_rejects_fifo_special_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fifo = dir.path().join("pipe");
+    create_fifo(&fifo);
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.limits.max_read_bytes = 8;
+    policy.limits.max_patch_bytes = Some(1024);
+    let ctx = Context::new(policy).expect("ctx");
+
+    let mut fifo_writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .expect("open fifo");
+    fifo_writer.write_all(b"123456789").expect("write");
+
+    let err = apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("pipe"),
+            patch: "x".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
 }

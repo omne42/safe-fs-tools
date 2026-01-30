@@ -14,6 +14,7 @@ Important boundaries:
 - This is **not** an OS sandbox. It enforces a policy at the tool layer; use OS-level sandboxing (containers, macOS sandbox, Linux Landlock, etc.) if you need strong isolation.
 - Root checks are best-effort and **not** hardened against concurrent filesystem adversaries (TOCTOU).
 - Text ops (`read`/`edit`/`patch`) are **UTF-8 only**. `grep` skips non-UTF8 / too-large / unreadable files and reports skip counts in its JSON output.
+- Text ops (`read`/`edit`/`patch`) only operate on regular files; special files (FIFOs, sockets, device nodes) are rejected to prevent blocking/DoS.
 - See `SECURITY.md` for the threat model.
 
 ## Semantics

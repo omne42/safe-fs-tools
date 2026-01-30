@@ -336,6 +336,7 @@ version = "0.1.0"
 dependencies = [
  "diffy",
  "globset",
+ "libc",
  "regex",
  "serde",
  "serde_json",
