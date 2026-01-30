@@ -62,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secrets.deny_globs` matching now performs lexical normalization (e.g. `sub/../.git/...`), preventing bypass via `..` segments.
 - Lexical normalization now preserves repeated leading `..` segments (e.g. `../../b`), improving path reporting and deny-glob behavior.
 - On Windows, glob/deny-glob matching now handles `\\` path separators.
+- On Windows, prefix-optimized traversal rejects drive-letter glob prefixes (e.g. `C:/...`) to prevent escaping the selected root.
 - Redaction replacement strings are now treated literally (no `$1` / `$name` capture expansion).
 - `edit`/`patch` now write atomically (temp file + rename) and preserve existing file permissions.
 - Atomic write temp files are created with restrictive permissions on Unix to avoid transient exposure.

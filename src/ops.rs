@@ -351,6 +351,12 @@ mod tests {
         assert_eq!(derive_safe_traversal_prefix("**/*.rs"), None);
         assert_eq!(derive_safe_traversal_prefix("../**/*.rs"), None);
         assert_eq!(derive_safe_traversal_prefix("/etc/*"), None);
+        #[cfg(windows)]
+        {
+            assert_eq!(derive_safe_traversal_prefix("C:/foo/*"), None);
+            assert_eq!(derive_safe_traversal_prefix("c:foo/*"), None);
+            assert_eq!(derive_safe_traversal_prefix("C:"), None);
+        }
     }
 
     #[test]
@@ -802,6 +808,15 @@ fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
     let pattern = pattern.as_ref();
     if pattern.starts_with('/') {
         return None;
+    }
+    #[cfg(windows)]
+    {
+        let bytes = pattern.as_bytes();
+        if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+            // Drive-prefix paths (e.g. `C:...`, `C:/...`) would cause `PathBuf::join` to
+            // discard the root prefix, allowing traversal outside the selected root.
+            return None;
+        }
     }
 
     let mut out = PathBuf::new();
