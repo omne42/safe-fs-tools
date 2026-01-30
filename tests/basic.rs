@@ -322,6 +322,58 @@ fn traversal_skip_globs_skip_in_traversal_but_allow_direct_read() {
 
 #[test]
 #[cfg(all(unix, feature = "glob"))]
+fn glob_does_not_follow_symlink_root_prefix() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    std::fs::write(outside.path().join("a.txt"), "a\n").expect("write");
+    symlink(outside.path(), dir.path().join("sub")).expect("symlink dir");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "sub/**/*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert!(resp.matches.is_empty());
+    assert_eq!(resp.scanned_entries, 0);
+    assert_eq!(resp.scanned_files, 1);
+}
+
+#[test]
+#[cfg(all(unix, feature = "grep"))]
+fn grep_does_not_follow_symlink_root_prefix() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    std::fs::write(outside.path().join("a.txt"), "needle\n").expect("write");
+    symlink(outside.path(), dir.path().join("sub")).expect("symlink dir");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: Some("sub/**/*.txt".to_string()),
+        },
+    )
+    .expect("grep");
+
+    assert!(resp.matches.is_empty());
+    assert_eq!(resp.scanned_entries, 0);
+    assert_eq!(resp.scanned_files, 1);
+}
+
+#[test]
+#[cfg(all(unix, feature = "glob"))]
 fn glob_skips_walkdir_errors() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");

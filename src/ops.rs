@@ -734,6 +734,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         });
     }
     for entry in WalkDir::new(&walk_root)
+        .follow_root_links(false)
         .follow_links(false)
         .sort_by_file_name()
         .into_iter()
@@ -982,6 +983,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut skipped_dangling_symlink_targets: u64 = 0;
 
     for entry in WalkDir::new(&walk_root)
+        .follow_root_links(false)
         .follow_links(false)
         .sort_by_file_name()
         .into_iter()

@@ -57,3 +57,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dangling symlinks that would escape a root are now classified as `outside_root` (instead of a generic IO error).
 - `glob`/`grep` no longer fail on dangling symlink targets; they skip the entry.
 - `glob`/`grep` no longer fail on traversal/read errors (e.g. permission-denied directories/files); they skip the entry and report skip counts.
+- Prefix-optimized traversal no longer follows symlink directories (`walkdir` root links are not followed).
