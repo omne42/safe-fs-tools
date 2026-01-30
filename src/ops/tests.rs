@@ -1,0 +1,203 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::policy::RootMode;
+
+use super::*;
+
+#[test]
+#[cfg(unix)]
+fn open_private_temp_file_creates_files_without_group_or_other_access() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("tmp.txt");
+    drop(io::open_private_temp_file(&path).expect("open"));
+    let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+    assert_eq!(mode & 0o077, 0, "expected no group/other permission bits");
+}
+
+#[test]
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn derive_safe_traversal_prefix_is_conservative() {
+    assert_eq!(
+        traversal::derive_safe_traversal_prefix("src/**/*.rs"),
+        Some(PathBuf::from("src"))
+    );
+    assert_eq!(
+        traversal::derive_safe_traversal_prefix("./src/**/*.rs"),
+        Some(PathBuf::from("src"))
+    );
+    assert_eq!(
+        traversal::derive_safe_traversal_prefix("src/*"),
+        Some(PathBuf::from("src"))
+    );
+    assert_eq!(
+        traversal::derive_safe_traversal_prefix("src/lib.rs"),
+        Some(PathBuf::from("src/lib.rs"))
+    );
+    assert_eq!(traversal::derive_safe_traversal_prefix("**/*.rs"), None);
+    assert_eq!(traversal::derive_safe_traversal_prefix("../**/*.rs"), None);
+    assert_eq!(traversal::derive_safe_traversal_prefix("/etc/*"), None);
+    #[cfg(windows)]
+    {
+        assert_eq!(traversal::derive_safe_traversal_prefix("C:/foo/*"), None);
+        assert_eq!(traversal::derive_safe_traversal_prefix("c:foo/*"), None);
+        assert_eq!(traversal::derive_safe_traversal_prefix("C:"), None);
+        assert_eq!(traversal::derive_safe_traversal_prefix("src/c:foo/*"), None);
+        assert_eq!(
+            traversal::derive_safe_traversal_prefix("a/b/c:tmp/**"),
+            None
+        );
+    }
+}
+
+#[test]
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn walk_traversal_files_rejects_walk_root_outside_root() {
+    use std::time::Instant;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+    let ctx = Context::new(policy).expect("ctx");
+
+    let root_path = ctx.canonical_root("root").expect("root").clone();
+    let walk_root = root_path.parent().expect("parent").to_path_buf();
+
+    let err = traversal::walk_traversal_files(
+        &ctx,
+        "root",
+        &root_path,
+        &walk_root,
+        &Instant::now(),
+        None,
+        |_file, _diag| Ok(std::ops::ControlFlow::Continue(())),
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code(), "invalid_path");
+}
+
+#[test]
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn traversal_skip_globs_apply_to_directories_via_probe() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(dir.path().join("node_modules").join("sub")).expect("mkdir");
+    fs::write(dir.path().join("keep.txt"), "keep\n").expect("write");
+    fs::write(dir.path().join("node_modules").join("skip.txt"), "skip\n").expect("write");
+    fs::write(
+        dir.path()
+            .join("node_modules")
+            .join("sub")
+            .join("keep2.txt"),
+        "keep\n",
+    )
+    .expect("write");
+
+    let mut policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+    policy.traversal.skip_globs = vec!["node_modules/*".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    assert!(
+        !ctx.is_traversal_path_skipped(Path::new("node_modules")),
+        "expected the skip glob not to match the directory itself"
+    );
+    let probe = Path::new("node_modules").join(traversal::TRAVERSAL_GLOB_PROBE_NAME);
+    assert!(
+        ctx.is_traversal_path_skipped(&probe),
+        "expected the skip glob to match the probe path"
+    );
+
+    let root_path = ctx.canonical_root("root").expect("root").clone();
+    let seen = traversal::walkdir_traversal_iter(&ctx, &root_path, &root_path)
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.depth() > 0)
+        .map(|entry| {
+            entry
+                .path()
+                .strip_prefix(&root_path)
+                .unwrap_or(entry.path())
+                .to_path_buf()
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        seen.iter().any(|path| path == Path::new("keep.txt")),
+        "expected keep.txt to be traversed, saw: {seen:?}"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|path| path.starts_with(Path::new("node_modules"))),
+        "expected node_modules to be excluded via probe semantics, saw: {seen:?}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn normalize_path_lexical_does_not_escape_filesystem_root() {
+    assert_eq!(
+        crate::path_utils::normalize_path_lexical(Path::new("/../etc")),
+        PathBuf::from("/etc")
+    );
+    assert_eq!(
+        crate::path_utils::normalize_path_lexical(Path::new("/a/../../b")),
+        PathBuf::from("/b")
+    );
+}
+
+#[test]
+fn normalize_path_lexical_preserves_leading_parent_dirs() {
+    assert_eq!(
+        crate::path_utils::normalize_path_lexical(Path::new("../..")),
+        PathBuf::from("../..")
+    );
+    assert_eq!(
+        crate::path_utils::normalize_path_lexical(Path::new("../../a/../b")),
+        PathBuf::from("../../b")
+    );
+    assert_eq!(
+        crate::path_utils::normalize_path_lexical(Path::new("a/../../b")),
+        PathBuf::from("../b")
+    );
+}
+
+#[test]
+fn requested_path_for_dot_is_not_empty() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+    let ctx = Context::new(policy).expect("ctx");
+
+    let (_canonical, relative, requested_path) = ctx
+        .canonical_path_in_root("root", Path::new("."))
+        .expect("canonicalize");
+    assert_eq!(relative, PathBuf::from("."));
+    assert_eq!(requested_path, PathBuf::from("."));
+}
+
+#[test]
+#[cfg(windows)]
+fn normalize_path_lexical_preserves_prefix_root() {
+    assert_eq!(
+        crate::path_utils::normalize_path_lexical(Path::new(r"C:\..\foo")),
+        PathBuf::from(r"C:\foo")
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn normalize_path_lexical_preserves_unc_prefix_root() {
+    assert_eq!(
+        crate::path_utils::normalize_path_lexical(Path::new(r"\\server\share\..\foo")),
+        PathBuf::from(r"\\server\share\foo")
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn normalize_path_lexical_preserves_verbatim_prefix_root() {
+    assert_eq!(
+        crate::path_utils::normalize_path_lexical(Path::new(r"\\?\C:\..\foo")),
+        PathBuf::from(r"\\?\C:\foo")
+    );
+}

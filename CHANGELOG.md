@@ -75,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal: deduplicate glob builder configuration across tool and deny/skip patterns to avoid semantic drift.
 - Docs: align the `Dev` commands with the `pre-commit` hook gates (`--workspace`, `--no-default-features`).
 - Internal: make `Context::canonical_path_in_root` easier to audit without changing behavior.
+- Docs: clarify `delete` semantics for directories vs special files.
+- Docs: clarify Windows hardening scope for `path` inputs (best-effort; prefer root-relative paths for untrusted inputs).
+- Internal: split `ops` implementation into smaller modules for readability.
+- Tests: split the large `basic` integration test into smaller per-area test files.
 
 ### Fixed
 

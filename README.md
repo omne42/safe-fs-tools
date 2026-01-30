@@ -28,6 +28,7 @@ Important boundaries:
 - `glob` results are sorted by path; `grep` results are sorted by `(path, line)`.
 - On Windows, glob matching (for `glob` patterns, `grep --glob`, `traversal.skip_globs`, and `secrets.deny_globs`) is explicitly case-insensitive.
 - On Windows, `path` inputs containing `:` in a normal path component are rejected (prevents NTFS alternate data stream access like `file.txt:stream`).
+- On Windows, path hardening is limited to the checks described here (e.g. ADS rejection) plus best-effort root-boundary enforcement; for untrusted inputs, prefer `paths.allow_absolute=false` to require root-relative tool paths.
 - Glob patterns are treated as root-relative; a leading `./` is ignored. Patterns starting with `/` or containing `..` are rejected.
 - `limits.max_results` caps how many matches `glob`/`grep` will return. When hit, the operation stops scanning early and returns `truncated=true`, `scan_limit_reached=true`, `scan_limit_reason=results`. Matches are still returned in the sorted output order described above, but the set itself is only a deterministic *partial* result (based on traversal order), and is **not** guaranteed to equal “the first N” matches of the full (sorted) result set.
 - `limits.max_walk_entries` caps how many directory entries `glob`/`grep` will traverse (responses include `scanned_entries`).
@@ -40,7 +41,7 @@ Important boundaries:
 - For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).
 - `read`/`edit`/`patch`/`delete` responses include `requested_path` (normalized input path) and `path` (canonicalized resolved path); for symlinked files these can differ. For absolute inputs, `requested_path` is best-effort and may be returned as root-relative when possible.
 - `edit`/`patch` update existing files in-place (the target must already exist). Writes are atomic (temp file + fsync + replace/rename), but durability is best-effort: parent directories are not fsynced.
-- `delete` removes the path itself (does not follow symlinks); it validates the parent directory is within the selected root.
+- `delete` removes the path itself (does not follow symlinks) and rejects directories; it may remove non-regular files (FIFOs, sockets, device nodes) if they are within the root and not directories.
 - `secrets.deny_globs` hides paths from `glob`/`grep` and denies direct access (`read`/`edit`/`patch`/`delete`). Deny checks apply to both the requested path (after `.`/`..` normalization) and the canonicalized resolved path.
 - `traversal.skip_globs` skips paths during traversal (`glob`/`grep`) for performance, but does **not** deny direct access.
 - `secrets.redact_regexes` are applied to returned text (`read` file content and `grep` matched lines).
