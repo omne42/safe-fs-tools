@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::path::{Component, Path};
 
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use globset::{GlobSet, GlobSetBuilder};
 use regex::{NoExpand, Regex};
 
 use crate::error::{Error, Result};
@@ -18,12 +18,7 @@ impl SecretRedactor {
     pub fn from_rules(rules: &SecretRules) -> Result<Self> {
         let mut deny_builder = GlobSetBuilder::new();
         for pattern in &rules.deny_globs {
-            let normalized_pattern = crate::path_utils::normalize_glob_pattern(pattern);
-            let mut glob_builder = GlobBuilder::new(normalized_pattern.as_ref());
-            glob_builder.literal_separator(true);
-            #[cfg(windows)]
-            glob_builder.case_insensitive(true);
-            let glob = glob_builder.build().map_err(|err| {
+            let glob = crate::path_utils::build_glob(pattern).map_err(|err| {
                 Error::InvalidPolicy(format!("invalid deny glob {pattern:?}: {err}"))
             })?;
             deny_builder.add(glob);

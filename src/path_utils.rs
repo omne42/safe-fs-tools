@@ -3,6 +3,8 @@ use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
+use globset::GlobBuilder;
+
 #[cfg(windows)]
 pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
     if !pattern.contains('\\') {
@@ -14,6 +16,15 @@ pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
 #[cfg(not(windows))]
 pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
     Cow::Borrowed(pattern)
+}
+
+pub(crate) fn build_glob(pattern: &str) -> std::result::Result<globset::Glob, globset::Error> {
+    let normalized_pattern = normalize_glob_pattern(pattern);
+    let mut builder = GlobBuilder::new(normalized_pattern.as_ref());
+    builder.literal_separator(true);
+    #[cfg(windows)]
+    builder.case_insensitive(true);
+    builder.build()
 }
 
 pub(crate) fn normalize_path_lexical(path: &Path) -> PathBuf {
@@ -221,6 +232,19 @@ mod tests {
         );
         assert!(starts_with_case_insensitive(
             Path::new(r"C:\Foo\Bar"),
+            Path::new(r"c:\foo")
+        ));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn strip_prefix_case_insensitive_matches_verbatim_drive_prefixes() {
+        assert_eq!(
+            strip_prefix_case_insensitive(Path::new(r"\\?\C:\Foo\Bar"), Path::new(r"c:\foo")),
+            Some(PathBuf::from("Bar"))
+        );
+        assert!(starts_with_case_insensitive(
+            Path::new(r"\\?\C:\Foo\Bar"),
             Path::new(r"c:\foo")
         ));
     }

@@ -67,8 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs: clarify `SandboxPolicy::validate` is structural (no filesystem IO).
 - Docs: clarify `glob`/`grep` traversal does not read `.gitignore`.
 - Docs: clarify `grep` match text may be empty when `limits.max_line_bytes` is smaller than a UTF-8 character.
+- Docs: clarify `edit`/`patch` operate on existing files (do not create new files).
 - CLI: success JSON output is now compact by default; use `--pretty` for pretty-printed output.
 - Internal: share traversal loop between `glob` and `grep` to reduce drift.
+- Internal: deduplicate glob builder configuration across tool and deny/skip patterns to avoid semantic drift.
 
 ### Fixed
 
@@ -102,6 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI: redacted JSON error formatting no longer re-loads the policy file; it reuses the already-loaded policy roots for consistent path redaction.
 - CLI: redacted JSON error details now include safe `message` strings for `invalid_path`/`invalid_policy`.
 - CLI: on Windows, `--redact-paths` now strips root prefixes case-insensitively for more consistent relative paths.
+- On Windows, canonical root-boundary checks now compare paths case-insensitively to avoid false `outside_root` errors.
 - Atomic write temp file names are now randomized to reduce pre-creation attacks in untrusted workspaces.
 - Internal: add a regression test locking traversal skip-glob directory probe semantics.
 - `read` line-range mode now reports `file_too_large.size_bytes` using file metadata when available (instead of scanned bytes).

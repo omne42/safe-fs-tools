@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "patch")]
 use diffy::{Patch, apply};
 #[cfg(any(feature = "glob", feature = "grep"))]
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use globset::{GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "glob", feature = "grep"))]
 use walkdir::WalkDir;
@@ -597,7 +597,10 @@ impl Context {
                         };
                         let resolved_target =
                             crate::path_utils::normalize_path_lexical(&resolved_target);
-                        if !resolved_target.starts_with(canonical_root) {
+                        if !crate::path_utils::starts_with_case_insensitive(
+                            &resolved_target,
+                            canonical_root,
+                        ) {
                             return Err(Error::OutsideRoot {
                                 root_id: root_id.to_string(),
                                 path: requested_path,
@@ -608,16 +611,14 @@ impl Context {
                 return Err(Error::io_path("canonicalize", requested_path, err));
             }
         };
-        if !canonical.starts_with(canonical_root) {
+        if !crate::path_utils::starts_with_case_insensitive(&canonical, canonical_root) {
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
                 path: requested_path,
             });
         }
-        let relative = canonical
-            .strip_prefix(canonical_root)
-            .unwrap_or(&canonical)
-            .to_path_buf();
+        let relative = crate::path_utils::strip_prefix_case_insensitive(&canonical, canonical_root)
+            .unwrap_or(canonical.clone());
         let relative = if relative.as_os_str().is_empty() {
             PathBuf::from(".")
         } else {
@@ -809,13 +810,7 @@ pub struct GlobResponse {
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn compile_glob(pattern: &str) -> Result<GlobSet> {
-    let normalized_pattern = crate::path_utils::normalize_glob_pattern(pattern);
-    let mut glob_builder = GlobBuilder::new(normalized_pattern.as_ref());
-    glob_builder.literal_separator(true);
-    #[cfg(windows)]
-    glob_builder.case_insensitive(true);
-    let glob = glob_builder
-        .build()
+    let glob = crate::path_utils::build_glob(pattern)
         .map_err(|err| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {err}")))?;
     let mut builder = GlobSetBuilder::new();
     builder.add(glob);
@@ -831,12 +826,7 @@ fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option<GlobSet>> 
     }
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
-        let normalized_pattern = crate::path_utils::normalize_glob_pattern(pattern);
-        let mut glob_builder = GlobBuilder::new(normalized_pattern.as_ref());
-        glob_builder.literal_separator(true);
-        #[cfg(windows)]
-        glob_builder.case_insensitive(true);
-        let glob = glob_builder.build().map_err(|err| {
+        let glob = crate::path_utils::build_glob(pattern).map_err(|err| {
             Error::InvalidPolicy(format!(
                 "invalid traversal.skip_globs glob {pattern:?}: {err}"
             ))
@@ -1659,16 +1649,16 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
         Ok(canonical) => canonical,
         Err(err) => return Err(Error::io_path("canonicalize", requested_path, err)),
     };
-    if !canonical_parent.starts_with(canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive(&canonical_parent, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_path,
         });
     }
 
-    let relative_parent = canonical_parent
-        .strip_prefix(canonical_root)
-        .unwrap_or(&canonical_parent);
+    let relative_parent =
+        crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, canonical_root)
+            .unwrap_or(canonical_parent);
     let relative = relative_parent.join(file_name);
     if ctx.redactor.is_path_denied(&relative) {
         return Err(Error::SecretPathDenied(relative));
