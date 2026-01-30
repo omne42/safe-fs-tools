@@ -643,9 +643,31 @@ fn load_text_limited(path: &PathBuf, max_bytes: u64) -> Result<String, safe_fs_t
     if path.as_os_str() == "-" {
         std::io::stdin().take(limit).read_to_end(&mut bytes)?;
     } else {
-        std::fs::File::open(path)?
+        let meta = std::fs::metadata(path).map_err(|err| safe_fs_tools::Error::IoPath {
+            op: "metadata",
+            path: path.clone(),
+            source: err,
+        })?;
+        if !meta.is_file() {
+            return Err(safe_fs_tools::Error::InvalidPath(format!(
+                "path {} is not a regular file",
+                path.display()
+            )));
+        }
+
+        std::fs::File::open(path)
+            .map_err(|err| safe_fs_tools::Error::IoPath {
+                op: "open",
+                path: path.clone(),
+                source: err,
+            })?
             .take(limit)
-            .read_to_end(&mut bytes)?;
+            .read_to_end(&mut bytes)
+            .map_err(|err| safe_fs_tools::Error::IoPath {
+                op: "read",
+                path: path.clone(),
+                source: err,
+            })?;
     }
 
     if bytes.len() as u64 > max_bytes {
@@ -663,6 +685,18 @@ fn load_text_limited(path: &PathBuf, max_bytes: u64) -> Result<String, safe_fs_t
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn create_fifo(path: &std::path::Path) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_path = CString::new(path.as_os_str().as_bytes()).expect("c path");
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        if rc != 0 {
+            panic!("mkfifo failed: {}", std::io::Error::last_os_error());
+        }
+    }
 
     #[test]
     fn cli_rejects_zero_max_patch_bytes() {
@@ -689,6 +723,29 @@ mod tests {
         let err = load_text_limited(&path, 10).expect_err("should reject");
         match err {
             safe_fs_tools::Error::InputTooLarge { .. } => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn load_text_limited_rejects_fifo_special_files() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pipe.diff");
+        create_fifo(&path);
+
+        let mut fifo_writer = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open fifo");
+        fifo_writer.write_all(b"123456789").expect("write");
+
+        let err = load_text_limited(&path, 8).expect_err("should reject");
+        match err {
+            safe_fs_tools::Error::InvalidPath(_) => {}
             other => panic!("unexpected error: {other:?}"),
         }
     }

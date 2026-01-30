@@ -352,6 +352,7 @@ name = "safe-fs-tools-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "libc",
  "safe-fs-tools",
  "serde_json",
  "tempfile",

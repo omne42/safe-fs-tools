@@ -61,6 +61,7 @@ All commands require a policy file (`.toml` or `.json`) and output JSON on succe
 For `patch`, you can also cap the patch *input* size (stdin or file) via `--max-patch-bytes` (defaults to `policy.limits.max_patch_bytes` if set, otherwise `policy.limits.max_read_bytes`).
 
 Security note: the CLI is **not** a hard sandbox boundary. The `--policy` path and `patch` input file path are outside the policy model and must be provided by a trusted wrapper.
+The CLI rejects non-regular policy/patch input files (FIFOs, sockets, device nodes) to avoid blocking/DoS.
 
 If you expose tool stderr to untrusted users, use `--error-format json --redact-paths` to avoid leaking absolute paths in error output (best-effort). Paths outside configured roots may still reveal sensitive file names; use `--redact-paths-strict` for stricter redaction.
 

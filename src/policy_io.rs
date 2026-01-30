@@ -32,6 +32,14 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
     }
 
     let path = path.as_ref();
+    let meta = std::fs::metadata(path).map_err(|err| Error::io_path("metadata", path, err))?;
+    if !meta.is_file() {
+        return Err(Error::InvalidPath(format!(
+            "path {} is not a regular file",
+            path.display()
+        )));
+    }
+
     let limit = max_bytes.saturating_add(1);
     let mut bytes = Vec::<u8>::new();
     std::fs::File::open(path)

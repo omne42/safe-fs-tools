@@ -17,6 +17,7 @@ Root-boundary checks are best-effort and are **not** hardened against a concurre
 ### Resource limits
 
 Policy limits (e.g. `limits.max_read_bytes`, `limits.max_results`, `limits.max_walk_entries`, `limits.max_walk_files`) are enforced to bound work, but they are **not** a substitute for OS-level resource controls. Pathological inputs (e.g. extremely long lines or huge directory trees) can still cause high CPU/memory usage.
+Some operations (notably `edit`/`patch`) build full in-memory strings and may temporarily allocate more than the input file size (even when `limits.max_read_bytes` is relatively small).
 
 ### Special files
 

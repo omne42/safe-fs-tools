@@ -3,6 +3,18 @@ mod policy_io {
     use safe_fs_tools::ops::Context;
     use safe_fs_tools::policy::{Permissions, Root, RootMode, SandboxPolicy};
 
+    #[cfg(unix)]
+    fn create_fifo(path: &std::path::Path) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_path = CString::new(path.as_os_str().as_bytes()).expect("c path");
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        if rc != 0 {
+            panic!("mkfifo failed: {}", std::io::Error::last_os_error());
+        }
+    }
+
     #[test]
     fn load_policy_toml_and_json() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -73,6 +85,29 @@ read = true
         let err = safe_fs_tools::policy_io::load_policy_limited(&path, 10).expect_err("reject");
         match err {
             safe_fs_tools::Error::InputTooLarge { .. } => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn load_policy_rejects_fifo_special_files() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("policy.toml");
+        create_fifo(&path);
+
+        let mut fifo_writer = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open fifo");
+        fifo_writer.write_all(b"123456789").expect("write");
+
+        let err = safe_fs_tools::policy_io::load_policy_limited(&path, 8).expect_err("reject");
+        match err {
+            safe_fs_tools::Error::InvalidPath(_) => {}
             other => panic!("unexpected error: {other:?}"),
         }
     }
