@@ -109,3 +109,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal: add a regression test locking traversal skip-glob directory probe semantics.
 - `read` line-range mode now reports `file_too_large.size_bytes` using file metadata when available (instead of scanned bytes).
 - Glob patterns now normalize leading `./` for `glob`/`grep` and policy glob rules (`secrets.deny_globs`, `traversal.skip_globs`).
+- On Windows, `SandboxPolicy::resolve_path` now rejects paths containing `:` in a normal component (blocks NTFS alternate data stream access like `file.txt:stream`).
+- Glob patterns starting with `/` or containing `..` are now rejected early as invalid inputs (instead of being accepted but never matching).

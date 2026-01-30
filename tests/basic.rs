@@ -106,6 +106,29 @@ fn glob_patterns_support_leading_dot_slash() {
 }
 
 #[test]
+#[cfg(feature = "glob")]
+fn glob_patterns_reject_absolute_and_parent_segments() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+
+    for pattern in ["/src/*.txt", "../**/*.txt", "src/../*.txt"] {
+        let err = glob_paths(
+            &ctx,
+            GlobRequest {
+                root_id: "root".to_string(),
+                pattern: pattern.to_string(),
+            },
+        )
+        .expect_err("should reject");
+
+        match err {
+            safe_fs_tools::Error::InvalidPath(_) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
 #[cfg(feature = "grep")]
 fn grep_globs_support_leading_dot_slash() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -126,6 +149,31 @@ fn grep_globs_support_leading_dot_slash() {
 
     assert_eq!(resp.matches.len(), 1);
     assert_eq!(resp.matches[0].path, PathBuf::from("src/a.txt"));
+}
+
+#[test]
+#[cfg(feature = "grep")]
+fn grep_globs_reject_absolute_and_parent_segments() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+
+    for pattern in ["/src/*.txt", "../**/*.txt", "src/../*.txt"] {
+        let err = grep(
+            &ctx,
+            GrepRequest {
+                root_id: "root".to_string(),
+                query: "needle".to_string(),
+                regex: false,
+                glob: Some(pattern.to_string()),
+            },
+        )
+        .expect_err("should reject");
+
+        match err {
+            safe_fs_tools::Error::InvalidPath(_) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -152,6 +200,22 @@ fn deny_globs_support_leading_dot_slash() {
     match err {
         safe_fs_tools::Error::SecretPathDenied(_) => {}
         other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn deny_globs_reject_absolute_and_parent_segments() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    for pattern in ["/.git/**", "../**/*.txt", "src/../*.txt"] {
+        let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+        policy.secrets.deny_globs = vec![pattern.to_string()];
+        let err = Context::new(policy).expect_err("should reject");
+
+        match err {
+            safe_fs_tools::Error::InvalidPolicy(_) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
 
@@ -193,6 +257,23 @@ fn traversal_skip_globs_support_leading_dot_slash() {
     )
     .expect("read");
     assert!(read.content.contains("needle"));
+}
+
+#[test]
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn traversal_skip_globs_reject_absolute_and_parent_segments() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    for pattern in ["/node_modules/**", "../**/*.txt", "src/../*.txt"] {
+        let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+        policy.traversal.skip_globs = vec![pattern.to_string()];
+        let err = Context::new(policy).expect_err("should reject");
+
+        match err {
+            safe_fs_tools::Error::InvalidPolicy(_) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -1638,6 +1719,23 @@ fn resolve_path_rejects_drive_relative_paths() {
     let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
     let err = policy
         .resolve_path("root", Path::new("C:foo"))
+        .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn resolve_path_rejects_colon_paths_on_windows() {
+    use std::path::Path;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+    let err = policy
+        .resolve_path("root", Path::new("file.txt::$DATA"))
         .expect_err("should reject");
 
     match err {

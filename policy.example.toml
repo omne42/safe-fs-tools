@@ -32,6 +32,7 @@ max_line_bytes = 4096
 # max_walk_ms = 500
 
 [secrets]
+# Glob patterns are root-relative (relative to the selected root). Do not start with '/' and do not include '..' segments.
 deny_globs = [
   ".git/**",
   "**/.git/**",
@@ -47,6 +48,7 @@ replacement = "***REDACTED***"
 
 [traversal]
 # For traversal performance only: skipped in `glob`/`grep` but still readable directly.
+# Glob patterns are root-relative (relative to the selected root). Do not start with '/' and do not include '..' segments.
 skip_globs = [
   "node_modules/**",
   "target/**",

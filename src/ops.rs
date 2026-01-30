@@ -810,7 +810,10 @@ pub struct GlobResponse {
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn compile_glob(pattern: &str) -> Result<GlobSet> {
-    let glob = crate::path_utils::build_glob(pattern)
+    let normalized = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
+    crate::path_utils::validate_root_relative_glob_pattern(&normalized)
+        .map_err(|msg| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {msg}")))?;
+    let glob = crate::path_utils::build_glob_from_normalized(&normalized)
         .map_err(|err| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {err}")))?;
     let mut builder = GlobSetBuilder::new();
     builder.add(glob);
@@ -826,7 +829,13 @@ fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option<GlobSet>> 
     }
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
-        let glob = crate::path_utils::build_glob(pattern).map_err(|err| {
+        let normalized = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
+        crate::path_utils::validate_root_relative_glob_pattern(&normalized).map_err(|msg| {
+            Error::InvalidPolicy(format!(
+                "invalid traversal.skip_globs glob {pattern:?}: {msg}"
+            ))
+        })?;
+        let glob = crate::path_utils::build_glob_from_normalized(&normalized).map_err(|err| {
             Error::InvalidPolicy(format!(
                 "invalid traversal.skip_globs glob {pattern:?}: {err}"
             ))

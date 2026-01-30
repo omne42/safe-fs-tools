@@ -272,6 +272,18 @@ impl SandboxPolicy {
         }
         #[cfg(windows)]
         {
+            use std::os::windows::ffi::OsStrExt;
+
+            for comp in path.components() {
+                if let Component::Normal(part) = comp
+                    && part.encode_wide().any(|ch| ch == u16::from(b':'))
+                {
+                    return Err(Error::InvalidPath(format!(
+                        "invalid path {}: ':' is not allowed on Windows",
+                        path.display()
+                    )));
+                }
+            }
             if !path.is_absolute() && matches!(path.components().next(), Some(Component::Prefix(_)))
             {
                 return Err(Error::InvalidPath(format!(

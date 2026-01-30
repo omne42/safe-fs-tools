@@ -18,16 +18,45 @@ pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
     Cow::Borrowed(pattern)
 }
 
-pub(crate) fn build_glob(pattern: &str) -> std::result::Result<globset::Glob, globset::Error> {
-    let normalized_pattern = normalize_glob_pattern(pattern);
-    let mut normalized_pattern = normalized_pattern.as_ref();
-    while normalized_pattern.starts_with("./") {
-        normalized_pattern = &normalized_pattern[2..];
+pub(crate) fn normalize_glob_pattern_for_matching(pattern: &str) -> String {
+    let mut normalized = normalize_glob_pattern(pattern).into_owned();
+    while normalized.starts_with("./") {
+        normalized.drain(..2);
     }
-    if normalized_pattern.is_empty() {
-        normalized_pattern = ".";
+    if normalized.is_empty() {
+        normalized.push('.');
     }
-    let mut builder = GlobBuilder::new(normalized_pattern);
+    normalized
+}
+
+pub(crate) fn validate_root_relative_glob_pattern(
+    pattern: &str,
+) -> std::result::Result<(), &'static str> {
+    if pattern.starts_with('/') {
+        return Err("glob patterns must be root-relative (must not start with '/')");
+    }
+
+    #[cfg(windows)]
+    {
+        let bytes = pattern.as_bytes();
+        if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+            return Err(
+                "glob patterns must be root-relative (drive letter prefixes are not supported)",
+            );
+        }
+    }
+
+    if pattern.split('/').any(|segment| segment == "..") {
+        return Err("glob patterns must not contain '..' segments");
+    }
+
+    Ok(())
+}
+
+pub(crate) fn build_glob_from_normalized(
+    pattern: &str,
+) -> std::result::Result<globset::Glob, globset::Error> {
+    let mut builder = GlobBuilder::new(pattern);
     builder.literal_separator(true);
     #[cfg(windows)]
     builder.case_insensitive(true);
