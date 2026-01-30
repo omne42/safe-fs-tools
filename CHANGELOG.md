@@ -90,4 +90,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `outside_root` and related `canonicalize` errors now report the normalized requested path (avoids leaking absolute root paths for relative inputs).
 - Root-level traversal (`glob`/`grep`) errors no longer leak absolute paths via `walkdir` errors.
 - Absolute path normalization no longer fails when deriving `requested_path` requires canonicalizing a missing/unreadable parent directory.
+- Paths that are lexically outside the selected root are now rejected before filesystem canonicalization, reducing filesystem probing side-channels for missing/outside paths.
 - `requested_path` no longer serializes as an empty string for `.` inputs.

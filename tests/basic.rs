@@ -139,6 +139,33 @@ fn read_rejects_outside_root() {
 }
 
 #[test]
+fn read_rejects_missing_absolute_paths_outside_root_as_outside_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    let missing = outside.path().join("missing.txt");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: missing,
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { path, .. } => {
+            assert!(path.is_absolute());
+            assert_eq!(path.file_name(), Some(std::ffi::OsStr::new("missing.txt")));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn read_rejects_dangling_symlink_escape() {
     use std::os::unix::fs::symlink;

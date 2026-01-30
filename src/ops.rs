@@ -59,6 +59,63 @@ fn derive_requested_path(
     }
 }
 
+#[cfg(windows)]
+fn path_starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
+    use std::path::{Component, Prefix};
+
+    fn lower(s: &std::ffi::OsStr) -> String {
+        s.to_string_lossy().to_lowercase()
+    }
+
+    fn prefixes_eq(a: Prefix<'_>, b: Prefix<'_>) -> bool {
+        use std::path::Prefix::*;
+
+        match (a, b) {
+            (Disk(a), Disk(b))
+            | (Disk(a), VerbatimDisk(b))
+            | (VerbatimDisk(a), Disk(b))
+            | (VerbatimDisk(a), VerbatimDisk(b)) => {
+                a.to_ascii_lowercase() == b.to_ascii_lowercase()
+            }
+            (UNC(a_server, a_share), UNC(b_server, b_share))
+            | (UNC(a_server, a_share), VerbatimUNC(b_server, b_share))
+            | (VerbatimUNC(a_server, a_share), UNC(b_server, b_share))
+            | (VerbatimUNC(a_server, a_share), VerbatimUNC(b_server, b_share)) => {
+                lower(a_server) == lower(b_server) && lower(a_share) == lower(b_share)
+            }
+            (Verbatim(a), Verbatim(b)) => lower(a) == lower(b),
+            (DeviceNS(a), DeviceNS(b)) => lower(a) == lower(b),
+            _ => false,
+        }
+    }
+
+    let mut path_components = path.components();
+    for prefix_comp in prefix.components() {
+        let Some(path_comp) = path_components.next() else {
+            return false;
+        };
+
+        let ok = match (path_comp, prefix_comp) {
+            (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
+            (Component::RootDir, Component::RootDir) => true,
+            (Component::Normal(a), Component::Normal(b)) => lower(a) == lower(b),
+            (Component::CurDir, Component::CurDir) => true,
+            (Component::ParentDir, Component::ParentDir) => true,
+            _ => false,
+        };
+
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(not(windows))]
+fn path_starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
+    path.starts_with(prefix)
+}
+
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn elapsed_ms(started: &Instant) -> u64 {
     let ms = started.elapsed().as_millis();
@@ -513,6 +570,27 @@ impl Context {
         let resolved = self.policy.resolve_path(root_id, path)?;
         let root = self.policy.root(root_id)?;
         let canonical_root = self.canonical_root(root_id)?;
+
+        let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
+        let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
+        let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
+
+        if !path_starts_with_case_insensitive(&normalized_resolved, &normalized_root_path)
+            && !path_starts_with_case_insensitive(&normalized_resolved, &normalized_canonical_root)
+        {
+            let requested_path = if path.is_absolute() {
+                normalized_resolved
+            } else {
+                derive_requested_path(&root.path, canonical_root, path, &resolved)
+            };
+            if self.redactor.is_path_denied(&requested_path) {
+                return Err(Error::SecretPathDenied(requested_path));
+            }
+            return Err(Error::OutsideRoot {
+                root_id: root_id.to_string(),
+                path: requested_path,
+            });
+        }
 
         let requested_path = derive_requested_path(&root.path, canonical_root, path, &resolved);
         if self.redactor.is_path_denied(&requested_path) {
@@ -1538,10 +1616,29 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
     let resolved = ctx.policy.resolve_path(&request.root_id, &request.path)?;
     let root = ctx.policy.root(&request.root_id)?;
     let canonical_root = ctx.canonical_root(&request.root_id)?;
-    let requested_path =
-        derive_requested_path(&root.path, canonical_root, &request.path, &resolved);
+    let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
+    let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
+    let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
+
+    let is_lexically_within_root =
+        path_starts_with_case_insensitive(&normalized_resolved, &normalized_root_path)
+            || path_starts_with_case_insensitive(&normalized_resolved, &normalized_canonical_root);
+
+    let requested_path = if is_lexically_within_root || !request.path.is_absolute() {
+        derive_requested_path(&root.path, canonical_root, &request.path, &resolved)
+    } else {
+        normalized_resolved.clone()
+    };
+
     if ctx.redactor.is_path_denied(&requested_path) {
         return Err(Error::SecretPathDenied(requested_path));
+    }
+
+    if !is_lexically_within_root {
+        return Err(Error::OutsideRoot {
+            root_id: request.root_id.clone(),
+            path: requested_path,
+        });
     }
 
     let file_name = resolved
