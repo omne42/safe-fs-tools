@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `patch` now enforces patch input size via `limits.max_patch_bytes`/`limits.max_read_bytes` (rejects oversized patch input with `input_too_large`).
 - CLI `--max-patch-bytes` defaults to `limits.max_patch_bytes` if set (else `limits.max_read_bytes`) and is capped by policy.
 - IO errors produced by operations include operation/path context where available.
+- Internal: consolidate lexical path normalization into a shared helper to avoid drift between ops and deny-glob matching.
 - Atomic write on Windows now uses `ReplaceFileW` for true replacement semantics.
 
 ### Fixed

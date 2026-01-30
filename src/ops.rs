@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(feature = "glob", feature = "grep"))]
 use std::time::{Duration, Instant};
@@ -21,60 +21,6 @@ use crate::redaction::SecretRedactor;
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(feature = "glob", feature = "grep"))]
 const TRAVERSAL_GLOB_PROBE_NAME: &str = ".safe-fs-tools-probe";
-
-fn normalize_path_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    let mut seen_prefix = false;
-    for comp in path.components() {
-        match comp {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if out.as_os_str().is_empty() {
-                    out.push("..");
-                    continue;
-                }
-
-                match out.components().next_back() {
-                    Some(Component::Normal(_)) => {
-                        out.pop();
-                    }
-                    Some(Component::ParentDir) => {
-                        out.push("..");
-                    }
-                    Some(Component::Prefix(_)) => {
-                        out.push("..");
-                    }
-                    // If we're at the filesystem root, `..` is a no-op.
-                    Some(Component::RootDir) | None => {}
-                    _ => {}
-                }
-            }
-            Component::Normal(part) => out.push(part),
-            Component::RootDir => {
-                if seen_prefix {
-                    // On Windows, pushing `RootDir` after `Prefix` would reset the path (dropping
-                    // the prefix). Append a separator instead.
-                    #[cfg(windows)]
-                    {
-                        out.as_mut_os_string()
-                            .push(std::path::MAIN_SEPARATOR.to_string());
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        out.push(comp.as_os_str());
-                    }
-                } else {
-                    out.push(comp.as_os_str());
-                }
-            }
-            Component::Prefix(prefix) => {
-                seen_prefix = true;
-                out.push(prefix.as_os_str());
-            }
-        }
-    }
-    out
-}
 
 fn derive_requested_path(
     root_path: &Path,
@@ -105,7 +51,7 @@ fn derive_requested_path(
         input.to_path_buf()
     };
 
-    normalize_path_lexical(&relative_requested)
+    crate::path_utils::normalize_path_lexical(&relative_requested)
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -363,11 +309,11 @@ mod tests {
     #[cfg(unix)]
     fn normalize_path_lexical_does_not_escape_filesystem_root() {
         assert_eq!(
-            normalize_path_lexical(Path::new("/../etc")),
+            crate::path_utils::normalize_path_lexical(Path::new("/../etc")),
             PathBuf::from("/etc")
         );
         assert_eq!(
-            normalize_path_lexical(Path::new("/a/../../b")),
+            crate::path_utils::normalize_path_lexical(Path::new("/a/../../b")),
             PathBuf::from("/b")
         );
     }
@@ -375,15 +321,15 @@ mod tests {
     #[test]
     fn normalize_path_lexical_preserves_leading_parent_dirs() {
         assert_eq!(
-            normalize_path_lexical(Path::new("../..")),
+            crate::path_utils::normalize_path_lexical(Path::new("../..")),
             PathBuf::from("../..")
         );
         assert_eq!(
-            normalize_path_lexical(Path::new("../../a/../b")),
+            crate::path_utils::normalize_path_lexical(Path::new("../../a/../b")),
             PathBuf::from("../../b")
         );
         assert_eq!(
-            normalize_path_lexical(Path::new("a/../../b")),
+            crate::path_utils::normalize_path_lexical(Path::new("a/../../b")),
             PathBuf::from("../b")
         );
     }
@@ -392,7 +338,7 @@ mod tests {
     #[cfg(windows)]
     fn normalize_path_lexical_preserves_prefix_root() {
         assert_eq!(
-            normalize_path_lexical(Path::new(r"C:\..\foo")),
+            crate::path_utils::normalize_path_lexical(Path::new(r"C:\..\foo")),
             PathBuf::from(r"C:\foo")
         );
     }
@@ -401,7 +347,7 @@ mod tests {
     #[cfg(windows)]
     fn normalize_path_lexical_preserves_unc_prefix_root() {
         assert_eq!(
-            normalize_path_lexical(Path::new(r"\\server\share\..\foo")),
+            crate::path_utils::normalize_path_lexical(Path::new(r"\\server\share\..\foo")),
             PathBuf::from(r"\\server\share\foo")
         );
     }
@@ -410,7 +356,7 @@ mod tests {
     #[cfg(windows)]
     fn normalize_path_lexical_preserves_verbatim_prefix_root() {
         assert_eq!(
-            normalize_path_lexical(Path::new(r"\\?\C:\..\foo")),
+            crate::path_utils::normalize_path_lexical(Path::new(r"\\?\C:\..\foo")),
             PathBuf::from(r"\\?\C:\foo")
         );
     }
@@ -548,7 +494,8 @@ impl Context {
                         } else {
                             canonical_parent.join(symlink_target)
                         };
-                        let resolved_target = normalize_path_lexical(&resolved_target);
+                        let resolved_target =
+                            crate::path_utils::normalize_path_lexical(&resolved_target);
                         if !resolved_target.starts_with(canonical_root) {
                             return Err(Error::OutsideRoot {
                                 root_id: root_id.to_string(),
@@ -752,23 +699,8 @@ pub struct GlobResponse {
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
-#[cfg(windows)]
-fn normalize_glob_pattern(pattern: &str) -> std::borrow::Cow<'_, str> {
-    if !pattern.contains('\\') {
-        return std::borrow::Cow::Borrowed(pattern);
-    }
-    std::borrow::Cow::Owned(pattern.replace('\\', "/"))
-}
-
-#[cfg(any(feature = "glob", feature = "grep"))]
-#[cfg(not(windows))]
-fn normalize_glob_pattern(pattern: &str) -> std::borrow::Cow<'_, str> {
-    std::borrow::Cow::Borrowed(pattern)
-}
-
-#[cfg(any(feature = "glob", feature = "grep"))]
 fn compile_glob(pattern: &str) -> Result<GlobSet> {
-    let glob = GlobBuilder::new(normalize_glob_pattern(pattern).as_ref())
+    let glob = GlobBuilder::new(crate::path_utils::normalize_glob_pattern(pattern).as_ref())
         .literal_separator(true)
         .build()
         .map_err(|err| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {err}")))?;
@@ -786,7 +718,7 @@ fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option<GlobSet>> 
     }
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
-        let glob = GlobBuilder::new(normalize_glob_pattern(pattern).as_ref())
+        let glob = GlobBuilder::new(crate::path_utils::normalize_glob_pattern(pattern).as_ref())
             .literal_separator(true)
             .build()
             .map_err(|err| {
@@ -804,7 +736,7 @@ fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option<GlobSet>> 
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
-    let pattern = normalize_glob_pattern(pattern);
+    let pattern = crate::path_utils::normalize_glob_pattern(pattern);
     let pattern = pattern.as_ref();
     if pattern.starts_with('/') {
         return None;

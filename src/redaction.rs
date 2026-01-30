@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use regex::{NoExpand, Regex};
@@ -18,12 +18,13 @@ impl SecretRedactor {
     pub fn from_rules(rules: &SecretRules) -> Result<Self> {
         let mut deny_builder = GlobSetBuilder::new();
         for pattern in &rules.deny_globs {
-            let glob = GlobBuilder::new(normalize_glob_pattern(pattern).as_ref())
-                .literal_separator(true)
-                .build()
-                .map_err(|err| {
-                    Error::InvalidPolicy(format!("invalid deny glob {pattern:?}: {err}"))
-                })?;
+            let glob =
+                GlobBuilder::new(crate::path_utils::normalize_glob_pattern(pattern).as_ref())
+                    .literal_separator(true)
+                    .build()
+                    .map_err(|err| {
+                        Error::InvalidPolicy(format!("invalid deny glob {pattern:?}: {err}"))
+                    })?;
             deny_builder.add(glob);
         }
         let deny = deny_builder
@@ -64,63 +65,23 @@ impl SecretRedactor {
     }
 }
 
-#[cfg(windows)]
-fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
-    if !pattern.contains('\\') {
-        return Cow::Borrowed(pattern);
-    }
-    Cow::Owned(pattern.replace('\\', "/"))
-}
-
-#[cfg(not(windows))]
-fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
-    Cow::Borrowed(pattern)
-}
-
 fn normalize_relative_path(path: &Path) -> Cow<'_, Path> {
     if path.is_absolute() {
         return Cow::Borrowed(path);
     }
 
-    let mut out = PathBuf::new();
-    let mut changed = false;
+    let mut needs_normalization = false;
     for comp in path.components() {
-        match comp {
-            Component::CurDir => {
-                changed = true;
-            }
-            Component::ParentDir => {
-                if out.as_os_str().is_empty() {
-                    out.push("..");
-                    changed = true;
-                    continue;
-                }
-
-                match out.components().next_back() {
-                    Some(Component::Normal(_)) => {
-                        out.pop();
-                        changed = true;
-                    }
-                    Some(Component::ParentDir) => {
-                        out.push("..");
-                        changed = true;
-                    }
-                    _ => {
-                        out.push("..");
-                        changed = true;
-                    }
-                }
-            }
-            Component::Normal(part) => out.push(part),
-            // For deny-glob matching, treat other component kinds as opaque.
-            other => out.push(other.as_os_str()),
+        if matches!(comp, Component::CurDir | Component::ParentDir) {
+            needs_normalization = true;
+            break;
         }
     }
 
-    if !changed {
+    if !needs_normalization {
         return Cow::Borrowed(path);
     }
-    Cow::Owned(out)
+    Cow::Owned(crate::path_utils::normalize_path_lexical(path))
 }
 
 #[cfg(windows)]

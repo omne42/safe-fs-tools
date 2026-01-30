@@ -1,5 +1,6 @@
 mod error;
 pub mod ops;
+mod path_utils;
 pub mod policy;
 #[cfg(feature = "policy-io")]
 pub mod policy_io;
