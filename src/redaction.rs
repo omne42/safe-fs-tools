@@ -33,7 +33,9 @@ impl SecretRedactor {
         let mut redact = Vec::<Regex>::new();
         for pattern in &rules.redact_regexes {
             let regex = Regex::new(pattern).map_err(|err| {
-                Error::InvalidRegex(format!("invalid redact regex {pattern:?}: {err}"))
+                Error::InvalidPolicy(format!(
+                    "invalid secrets.redact_regexes regex {pattern:?}: {err}"
+                ))
             })?;
             redact.push(regex);
         }

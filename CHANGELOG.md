@@ -67,3 +67,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `glob`/`grep` no longer fail on traversal/read errors (e.g. permission-denied directories/files); they skip the entry and report skip counts.
 - Prefix-optimized traversal no longer follows symlink directories (`walkdir` root links are not followed).
 - CLI `--redact-paths` no longer includes raw `walkdir` error messages in JSON `error.details` (which could leak absolute paths).
+- On Windows, lexical path normalization no longer drops drive/UNC prefixes (fixes `..` handling for absolute paths).
+- Invalid `secrets.redact_regexes` patterns are now rejected as `invalid_policy` (instead of `invalid_regex`).

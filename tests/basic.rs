@@ -981,6 +981,19 @@ fn policy_rejects_relative_root_paths() {
 }
 
 #[test]
+fn policy_rejects_invalid_redact_regexes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.redact_regexes = vec!["[".to_string()];
+
+    let err = Context::new(policy).expect_err("should reject");
+    match err {
+        safe_fs_tools::Error::InvalidPolicy(msg) => assert!(msg.contains("secrets.redact_regexes")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn policy_rejects_zero_max_patch_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);

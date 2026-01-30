@@ -24,6 +24,7 @@ const TRAVERSAL_GLOB_PROBE_NAME: &str = ".safe-fs-tools-probe";
 
 fn normalize_path_lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
+    let mut seen_prefix = false;
     for comp in path.components() {
         match comp {
             Component::CurDir => {}
@@ -36,8 +37,27 @@ fn normalize_path_lexical(path: &Path) -> PathBuf {
                 }
             }
             Component::Normal(part) => out.push(part),
-            Component::RootDir => out.push(comp.as_os_str()),
-            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => {
+                if seen_prefix {
+                    // On Windows, pushing `RootDir` after `Prefix` would reset the path (dropping
+                    // the prefix). Append a separator instead.
+                    #[cfg(windows)]
+                    {
+                        out.as_mut_os_string()
+                            .push(std::path::MAIN_SEPARATOR.to_string());
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        out.push(comp.as_os_str());
+                    }
+                } else {
+                    out.push(comp.as_os_str());
+                }
+            }
+            Component::Prefix(prefix) => {
+                seen_prefix = true;
+                out.push(prefix.as_os_str());
+            }
         }
     }
     out
@@ -263,6 +283,28 @@ mod tests {
         assert_eq!(derive_safe_traversal_prefix("**/*.rs"), None);
         assert_eq!(derive_safe_traversal_prefix("../**/*.rs"), None);
         assert_eq!(derive_safe_traversal_prefix("/etc/*"), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn normalize_path_lexical_does_not_escape_filesystem_root() {
+        assert_eq!(
+            normalize_path_lexical(Path::new("/../etc")),
+            PathBuf::from("/etc")
+        );
+        assert_eq!(
+            normalize_path_lexical(Path::new("/a/../../b")),
+            PathBuf::from("/b")
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn normalize_path_lexical_preserves_prefix_root() {
+        assert_eq!(
+            normalize_path_lexical(Path::new(r"C:\..\foo")),
+            PathBuf::from(r"C:\foo")
+        );
     }
 }
 
