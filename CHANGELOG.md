@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `Context::from_policy_path` helper for a one-call policy+context load (via `policy-io`).
 - CLI: add `--error-format json` for structured errors.
 - CLI: add `--max-patch-bytes` to cap patch stdin/file input size (defaults to `limits.max_read_bytes`).
-- CLI: include `error.details` in JSON errors for common error kinds.
+- CLI: include `error.details` in JSON errors for most tool error kinds.
 - Add `docs/example-survey.md` (notes from `example/` repositories).
 - Add `docs/db-vfs.md` (DB-backed VFS decision + TODOs).
 - Add optional cargo features: `glob`/`grep`/`patch` (default on) and `policy-io`.

@@ -45,6 +45,79 @@ impl CliError {
     }
 }
 
+fn tool_error_details(tool: &safe_fs_tools::Error) -> Option<serde_json::Value> {
+    match tool {
+        safe_fs_tools::Error::Io(err) => Some(serde_json::json!({
+            "kind": "io",
+            "message": err.to_string(),
+        })),
+        safe_fs_tools::Error::IoPath { op, path, .. } => Some(serde_json::json!({
+            "kind": "io_path",
+            "op": op,
+            "path": path.display().to_string(),
+        })),
+        safe_fs_tools::Error::InvalidPolicy(message) => Some(serde_json::json!({
+            "kind": "invalid_policy",
+            "message": message,
+        })),
+        safe_fs_tools::Error::InvalidPath(message) => Some(serde_json::json!({
+            "kind": "invalid_path",
+            "message": message,
+        })),
+        safe_fs_tools::Error::RootNotFound(root_id) => Some(serde_json::json!({
+            "kind": "root_not_found",
+            "root_id": root_id,
+        })),
+        safe_fs_tools::Error::OutsideRoot { root_id, path } => Some(serde_json::json!({
+            "kind": "outside_root",
+            "root_id": root_id,
+            "path": path.display().to_string(),
+        })),
+        safe_fs_tools::Error::NotPermitted(message) => Some(serde_json::json!({
+            "kind": "not_permitted",
+            "message": message,
+        })),
+        safe_fs_tools::Error::SecretPathDenied(path) => Some(serde_json::json!({
+            "kind": "secret_path_denied",
+            "path": path.display().to_string(),
+        })),
+        safe_fs_tools::Error::FileTooLarge {
+            path,
+            size_bytes,
+            max_bytes,
+        } => Some(serde_json::json!({
+            "kind": "file_too_large",
+            "path": path.display().to_string(),
+            "size_bytes": size_bytes,
+            "max_bytes": max_bytes,
+        })),
+        safe_fs_tools::Error::InvalidUtf8(path) => Some(serde_json::json!({
+            "kind": "invalid_utf8",
+            "path": path.display().to_string(),
+        })),
+        safe_fs_tools::Error::Patch(message) => Some(serde_json::json!({
+            "kind": "patch",
+            "message": message,
+        })),
+        safe_fs_tools::Error::InvalidRegex(message) => Some(serde_json::json!({
+            "kind": "invalid_regex",
+            "message": message,
+        })),
+        safe_fs_tools::Error::InputTooLarge {
+            size_bytes,
+            max_bytes,
+        } => Some(serde_json::json!({
+            "kind": "input_too_large",
+            "size_bytes": size_bytes,
+            "max_bytes": max_bytes,
+        })),
+        safe_fs_tools::Error::WalkDir(err) => Some(serde_json::json!({
+            "kind": "walkdir",
+            "message": err.to_string(),
+        })),
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ErrorFormat {
     Text,
@@ -137,48 +210,7 @@ fn main() {
                 );
 
                 if let CliError::Tool(tool) = &err {
-                    let details = match tool {
-                        safe_fs_tools::Error::IoPath { op, path, .. } => Some(serde_json::json!({
-                            "kind": "io_path",
-                            "op": op,
-                            "path": path.display().to_string(),
-                        })),
-                        safe_fs_tools::Error::OutsideRoot { root_id, path } => {
-                            Some(serde_json::json!({
-                                "kind": "outside_root",
-                                "root_id": root_id,
-                                "path": path.display().to_string(),
-                            }))
-                        }
-                        safe_fs_tools::Error::SecretPathDenied(path) => Some(serde_json::json!({
-                            "kind": "secret_path_denied",
-                            "path": path.display().to_string(),
-                        })),
-                        safe_fs_tools::Error::FileTooLarge {
-                            path,
-                            size_bytes,
-                            max_bytes,
-                        } => Some(serde_json::json!({
-                            "kind": "file_too_large",
-                            "path": path.display().to_string(),
-                            "size_bytes": size_bytes,
-                            "max_bytes": max_bytes,
-                        })),
-                        safe_fs_tools::Error::InvalidUtf8(path) => Some(serde_json::json!({
-                            "kind": "invalid_utf8",
-                            "path": path.display().to_string(),
-                        })),
-                        safe_fs_tools::Error::InputTooLarge {
-                            size_bytes,
-                            max_bytes,
-                        } => Some(serde_json::json!({
-                            "kind": "input_too_large",
-                            "size_bytes": size_bytes,
-                            "max_bytes": max_bytes,
-                        })),
-                        _ => None,
-                    };
-                    if let Some(details) = details {
+                    if let Some(details) = tool_error_details(tool) {
                         error.insert("details".to_string(), details);
                     }
                 }
@@ -315,5 +347,33 @@ mod tests {
             safe_fs_tools::Error::InputTooLarge { .. } => {}
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn tool_error_details_covers_invalid_path() {
+        let err = safe_fs_tools::Error::InvalidPath("bad path".to_string());
+        let details = tool_error_details(&err).expect("details");
+        assert_eq!(
+            details.get("kind").and_then(|v| v.as_str()),
+            Some("invalid_path")
+        );
+        assert_eq!(
+            details.get("message").and_then(|v| v.as_str()),
+            Some("bad path")
+        );
+    }
+
+    #[test]
+    fn tool_error_details_covers_root_not_found() {
+        let err = safe_fs_tools::Error::RootNotFound("missing".to_string());
+        let details = tool_error_details(&err).expect("details");
+        assert_eq!(
+            details.get("kind").and_then(|v| v.as_str()),
+            Some("root_not_found")
+        );
+        assert_eq!(
+            details.get("root_id").and_then(|v| v.as_str()),
+            Some("missing")
+        );
     }
 }
