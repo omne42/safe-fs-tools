@@ -71,6 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI: success JSON output is now compact by default; use `--pretty` for pretty-printed output.
 - Internal: share traversal loop between `glob` and `grep` to reduce drift.
 - Internal: deduplicate glob builder configuration across tool and deny/skip patterns to avoid semantic drift.
+- Docs: align the `Dev` commands with the `pre-commit` hook gates (`--workspace`, `--no-default-features`).
+- Internal: make `Context::canonical_path_in_root` easier to audit without changing behavior.
 
 ### Fixed
 
@@ -111,3 +113,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Glob patterns now normalize leading `./` for `glob`/`grep` and policy glob rules (`secrets.deny_globs`, `traversal.skip_globs`).
 - On Windows, `SandboxPolicy::resolve_path` now rejects paths containing `:` in a normal component (blocks NTFS alternate data stream access like `file.txt:stream`).
 - Glob patterns starting with `/` or containing `..` are now rejected early as invalid inputs (instead of being accepted but never matching).
+- On Windows, `walkdir` root errors now compute relative paths case-insensitively for more consistent diagnostics.

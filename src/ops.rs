@@ -220,10 +220,9 @@ fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn walkdir_root_error(root_path: &Path, walk_root: &Path, err: walkdir::Error) -> Error {
-    let relative = match walk_root.strip_prefix(root_path) {
-        Ok(relative) if !relative.as_os_str().is_empty() => relative.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
+    let relative = crate::path_utils::strip_prefix_case_insensitive(walk_root, root_path)
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from("."));
 
     let source = match err.io_error().and_then(|io| io.raw_os_error()) {
         Some(raw_os_error) => std::io::Error::from_raw_os_error(raw_os_error),
@@ -538,6 +537,13 @@ impl Context {
             .is_some_and(|skip| globset_is_match(skip, relative))
     }
 
+    fn reject_secret_path(&self, path: PathBuf) -> Result<PathBuf> {
+        if self.redactor.is_path_denied(&path) {
+            return Err(Error::SecretPathDenied(path));
+        }
+        Ok(path)
+    }
+
     fn canonical_path_in_root(
         &self,
         root_id: &str,
@@ -551,31 +557,33 @@ impl Context {
         let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
         let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
 
-        if !crate::path_utils::starts_with_case_insensitive(
+        let lexically_in_root = crate::path_utils::starts_with_case_insensitive(
             &normalized_resolved,
             &normalized_root_path,
-        ) && !crate::path_utils::starts_with_case_insensitive(
+        ) || crate::path_utils::starts_with_case_insensitive(
             &normalized_resolved,
             &normalized_canonical_root,
-        ) {
+        );
+
+        if !lexically_in_root {
             let requested_path = if path.is_absolute() {
                 normalized_resolved
             } else {
                 derive_requested_path(&root.path, canonical_root, path, &resolved)
             };
-            if self.redactor.is_path_denied(&requested_path) {
-                return Err(Error::SecretPathDenied(requested_path));
-            }
+            let requested_path = self.reject_secret_path(requested_path)?;
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
                 path: requested_path,
             });
         }
 
-        let requested_path = derive_requested_path(&root.path, canonical_root, path, &resolved);
-        if self.redactor.is_path_denied(&requested_path) {
-            return Err(Error::SecretPathDenied(requested_path));
-        }
+        let requested_path = self.reject_secret_path(derive_requested_path(
+            &root.path,
+            canonical_root,
+            path,
+            &resolved,
+        ))?;
 
         let canonical = match resolved.canonicalize() {
             Ok(canonical) => canonical,
@@ -624,9 +632,7 @@ impl Context {
         } else {
             relative
         };
-        if self.redactor.is_path_denied(&relative) {
-            return Err(Error::SecretPathDenied(relative));
-        }
+        let relative = self.reject_secret_path(relative)?;
         Ok((canonical, relative, requested_path))
     }
 
