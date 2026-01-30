@@ -24,6 +24,7 @@ Important boundaries:
 - Directory traversal (`glob`/`grep`) uses `walkdir` with `follow_links(false)` and is best-effort: unreadable entries are skipped.
 - Symlinked **files** are treated as files, but their resolved targets must stay within the selected root; symlinked **directories** are not traversed.
 - `glob` results are sorted by path; `grep` results are sorted by `(path, line)`.
+- `limits.max_results` caps how many matches `glob`/`grep` will return. When hit, the operation stops scanning early and returns `truncated=true`. Matches are still returned in the sorted output order described above, but the set itself is only a deterministic *partial* result (based on traversal order), and is **not** guaranteed to equal “the first N” matches of the full (sorted) result set.
 - `limits.max_walk_entries` caps how many directory entries `glob`/`grep` will traverse (responses include `scanned_entries`).
 - `limits.max_walk_files` caps how many file entries `glob`/`grep` will consider (responses include `scanned_files`).
 - `scanned_files` is a best-effort diagnostic counter and may include files later skipped by deny/skip rules, glob filters, or IO errors.

@@ -65,6 +65,27 @@ fn read_redacts_matches() {
 }
 
 #[test]
+fn read_absolute_paths_return_root_relative_requested_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let abs_path = dir.path().join("hello.txt");
+    std::fs::write(&abs_path, "hello\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let response = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: abs_path,
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect("read");
+
+    assert_eq!(response.requested_path, Some(PathBuf::from("hello.txt")));
+}
+
+#[test]
 fn read_redacts_literal_replacement_without_expanding_capture_groups() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("hello.txt");
@@ -1385,7 +1406,36 @@ fn deny_globs_match_backslash_separators() {
     std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
     std::fs::write(dir.path().join(".git").join("config"), "secret").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.deny_globs = vec![".git/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from(r".git\config"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn deny_globs_are_case_insensitive_on_windows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+    std::fs::write(dir.path().join(".git").join("config"), "secret").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.deny_globs = vec![".GIT/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
     let err = read_file(
         &ctx,
         ReadRequest {

@@ -51,7 +51,12 @@ fn derive_requested_path(
         input.to_path_buf()
     };
 
-    crate::path_utils::normalize_path_lexical(&relative_requested)
+    let normalized = crate::path_utils::normalize_path_lexical(&relative_requested);
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -332,6 +337,18 @@ mod tests {
             crate::path_utils::normalize_path_lexical(Path::new("a/../../b")),
             PathBuf::from("../b")
         );
+    }
+
+    #[test]
+    fn requested_path_for_dot_is_not_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+        let ctx = Context::new(policy).expect("ctx");
+
+        let (_canonical, _relative, requested_path) = ctx
+            .canonical_path_in_root("root", Path::new("."))
+            .expect("canonicalize");
+        assert_eq!(requested_path, PathBuf::from("."));
     }
 
     #[test]

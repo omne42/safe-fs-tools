@@ -55,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - IO errors produced by operations include operation/path context where available.
 - Internal: consolidate lexical path normalization into a shared helper to avoid drift between ops and deny-glob matching.
 - Atomic write on Windows now uses `ReplaceFileW` for true replacement semantics.
+- On Windows, `secrets.deny_globs` matching is now explicitly case-insensitive.
+- Docs: clarify `glob`/`grep` truncation semantics when `limits.max_results` is hit.
 
 ### Fixed
 
@@ -80,3 +82,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `outside_root` and related `canonicalize` errors now report the normalized requested path (avoids leaking absolute root paths for relative inputs).
 - Root-level traversal (`glob`/`grep`) errors no longer leak absolute paths via `walkdir` errors.
 - Absolute path normalization no longer fails when deriving `requested_path` requires canonicalizing a missing/unreadable parent directory.
+- `requested_path` no longer serializes as an empty string for `.` inputs.

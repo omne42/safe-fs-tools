@@ -18,13 +18,14 @@ impl SecretRedactor {
     pub fn from_rules(rules: &SecretRules) -> Result<Self> {
         let mut deny_builder = GlobSetBuilder::new();
         for pattern in &rules.deny_globs {
-            let glob =
-                GlobBuilder::new(crate::path_utils::normalize_glob_pattern(pattern).as_ref())
-                    .literal_separator(true)
-                    .build()
-                    .map_err(|err| {
-                        Error::InvalidPolicy(format!("invalid deny glob {pattern:?}: {err}"))
-                    })?;
+            let normalized_pattern = crate::path_utils::normalize_glob_pattern(pattern);
+            let mut glob_builder = GlobBuilder::new(normalized_pattern.as_ref());
+            glob_builder.literal_separator(true);
+            #[cfg(windows)]
+            glob_builder.case_insensitive(true);
+            let glob = glob_builder.build().map_err(|err| {
+                Error::InvalidPolicy(format!("invalid deny glob {pattern:?}: {err}"))
+            })?;
             deny_builder.add(glob);
         }
         let deny = deny_builder
