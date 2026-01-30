@@ -427,6 +427,7 @@ struct Cli {
     ///
     /// Defaults to `policy.limits.max_patch_bytes` if set, otherwise `policy.limits.max_read_bytes`.
     #[arg(long)]
+    #[arg(value_parser = clap::value_parser!(u64).range(1..))]
     max_patch_bytes: Option<u64>,
 
     #[command(subcommand)]
@@ -662,6 +663,22 @@ fn load_text_limited(path: &PathBuf, max_bytes: u64) -> Result<String, safe_fs_t
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_rejects_zero_max_patch_bytes() {
+        let parsed = Cli::try_parse_from([
+            "safe-fs-tools",
+            "--policy",
+            "policy.toml",
+            "--max-patch-bytes",
+            "0",
+            "read",
+            "--root",
+            "root",
+            "README.md",
+        ]);
+        assert!(parsed.is_err());
+    }
 
     #[test]
     fn load_text_limited_rejects_large_file() {

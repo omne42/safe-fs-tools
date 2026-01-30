@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI: JSON `error.details` for `io`/`io_path` now always include `io_kind` and `raw_os_error` (even without `--redact-paths`).
 - CLI: add `--redact-paths-strict` for stricter path redaction in JSON errors.
 - `policy-io`: `load_policy` now enforces a maximum policy file size (default 4 MiB); use `load_policy_limited` for custom limits.
+- `policy-io`: `load_policy` now runs `SandboxPolicy::validate` to catch structural issues early.
 - Docs: clarify `glob`/`grep` truncation semantics when `limits.max_results` is hit.
 - Docs: clarify atomic write durability semantics.
 - Docs: clarify `SandboxPolicy::validate` is structural (no filesystem IO).
@@ -108,6 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI: redacted JSON error details now include safe `message` strings for `invalid_path`/`invalid_policy`.
 - CLI: on Windows, `--redact-paths` now strips root prefixes case-insensitively for more consistent relative paths.
 - On Windows, canonical root-boundary checks now compare paths case-insensitively to avoid false `outside_root` errors.
+- CLI: `--max-patch-bytes` now rejects `0` (must be > 0).
 - Atomic write temp file names are now randomized to reduce pre-creation attacks in untrusted workspaces.
 - Internal: add a regression test locking traversal skip-glob directory probe semantics.
 - `read` line-range mode now reports `file_too_large.size_bytes` using file metadata when available (instead of scanned bytes).

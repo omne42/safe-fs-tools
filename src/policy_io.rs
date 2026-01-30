@@ -57,5 +57,7 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
             )));
         }
     };
-    parse_policy(raw, format)
+    let policy = parse_policy(raw, format)?;
+    policy.validate()?;
+    Ok(policy)
 }

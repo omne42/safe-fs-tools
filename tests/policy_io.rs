@@ -76,4 +76,38 @@ read = true
             other => panic!("unexpected error: {other:?}"),
         }
     }
+
+    #[test]
+    fn load_policy_validates_structure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+
+        let policy_path = dir.path().join("invalid.toml");
+        std::fs::write(
+            &policy_path,
+            format!(
+                r#"
+[[roots]]
+id = "dup"
+path = "{}"
+mode = "read_only"
+
+[[roots]]
+id = "dup"
+path = "{}"
+mode = "read_only"
+"#,
+                root_path.display(),
+                root_path.display()
+            ),
+        )
+        .expect("write");
+
+        let err = safe_fs_tools::policy_io::load_policy(&policy_path).expect_err("reject");
+        match err {
+            safe_fs_tools::Error::InvalidPolicy(msg) => assert!(msg.contains("duplicate root.id")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }

@@ -113,7 +113,7 @@ Then use:
 let policy = safe_fs_tools::policy_io::load_policy("./policy.toml")?;
 ```
 
-`load_policy` enforces a maximum policy file size (4 MiB). Use `load_policy_limited(path, max_bytes)` for custom limits.
+`load_policy` validates policy structure (`SandboxPolicy::validate`) and enforces a maximum policy file size (4 MiB). Use `load_policy_limited(path, max_bytes)` for custom limits.
 
 Or, if you just want a ready-to-use context:
 
