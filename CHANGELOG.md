@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs: clarify atomic write durability semantics.
 - Docs: clarify `SandboxPolicy::validate` is structural (no filesystem IO).
 - Docs: clarify `glob`/`grep` traversal does not read `.gitignore`.
+- Docs: clarify `grep` match text may be empty when `limits.max_line_bytes` is smaller than a UTF-8 character.
 - Internal: share traversal loop between `glob` and `grep` to reduce drift.
 
 ### Fixed
@@ -98,4 +99,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `grep` line truncation now respects UTF-8 character boundaries (avoids replacement characters).
 - CLI: redacted JSON error formatting no longer re-loads the policy file; it reuses the already-loaded policy roots for consistent path redaction.
 - CLI: redacted JSON error details now include safe `message` strings for `invalid_path`/`invalid_policy`.
+- CLI: on Windows, `--redact-paths` now strips root prefixes case-insensitively for more consistent relative paths.
 - Atomic write temp file names are now randomized to reduce pre-creation attacks in untrusted workspaces.
+- Internal: add a regression test locking traversal skip-glob directory probe semantics.

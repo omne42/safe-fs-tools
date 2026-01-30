@@ -71,6 +71,71 @@ impl PathRedaction {
     }
 }
 
+#[cfg(windows)]
+fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
+    use std::path::{Component, Prefix};
+
+    fn lower(s: &std::ffi::OsStr) -> String {
+        s.to_string_lossy().to_lowercase()
+    }
+
+    fn prefixes_eq(a: Prefix<'_>, b: Prefix<'_>) -> bool {
+        use std::path::Prefix::*;
+
+        match (a, b) {
+            (Disk(a), Disk(b))
+            | (Disk(a), VerbatimDisk(b))
+            | (VerbatimDisk(a), Disk(b))
+            | (VerbatimDisk(a), VerbatimDisk(b)) => {
+                a.to_ascii_lowercase() == b.to_ascii_lowercase()
+            }
+            (UNC(a_server, a_share), UNC(b_server, b_share))
+            | (UNC(a_server, a_share), VerbatimUNC(b_server, b_share))
+            | (VerbatimUNC(a_server, a_share), UNC(b_server, b_share))
+            | (VerbatimUNC(a_server, a_share), VerbatimUNC(b_server, b_share)) => {
+                lower(a_server) == lower(b_server) && lower(a_share) == lower(b_share)
+            }
+            (Verbatim(a), Verbatim(b)) => lower(a) == lower(b),
+            (DeviceNS(a), DeviceNS(b)) => lower(a) == lower(b),
+            _ => false,
+        }
+    }
+
+    let mut path_components = path.components();
+    for prefix_comp in prefix.components() {
+        let path_comp = path_components.next()?;
+
+        let ok = match (path_comp, prefix_comp) {
+            (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
+            (Component::RootDir, Component::RootDir) => true,
+            (Component::Normal(a), Component::Normal(b)) => lower(a) == lower(b),
+            (Component::CurDir, Component::CurDir) => true,
+            (Component::ParentDir, Component::ParentDir) => true,
+            _ => false,
+        };
+
+        if !ok {
+            return None;
+        }
+    }
+
+    let mut out = PathBuf::new();
+    for comp in path_components {
+        match comp {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => out.push(".."),
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(out)
+}
+
+#[cfg(not(windows))]
+fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
+    path.strip_prefix(prefix).ok().map(PathBuf::from)
+}
+
 fn format_path_for_error(
     path: &Path,
     redaction: Option<&PathRedaction>,
@@ -91,7 +156,10 @@ fn format_path_for_error(
             .iter()
             .chain(redaction.canonical_roots.iter())
         {
-            if let Ok(relative) = path.strip_prefix(root) {
+            if let Some(relative) = strip_prefix_case_insensitive(path, root) {
+                if relative.as_os_str().is_empty() {
+                    return ".".to_string();
+                }
                 return relative.display().to_string();
             }
         }

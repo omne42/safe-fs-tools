@@ -41,7 +41,7 @@ Important boundaries:
 - `secrets.deny_globs` hides paths from `glob`/`grep` and denies direct access (`read`/`edit`/`patch`/`delete`). Deny checks apply to both the requested path (after `.`/`..` normalization) and the canonicalized resolved path.
 - `traversal.skip_globs` skips paths during traversal (`glob`/`grep`) for performance, but does **not** deny direct access.
 - `secrets.redact_regexes` are applied to returned text (`read` file content and `grep` matched lines).
-- `grep` truncates individual matched lines to `limits.max_line_bytes` and marks matches with `line_truncated=true`.
+- `grep` truncates individual matched lines to `limits.max_line_bytes` and marks matches with `line_truncated=true` (the returned `text` may be empty if the cap is smaller than the first UTF-8 character).
 - `glob`/`grep` report skip counts (`skipped_walk_errors`, `skipped_io_errors`, `skipped_dangling_symlink_targets`) to make partial results explainable.
 - Errors are classified via a stable `Error::code()` string (useful for JSON error mapping).
 - `Error` is `#[non_exhaustive]`; match it with a wildcard arm and/or prefer `Error::code()` for classification.

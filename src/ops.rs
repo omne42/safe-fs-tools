@@ -17,6 +17,9 @@ use crate::policy::{RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
 
 #[cfg(any(feature = "glob", feature = "grep"))]
+// A synthetic file name used to apply deny/skip glob patterns to directories: for each directory
+// entry `dir`, we also evaluate `dir/<probe>` against glob rules so patterns like `node_modules/*`
+// or `**/.git/**` can exclude entire directories (and avoid descending into them).
 const TRAVERSAL_GLOB_PROBE_NAME: &str = ".safe-fs-tools-probe";
 
 fn derive_requested_path(
@@ -424,6 +427,61 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.code(), "invalid_path");
+    }
+
+    #[test]
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    fn traversal_skip_globs_apply_to_directories_via_probe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(dir.path().join("node_modules").join("sub")).expect("mkdir");
+        fs::write(dir.path().join("keep.txt"), "keep\n").expect("write");
+        fs::write(dir.path().join("node_modules").join("skip.txt"), "skip\n").expect("write");
+        fs::write(
+            dir.path()
+                .join("node_modules")
+                .join("sub")
+                .join("keep2.txt"),
+            "keep\n",
+        )
+        .expect("write");
+
+        let mut policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+        policy.traversal.skip_globs = vec!["node_modules/*".to_string()];
+        let ctx = Context::new(policy).expect("ctx");
+
+        assert!(
+            !ctx.is_traversal_path_skipped(Path::new("node_modules")),
+            "expected the skip glob not to match the directory itself"
+        );
+        let probe = Path::new("node_modules").join(TRAVERSAL_GLOB_PROBE_NAME);
+        assert!(
+            ctx.is_traversal_path_skipped(&probe),
+            "expected the skip glob to match the probe path"
+        );
+
+        let root_path = ctx.canonical_root("root").expect("root").clone();
+        let seen = walkdir_traversal_iter(&ctx, &root_path, &root_path)
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.depth() > 0)
+            .map(|entry| {
+                entry
+                    .path()
+                    .strip_prefix(&root_path)
+                    .unwrap_or(entry.path())
+                    .to_path_buf()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            seen.iter().any(|path| path == Path::new("keep.txt")),
+            "expected keep.txt to be traversed, saw: {seen:?}"
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|path| path.starts_with(Path::new("node_modules"))),
+            "expected node_modules to be excluded via probe semantics, saw: {seen:?}"
+        );
     }
 
     #[test]
