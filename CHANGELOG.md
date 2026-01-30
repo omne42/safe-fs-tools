@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Split CLI into `safe-fs-tools-cli` so the library has no CLI-format dependencies.
 - Add `limits.max_walk_files` and report `scanned_files` / `scan_limit_reached` in `glob`/`grep` responses.
 - Add `limits.max_walk_entries` to cap directory traversal work (helps bound huge directory trees with few files).
+- `glob`/`grep` responses now include traversal diagnostics (`scanned_entries`, `skipped_walk_errors`, `skipped_io_errors`, `skipped_dangling_symlink_targets`).
 - Enforce `limits.max_read_bytes` for `edit`/`patch` file reads (and use bounded reads for `read`/`grep`).
 - `delete` unlinks symlinks (does not follow link targets).
 - Add stable `Error::code()` for programmatic classification.
@@ -53,3 +54,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Atomic write temp files are created with restrictive permissions on Unix to avoid transient exposure.
 - Dangling symlinks that would escape a root are now classified as `outside_root` (instead of a generic IO error).
 - `glob`/`grep` no longer fail on dangling symlink targets; they skip the entry.
+- `glob`/`grep` no longer fail on traversal/read errors (e.g. permission-denied directories/files); they skip the entry and report skip counts.

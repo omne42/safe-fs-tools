@@ -13,7 +13,7 @@ Important boundaries:
 
 - This is **not** an OS sandbox. It enforces a policy at the tool layer; use OS-level sandboxing (containers, macOS sandbox, Linux Landlock, etc.) if you need strong isolation.
 - Root checks are best-effort and **not** hardened against concurrent filesystem adversaries (TOCTOU).
-- Text ops (`read`/`edit`/`patch`) are **UTF-8 only**. `grep` skips non-UTF8 files and reports skip counts in its JSON output.
+- Text ops (`read`/`edit`/`patch`) are **UTF-8 only**. `grep` skips non-UTF8 / too-large / unreadable files and reports skip counts in its JSON output.
 - See `SECURITY.md` for the threat model.
 
 ## Semantics
@@ -21,10 +21,10 @@ Important boundaries:
 - Roots are configured explicitly in `SandboxPolicy.roots` and canonicalized in `ops::Context::new`.
 - `root.path` must be an absolute path to an existing directory (validated in `SandboxPolicy::validate` + `Context::new`).
 - Relative paths are resolved by `root.path.join(path)`; absolute paths are accepted but must still end up inside the selected root.
-- Directory traversal (`glob`/`grep`) uses `walkdir` with `follow_links(false)`.
+- Directory traversal (`glob`/`grep`) uses `walkdir` with `follow_links(false)` and is best-effort: unreadable entries are skipped.
 - Symlinked **files** are treated as files, but their resolved targets must stay within the selected root; symlinked **directories** are not traversed.
 - `glob` results are sorted by path; `grep` results are sorted by `(path, line)`.
-- `limits.max_walk_entries` caps how many directory entries `glob`/`grep` will traverse.
+- `limits.max_walk_entries` caps how many directory entries `glob`/`grep` will traverse (responses include `scanned_entries` and `scan_limit_reached`).
 - `limits.max_walk_files` caps how many files `glob`/`grep` will scan (responses include `scanned_files` and `scan_limit_reached`; the limit can be reached by either cap).
 - `limits.max_read_bytes` is a hard cap (no implicit truncation). `read`/`edit`/`patch` fail if the operation would exceed the cap; `grep` skips files above the cap.
 - For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).
@@ -32,6 +32,7 @@ Important boundaries:
 - `secrets.deny_globs` hides paths from `glob`/`grep` and denies direct access (`read`/`edit`/`patch`/`delete`). Deny checks apply to both the requested path (after `.`/`..` normalization) and the canonicalized resolved path.
 - `secrets.redact_regexes` are applied to returned text (`read` file content and `grep` matched lines).
 - `grep` truncates individual matched lines to `limits.max_line_bytes` and marks matches with `line_truncated=true`.
+- `glob`/`grep` report skip counts (`skipped_walk_errors`, `skipped_io_errors`, `skipped_dangling_symlink_targets`) to make partial results explainable.
 - Errors are classified via a stable `Error::code()` string (useful for JSON error mapping).
 
 Non-goals (by design):

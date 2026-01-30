@@ -278,6 +278,95 @@ fn grep_skips_dangling_symlink_targets() {
 }
 
 #[test]
+#[cfg(all(unix, feature = "glob"))]
+fn glob_skips_walkdir_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
+
+    let blocked = dir.path().join("blocked");
+    std::fs::create_dir(&blocked).expect("mkdir");
+    std::fs::write(blocked.join("b.txt"), "b\n").expect("write");
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert_eq!(resp.matches, vec![PathBuf::from("a.txt")]);
+    assert!(
+        resp.skipped_walk_errors > 0,
+        "expected at least one walk error"
+    );
+
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).expect("chmod back");
+}
+
+#[test]
+#[cfg(all(unix, feature = "grep"))]
+fn grep_skips_walkdir_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
+
+    let blocked = dir.path().join("blocked");
+    std::fs::create_dir(&blocked).expect("mkdir");
+    std::fs::write(blocked.join("b.txt"), "needle\n").expect("write");
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("a.txt"));
+    assert!(
+        resp.skipped_walk_errors > 0,
+        "expected at least one walk error"
+    );
+
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).expect("chmod back");
+}
+
+#[test]
+#[cfg(all(unix, feature = "grep"))]
+fn grep_skips_unreadable_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
+    let unreadable = dir.path().join("b.txt");
+    std::fs::write(&unreadable, "needle\n").expect("write");
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("a.txt"));
+    assert_eq!(resp.skipped_io_errors, 1);
+}
+
+#[test]
 #[cfg(feature = "patch")]
 fn edit_patch_delete_roundtrip() {
     let dir = tempfile::tempdir().expect("tempdir");

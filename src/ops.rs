@@ -538,6 +538,14 @@ pub struct GlobResponse {
     pub scanned_files: u64,
     #[serde(default)]
     pub scan_limit_reached: bool,
+    #[serde(default)]
+    pub scanned_entries: u64,
+    #[serde(default)]
+    pub skipped_walk_errors: u64,
+    #[serde(default)]
+    pub skipped_io_errors: u64,
+    #[serde(default)]
+    pub skipped_dangling_symlink_targets: u64,
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -592,6 +600,9 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let mut scanned_files: u64 = 0;
     let mut scanned_entries: u64 = 0;
     let mut scan_limit_reached = false;
+    let mut skipped_walk_errors: u64 = 0;
+    let mut skipped_io_errors: u64 = 0;
+    let mut skipped_dangling_symlink_targets: u64 = 0;
     for entry in WalkDir::new(&root_path)
         .follow_links(false)
         .sort_by_file_name()
@@ -607,7 +618,22 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             !ctx.redactor.is_path_denied(relative)
         })
     {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                if err.depth() == 0 {
+                    return Err(err.into());
+                }
+                if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
+                    truncated = true;
+                    scan_limit_reached = true;
+                    break;
+                }
+                scanned_entries = scanned_entries.saturating_add(1);
+                skipped_walk_errors = skipped_walk_errors.saturating_add(1);
+                continue;
+            }
+        };
         if entry.depth() > 0 {
             if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
                 truncated = true;
@@ -643,14 +669,27 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                         source,
                         ..
                     }) if source.kind() == std::io::ErrorKind::NotFound => {
+                        skipped_dangling_symlink_targets =
+                            skipped_dangling_symlink_targets.saturating_add(1);
+                        continue;
+                    }
+                    Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+                        skipped_io_errors = skipped_io_errors.saturating_add(1);
                         continue;
                     }
                     Err(err) => return Err(err),
                 };
             let meta = match fs::metadata(&canonical) {
                 Ok(meta) => meta,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(Error::io_path("metadata", relative, err)),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    skipped_dangling_symlink_targets =
+                        skipped_dangling_symlink_targets.saturating_add(1);
+                    continue;
+                }
+                Err(_) => {
+                    skipped_io_errors = skipped_io_errors.saturating_add(1);
+                    continue;
+                }
             };
             if !meta.is_file() {
                 continue;
@@ -674,6 +713,10 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         truncated,
         scanned_files,
         scan_limit_reached,
+        scanned_entries,
+        skipped_walk_errors,
+        skipped_io_errors,
+        skipped_dangling_symlink_targets,
     })
 }
 
@@ -708,6 +751,14 @@ pub struct GrepResponse {
     pub scanned_files: u64,
     #[serde(default)]
     pub scan_limit_reached: bool,
+    #[serde(default)]
+    pub scanned_entries: u64,
+    #[serde(default)]
+    pub skipped_walk_errors: u64,
+    #[serde(default)]
+    pub skipped_io_errors: u64,
+    #[serde(default)]
+    pub skipped_dangling_symlink_targets: u64,
 }
 
 #[cfg(not(feature = "grep"))]
@@ -745,6 +796,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut scanned_files: u64 = 0;
     let mut scanned_entries: u64 = 0;
     let mut scan_limit_reached = false;
+    let mut skipped_walk_errors: u64 = 0;
+    let mut skipped_io_errors: u64 = 0;
+    let mut skipped_dangling_symlink_targets: u64 = 0;
 
     for entry in WalkDir::new(&root_path)
         .follow_links(false)
@@ -761,7 +815,22 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             !ctx.redactor.is_path_denied(relative)
         })
     {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                if err.depth() == 0 {
+                    return Err(err.into());
+                }
+                if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
+                    truncated = true;
+                    scan_limit_reached = true;
+                    break;
+                }
+                scanned_entries = scanned_entries.saturating_add(1);
+                skipped_walk_errors = skipped_walk_errors.saturating_add(1);
+                continue;
+            }
+        };
         if entry.depth() > 0 {
             if scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
                 truncated = true;
@@ -797,14 +866,27 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                         source,
                         ..
                     }) if source.kind() == std::io::ErrorKind::NotFound => {
+                        skipped_dangling_symlink_targets =
+                            skipped_dangling_symlink_targets.saturating_add(1);
+                        continue;
+                    }
+                    Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+                        skipped_io_errors = skipped_io_errors.saturating_add(1);
                         continue;
                     }
                     Err(err) => return Err(err),
                 };
             let meta = match fs::metadata(&canonical) {
                 Ok(meta) => meta,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(Error::io_path("metadata", relative, err)),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    skipped_dangling_symlink_targets =
+                        skipped_dangling_symlink_targets.saturating_add(1);
+                    continue;
+                }
+                Err(_) => {
+                    skipped_io_errors = skipped_io_errors.saturating_add(1);
+                    continue;
+                }
             };
             if !meta.is_file() {
                 continue;
@@ -824,6 +906,10 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 Ok(bytes) => bytes,
                 Err(Error::FileTooLarge { .. }) => {
                     skipped_too_large_files = skipped_too_large_files.saturating_add(1);
+                    continue;
+                }
+                Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+                    skipped_io_errors = skipped_io_errors.saturating_add(1);
                     continue;
                 }
                 Err(err) => return Err(err),
@@ -874,6 +960,10 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         skipped_non_utf8_files,
         scanned_files,
         scan_limit_reached,
+        scanned_entries,
+        skipped_walk_errors,
+        skipped_io_errors,
+        skipped_dangling_symlink_targets,
     })
 }
 
