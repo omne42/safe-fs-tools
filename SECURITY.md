@@ -25,6 +25,12 @@ Policy limits (e.g. `limits.max_read_bytes`, `limits.max_results`, `limits.max_w
 - Malicious behavior by the caller (policy is caller-controlled)
 - CLI argument hardening: the CLI assumes the policy path and patch input are provided by a trusted wrapper.
 
+### Path probing side-channels
+
+If untrusted callers can control `path` inputs and observe detailed errors/timing, they may be able to infer information about files outside the configured roots (existence/permissions).
+
+`safe-fs-tools` performs best-effort, lexical root checks before filesystem canonicalization to reduce this, but it is not a complete mitigation. Prefer root-relative inputs and run inside an OS sandbox for untrusted workloads.
+
 ## Reporting
 
 If you discover a security issue, please open an issue with:

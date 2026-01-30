@@ -85,7 +85,7 @@ impl Error {
     pub fn code(&self) -> &'static str {
         match self {
             Error::Io(_) => "io",
-            Error::IoPath { .. } => "io",
+            Error::IoPath { .. } => "io_path",
             #[cfg(any(feature = "glob", feature = "grep"))]
             Error::WalkDir(_) => "walkdir",
             #[cfg(any(feature = "glob", feature = "grep"))]
@@ -102,5 +102,23 @@ impl Error {
             Error::InvalidRegex(_) => "invalid_regex",
             Error::InputTooLarge { .. } => "input_too_large",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_distinguishes_io_and_io_path() {
+        let io = Error::Io(std::io::Error::from_raw_os_error(2));
+        assert_eq!(io.code(), "io");
+
+        let io_path = Error::IoPath {
+            op: "open",
+            path: PathBuf::from("file.txt"),
+            source: std::io::Error::from_raw_os_error(2),
+        };
+        assert_eq!(io_path.code(), "io_path");
     }
 }

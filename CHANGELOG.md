@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bump crate editions to Rust 2024.
 - `Error` is now `#[non_exhaustive]`; downstream code should include a wildcard match arm.
+- `Error::code()` now distinguishes `io` and `io_path`.
 - Enforce roots are absolute directories (policy validation + context init).
 - `glob`/`grep` now include symlinked files (still do not traverse symlinked directories).
 - `glob`/`grep` traversal now uses deterministic entry ordering (stable behavior under truncation caps).
