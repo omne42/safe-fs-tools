@@ -1531,6 +1531,9 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
     let canonical_root = ctx.canonical_root(&request.root_id)?;
     let requested_path =
         derive_requested_path(&root.path, canonical_root, &request.path, &resolved);
+    if ctx.redactor.is_path_denied(&requested_path) {
+        return Err(Error::SecretPathDenied(requested_path));
+    }
 
     let file_name = resolved
         .file_name()

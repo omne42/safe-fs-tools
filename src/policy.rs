@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::path::Component;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -260,6 +262,16 @@ impl SandboxPolicy {
         let root = self.root(root_id)?;
         if path.as_os_str().is_empty() {
             return Err(Error::InvalidPath("path is empty".to_string()));
+        }
+        #[cfg(windows)]
+        {
+            if !path.is_absolute() && matches!(path.components().next(), Some(Component::Prefix(_)))
+            {
+                return Err(Error::InvalidPath(format!(
+                    "invalid path {}: drive-relative paths are not supported",
+                    path.display()
+                )));
+            }
         }
         if path.is_absolute() {
             return Ok(path.to_path_buf());

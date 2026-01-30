@@ -1240,6 +1240,42 @@ fn deny_globs_match_after_lexical_normalization() {
 }
 
 #[test]
+#[cfg(unix)]
+fn delete_denies_requested_path_before_resolving_symlink_dirs() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("allowed")).expect("mkdir");
+    std::fs::write(dir.path().join("allowed").join("file.txt"), "hello\n").expect("write");
+    symlink(dir.path().join("allowed"), dir.path().join("deny")).expect("symlink dir");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.secrets.deny_globs = vec!["deny/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = delete_file(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("deny/file.txt"),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(path) => {
+            assert_eq!(path, PathBuf::from("deny/file.txt"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    assert!(
+        dir.path().join("allowed").join("file.txt").exists(),
+        "expected file to remain after denied delete"
+    );
+}
+
+#[test]
 #[cfg(all(unix, feature = "glob", feature = "grep"))]
 fn glob_and_grep_include_symlink_files() {
     use std::os::unix::fs::symlink;
@@ -1323,6 +1359,23 @@ fn grep_truncation_is_deterministic_under_max_results() {
     assert_eq!(resp.matches.len(), 1);
     assert_eq!(resp.matches[0].path, PathBuf::from("a.txt"));
     assert!(resp.truncated);
+}
+
+#[test]
+#[cfg(windows)]
+fn resolve_path_rejects_drive_relative_paths() {
+    use std::path::Path;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+    let err = policy
+        .resolve_path("root", Path::new("C:foo"))
+        .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
