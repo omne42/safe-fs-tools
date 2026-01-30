@@ -43,6 +43,7 @@ read = true
                 },
                 limits: Default::default(),
                 secrets: Default::default(),
+                traversal: Default::default(),
             })
             .expect("serialize json"),
         )

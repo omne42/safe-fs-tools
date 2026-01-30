@@ -17,6 +17,8 @@ use crate::policy::{RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
 
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(feature = "glob", feature = "grep"))]
+const TRAVERSAL_GLOB_PROBE_NAME: &str = ".safe-fs-tools-probe";
 
 fn normalize_path_lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
@@ -211,19 +213,44 @@ fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    use std::os::unix::fs::PermissionsExt;
-
     #[test]
+    #[cfg(unix)]
     fn open_private_temp_file_creates_files_without_group_or_other_access() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("tmp.txt");
         drop(open_private_temp_file(&path).expect("open"));
         let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
         assert_eq!(mode & 0o077, 0, "expected no group/other permission bits");
+    }
+
+    #[test]
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    fn derive_safe_traversal_prefix_is_conservative() {
+        assert_eq!(
+            derive_safe_traversal_prefix("src/**/*.rs"),
+            Some(PathBuf::from("src"))
+        );
+        assert_eq!(
+            derive_safe_traversal_prefix("./src/**/*.rs"),
+            Some(PathBuf::from("src"))
+        );
+        assert_eq!(
+            derive_safe_traversal_prefix("src/*"),
+            Some(PathBuf::from("src"))
+        );
+        assert_eq!(
+            derive_safe_traversal_prefix("src/lib.rs"),
+            Some(PathBuf::from("src/lib.rs"))
+        );
+        assert_eq!(derive_safe_traversal_prefix("**/*.rs"), None);
+        assert_eq!(derive_safe_traversal_prefix("../**/*.rs"), None);
+        assert_eq!(derive_safe_traversal_prefix("/etc/*"), None);
     }
 }
 
@@ -232,6 +259,8 @@ pub struct Context {
     policy: SandboxPolicy,
     redactor: SecretRedactor,
     canonical_roots: Vec<(String, PathBuf)>,
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    traversal_skip_globs: Option<GlobSet>,
 }
 
 impl Context {
@@ -265,10 +294,15 @@ impl Context {
             canonical_roots.push((root.id.clone(), canonical));
         }
 
+        #[cfg(any(feature = "glob", feature = "grep"))]
+        let traversal_skip_globs = compile_traversal_skip_globs(&policy.traversal.skip_globs)?;
+
         Ok(Self {
             policy,
             redactor,
             canonical_roots,
+            #[cfg(any(feature = "glob", feature = "grep"))]
+            traversal_skip_globs,
         })
     }
 
@@ -311,6 +345,13 @@ impl Context {
             .iter()
             .find_map(|(id, path)| (id == root_id).then_some(path))
             .ok_or_else(|| Error::RootNotFound(root_id.to_string()))
+    }
+
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    fn is_traversal_path_skipped(&self, relative: &Path) -> bool {
+        self.traversal_skip_globs
+            .as_ref()
+            .is_some_and(|skip| globset_is_match(skip, relative))
     }
 
     fn canonical_path_in_root(&self, root_id: &str, path: &Path) -> Result<(PathBuf, PathBuf)> {
@@ -576,6 +617,60 @@ fn compile_glob(pattern: &str) -> Result<GlobSet> {
         .map_err(|err| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {err}")))
 }
 
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option<GlobSet>> {
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        let glob = GlobBuilder::new(normalize_glob_pattern(pattern).as_ref())
+            .literal_separator(true)
+            .build()
+            .map_err(|err| {
+                Error::InvalidPolicy(format!(
+                    "invalid traversal.skip_globs glob {pattern:?}: {err}"
+                ))
+            })?;
+        builder.add(glob);
+    }
+    let set = builder
+        .build()
+        .map_err(|err| Error::InvalidPolicy(format!("invalid traversal.skip_globs: {err}")))?;
+    Ok(Some(set))
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
+    let pattern = normalize_glob_pattern(pattern);
+    let pattern = pattern.as_ref();
+    if pattern.starts_with('/') {
+        return None;
+    }
+
+    let mut out = PathBuf::new();
+    for segment in pattern.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            return None;
+        }
+        if segment
+            .chars()
+            .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
+        {
+            break;
+        }
+        out.push(segment);
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 #[cfg(not(feature = "glob"))]
 pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let _ = ctx;
@@ -603,7 +698,42 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let mut skipped_walk_errors: u64 = 0;
     let mut skipped_io_errors: u64 = 0;
     let mut skipped_dangling_symlink_targets: u64 = 0;
-    for entry in WalkDir::new(&root_path)
+    let walk_root = match derive_safe_traversal_prefix(&request.pattern) {
+        Some(prefix) => {
+            let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
+            if ctx.redactor.is_path_denied(&prefix)
+                || ctx.redactor.is_path_denied(&probe)
+                || ctx.is_traversal_path_skipped(&prefix)
+                || ctx.is_traversal_path_skipped(&probe)
+            {
+                return Ok(GlobResponse {
+                    matches,
+                    truncated,
+                    scanned_files,
+                    scan_limit_reached,
+                    scanned_entries,
+                    skipped_walk_errors,
+                    skipped_io_errors,
+                    skipped_dangling_symlink_targets,
+                });
+            }
+            root_path.join(prefix)
+        }
+        None => root_path.clone(),
+    };
+    if !walk_root.exists() {
+        return Ok(GlobResponse {
+            matches,
+            truncated,
+            scanned_files,
+            scan_limit_reached,
+            scanned_entries,
+            skipped_walk_errors,
+            skipped_io_errors,
+            skipped_dangling_symlink_targets,
+        });
+    }
+    for entry in WalkDir::new(&walk_root)
         .follow_links(false)
         .sort_by_file_name()
         .into_iter()
@@ -611,11 +741,19 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             if entry.depth() == 0 {
                 return true;
             }
+            let is_dir = entry.file_type().is_dir();
             let relative = entry
                 .path()
                 .strip_prefix(&root_path)
                 .unwrap_or(entry.path());
-            !ctx.redactor.is_path_denied(relative)
+            let probe = relative.join(TRAVERSAL_GLOB_PROBE_NAME);
+            if ctx.redactor.is_path_denied(relative)
+                || (is_dir && ctx.redactor.is_path_denied(&probe))
+            {
+                return false;
+            }
+            !(ctx.is_traversal_path_skipped(relative)
+                || (is_dir && ctx.is_traversal_path_skipped(&probe)))
         })
     {
         let entry = match entry {
@@ -778,6 +916,49 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         ));
     }
     let root_path = ctx.canonical_root(&request.root_id)?.clone();
+    let walk_root = match request
+        .glob
+        .as_deref()
+        .and_then(derive_safe_traversal_prefix)
+    {
+        Some(prefix) => {
+            let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
+            if ctx.redactor.is_path_denied(&prefix)
+                || ctx.redactor.is_path_denied(&probe)
+                || ctx.is_traversal_path_skipped(&prefix)
+                || ctx.is_traversal_path_skipped(&probe)
+            {
+                return Ok(GrepResponse {
+                    matches: Vec::new(),
+                    truncated: false,
+                    skipped_too_large_files: 0,
+                    skipped_non_utf8_files: 0,
+                    scanned_files: 0,
+                    scan_limit_reached: false,
+                    scanned_entries: 0,
+                    skipped_walk_errors: 0,
+                    skipped_io_errors: 0,
+                    skipped_dangling_symlink_targets: 0,
+                });
+            }
+            root_path.join(prefix)
+        }
+        None => root_path.clone(),
+    };
+    if !walk_root.exists() {
+        return Ok(GrepResponse {
+            matches: Vec::new(),
+            truncated: false,
+            skipped_too_large_files: 0,
+            skipped_non_utf8_files: 0,
+            scanned_files: 0,
+            scan_limit_reached: false,
+            scanned_entries: 0,
+            skipped_walk_errors: 0,
+            skipped_io_errors: 0,
+            skipped_dangling_symlink_targets: 0,
+        });
+    }
 
     let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
 
@@ -800,7 +981,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut skipped_io_errors: u64 = 0;
     let mut skipped_dangling_symlink_targets: u64 = 0;
 
-    for entry in WalkDir::new(&root_path)
+    for entry in WalkDir::new(&walk_root)
         .follow_links(false)
         .sort_by_file_name()
         .into_iter()
@@ -808,11 +989,19 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             if entry.depth() == 0 {
                 return true;
             }
+            let is_dir = entry.file_type().is_dir();
             let relative = entry
                 .path()
                 .strip_prefix(&root_path)
                 .unwrap_or(entry.path());
-            !ctx.redactor.is_path_denied(relative)
+            let probe = relative.join(TRAVERSAL_GLOB_PROBE_NAME);
+            if ctx.redactor.is_path_denied(relative)
+                || (is_dir && ctx.redactor.is_path_denied(&probe))
+            {
+                return false;
+            }
+            !(ctx.is_traversal_path_skipped(relative)
+                || (is_dir && ctx.is_traversal_path_skipped(&probe)))
         })
     {
         let entry = match entry {

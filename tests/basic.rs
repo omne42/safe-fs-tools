@@ -9,7 +9,9 @@ use safe_fs_tools::ops::{GlobRequest, glob_paths};
 use safe_fs_tools::ops::{GrepRequest, grep};
 #[cfg(feature = "patch")]
 use safe_fs_tools::ops::{PatchRequest, apply_unified_patch};
-use safe_fs_tools::policy::{Limits, Permissions, Root, RootMode, SandboxPolicy, SecretRules};
+use safe_fs_tools::policy::{
+    Limits, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules,
+};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -34,6 +36,7 @@ fn test_policy(root: &std::path::Path, mode: RootMode) -> SandboxPolicy {
             redact_regexes: vec!["API_KEY=[A-Za-z0-9_]+".to_string()],
             replacement: "***REDACTED***".to_string(),
         },
+        traversal: TraversalRules::default(),
     }
 }
 
@@ -275,6 +278,46 @@ fn grep_skips_dangling_symlink_targets() {
 
     assert_eq!(resp.matches.len(), 1);
     assert_eq!(resp.matches[0].path, PathBuf::from("a.txt"));
+}
+
+#[test]
+#[cfg(feature = "grep")]
+fn traversal_skip_globs_skip_in_traversal_but_allow_direct_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("node_modules")).expect("mkdir");
+    std::fs::write(dir.path().join("keep.txt"), "needle\n").expect("write");
+    std::fs::write(dir.path().join("node_modules").join("skip.txt"), "needle\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.traversal.skip_globs = vec!["node_modules/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.scanned_files, 1);
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("keep.txt"));
+
+    let read = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("node_modules").join("skip.txt"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect("read");
+    assert!(read.content.contains("needle"));
 }
 
 #[test]
@@ -565,6 +608,7 @@ fn policy_rejects_duplicate_root_ids() {
         permissions: Permissions::default(),
         limits: Limits::default(),
         secrets: SecretRules::default(),
+        traversal: TraversalRules::default(),
     };
 
     let err = Context::new(policy).expect_err("should reject");
@@ -747,6 +791,7 @@ fn policy_rejects_relative_root_paths() {
         permissions: Permissions::default(),
         limits: Limits::default(),
         secrets: SecretRules::default(),
+        traversal: TraversalRules::default(),
     };
 
     let err = Context::new(policy).expect_err("should reject");
@@ -773,6 +818,7 @@ fn context_rejects_file_roots() {
         permissions: Permissions::default(),
         limits: Limits::default(),
         secrets: SecretRules::default(),
+        traversal: TraversalRules::default(),
     };
 
     let err = Context::new(policy).expect_err("should reject");

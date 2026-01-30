@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `limits.max_walk_files` and report `scanned_files` / `scan_limit_reached` in `glob`/`grep` responses.
 - Add `limits.max_walk_entries` to cap directory traversal work (helps bound huge directory trees with few files).
 - `glob`/`grep` responses now include traversal diagnostics (`scanned_entries`, `skipped_walk_errors`, `skipped_io_errors`, `skipped_dangling_symlink_targets`).
+- Add `traversal.skip_globs` to skip paths during traversal (`glob`/`grep`) without denying direct access.
 - Enforce `limits.max_read_bytes` for `edit`/`patch` file reads (and use bounded reads for `read`/`grep`).
 - `delete` unlinks symlinks (does not follow link targets).
 - Add stable `Error::code()` for programmatic classification.
@@ -40,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enforce roots are absolute directories (policy validation + context init).
 - `glob`/`grep` now include symlinked files (still do not traverse symlinked directories).
 - `glob`/`grep` traversal now uses deterministic entry ordering (stable behavior under truncation caps).
+- `glob`/`grep` may narrow traversal scope based on a literal prefix in the glob pattern.
 - IO errors produced by operations include operation/path context where available.
 - Atomic write on Windows now uses `ReplaceFileW` for true replacement semantics.
 

@@ -32,3 +32,11 @@ redact_regexes = [
   "OPENAI_API_KEY=[A-Za-z0-9_\\-]+",
 ]
 replacement = "***REDACTED***"
+
+[traversal]
+# For traversal performance only: skipped in `glob`/`grep` but still readable directly.
+skip_globs = [
+  "node_modules/**",
+  "target/**",
+  "dist/**",
+]

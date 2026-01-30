@@ -99,6 +99,15 @@ pub struct SecretRules {
     pub replacement: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TraversalRules {
+    /// Glob patterns that should be skipped during traversal (`glob`/`grep`) for performance.
+    ///
+    /// Unlike `secrets.deny_globs`, this does **not** deny direct access to the path.
+    #[serde(default)]
+    pub skip_globs: Vec<String>,
+}
+
 fn default_secret_deny_globs() -> Vec<String> {
     vec![
         ".git/**".to_string(),
@@ -133,6 +142,8 @@ pub struct SandboxPolicy {
     pub limits: Limits,
     #[serde(default)]
     pub secrets: SecretRules,
+    #[serde(default)]
+    pub traversal: TraversalRules,
 }
 
 impl SandboxPolicy {
@@ -146,6 +157,7 @@ impl SandboxPolicy {
             permissions: Permissions::default(),
             limits: Limits::default(),
             secrets: SecretRules::default(),
+            traversal: TraversalRules::default(),
         }
     }
 
