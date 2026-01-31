@@ -86,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `read_bytes_limited` now validates the opened file metadata and fails closed on metadata errors (hardens special-file rejection).
+- `read_bytes_limited` now validates file metadata before opening (avoids blocking on FIFOs/special files and hardens special-file rejection).
 - Traversal deny/skip filtering now derives relative paths case-insensitively on Windows.
 - `--no-default-features` now builds cleanly (gate `walkdir` error variant behind traversal features).
 - `delete` now applies `secrets.deny_globs` to the normalized requested path (prevents bypass via symlinked directories).

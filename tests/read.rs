@@ -243,8 +243,6 @@ fn read_line_ranges_respects_max_read_bytes() {
 #[test]
 #[cfg(unix)]
 fn read_rejects_fifo_special_files() {
-    use std::io::Write;
-
     let dir = tempfile::tempdir().expect("tempdir");
     let fifo = dir.path().join("pipe");
     unix_helpers::create_fifo(&fifo);
@@ -252,13 +250,6 @@ fn read_rejects_fifo_special_files() {
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
     policy.limits.max_read_bytes = 8;
     let ctx = Context::new(policy).expect("ctx");
-
-    let mut fifo_writer = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&fifo)
-        .expect("open fifo");
-    fifo_writer.write_all(b"123456789").expect("write");
 
     let err = read_file(
         &ctx,
@@ -280,20 +271,11 @@ fn read_rejects_fifo_special_files() {
 #[test]
 #[cfg(unix)]
 fn read_line_ranges_reject_fifo_special_files() {
-    use std::io::Write;
-
     let dir = tempfile::tempdir().expect("tempdir");
     let fifo = dir.path().join("pipe");
     unix_helpers::create_fifo(&fifo);
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
-
-    let mut fifo_writer = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&fifo)
-        .expect("open fifo");
-    fifo_writer.write_all(b"one\ntwo\n").expect("write");
 
     let err = read_file(
         &ctx,

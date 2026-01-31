@@ -17,10 +17,9 @@ pub(super) fn open_private_temp_file(path: &Path) -> std::io::Result<fs::File> {
 }
 
 pub(super) fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<Vec<u8>> {
-    let file = fs::File::open(path).map_err(|err| Error::io_path("open", relative, err))?;
-    let meta = file
-        .metadata()
-        .map_err(|err| Error::io_path("metadata", relative, err))?;
+    // NOTE: Always check metadata before opening the file to avoid blocking on special files
+    // (e.g. FIFOs) in `File::open` on Unix.
+    let meta = fs::metadata(path).map_err(|err| Error::io_path("metadata", relative, err))?;
     if !meta.is_file() {
         return Err(Error::InvalidPath(format!(
             "path {} is not a regular file",
@@ -35,6 +34,7 @@ pub(super) fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -
         });
     }
 
+    let file = fs::File::open(path).map_err(|err| Error::io_path("open", relative, err))?;
     let limit = max_bytes.saturating_add(1);
     let mut bytes = Vec::<u8>::new();
     file.take(limit)
