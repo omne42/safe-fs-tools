@@ -10,12 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - New filesystem operations: `list_dir`, `stat`, `mkdir`, `write_file`, `move_path`, `copy_file` (all root-bounded and policy-gated).
-- `delete`: add `recursive` and `ignore_missing` support; return `{deleted, type}` in the response.
 - Policy: add `permissions.{list_dir,stat,mkdir,write,move,copy_file}`.
 - CLI: add commands `list-dir`, `stat`, `mkdir`, `write`, `move`, `copy-file` and extend `delete` with `--recursive` and `--ignore-missing`.
 
 ### Changed
 
+- Breaking: consolidate delete APIs as `delete` (remove `delete_file`/`delete_path`); `DeleteRequest` adds `recursive`/`ignore_missing` and the response adds `{deleted, type}`.
 - Dev: pre-commit rejects oversized Rust files (default 1000 lines; configurable via `SAFE_FS_MAX_RS_LINES`).
 - Docs: expand README and policy example to include new operations and permissions.
 
