@@ -8,22 +8,36 @@ use crate::policy::SandboxPolicy;
 use crate::redaction::SecretRedactor;
 
 mod context;
+mod copy_file;
 mod delete;
+mod delete_path;
 mod edit;
 mod glob;
 mod grep;
 mod io;
+mod list_dir;
+mod mkdir;
+mod move_path;
 mod patch;
 mod read;
 mod resolve;
+mod stat;
 mod traversal;
+mod write;
 
+pub use copy_file::{CopyFileRequest, CopyFileResponse, copy_file};
 pub use delete::{DeleteRequest, DeleteResponse, delete_file};
+pub use delete_path::{DeletePathRequest, DeletePathResponse, delete_path};
 pub use edit::{EditRequest, EditResponse, edit_range};
 pub use glob::{GlobRequest, GlobResponse, glob_paths};
 pub use grep::{GrepMatch, GrepRequest, GrepResponse, grep};
+pub use list_dir::{ListDirEntry, ListDirRequest, ListDirResponse, list_dir};
+pub use mkdir::{MkdirRequest, MkdirResponse, mkdir};
+pub use move_path::{MovePathRequest, MovePathResponse, move_path};
 pub use patch::{PatchRequest, PatchResponse, apply_unified_patch};
 pub use read::{ReadRequest, ReadResponse, read_file};
+pub use stat::{StatRequest, StatResponse, stat};
+pub use write::{WriteFileRequest, WriteFileResponse, write_file};
 
 #[cfg(test)]
 mod tests;

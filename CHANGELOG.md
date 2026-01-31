@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New filesystem operations: `list_dir`, `stat`, `mkdir`, `write_file`, `move_path`, `copy_file`, `delete_path` (all root-bounded and policy-gated).
+- Policy: add `permissions.{list_dir,stat,mkdir,write,move,copy_file}`.
+- CLI: add commands `list-dir`, `stat`, `mkdir`, `write`, `move`, `copy-file` and extend `delete` with `--recursive` and `--ignore-missing`.
+
+### Changed
+
+- Dev: pre-commit rejects oversized Rust files (default 1000 lines; configurable via `SAFE_FS_MAX_RS_LINES`).
+- Docs: expand README and policy example to include new operations and permissions.
+
+### Fixed
+
+## [0.1.0] - 2026-01-31
+
+### Added
+
 - Initial `SandboxPolicy`/`Root`/`SecretRules` model.
 - Library + CLI for `read/glob/grep/edit/patch/delete` with root-bounded access and redaction.
 - `read` supports optional line ranges (`start_line`/`end_line`).

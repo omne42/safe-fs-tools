@@ -293,3 +293,102 @@ fn read_line_ranges_reject_fifo_special_files() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+fn read_rejects_incomplete_line_ranges() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("file.txt"), "one\ntwo\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: Some(1),
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: None,
+            end_line: Some(1),
+        },
+    )
+    .expect_err("should reject");
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn read_rejects_invalid_line_ranges() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("file.txt"), "one\ntwo\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: Some(0),
+            end_line: Some(1),
+        },
+    )
+    .expect_err("should reject");
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: Some(2),
+            end_line: Some(1),
+        },
+    )
+    .expect_err("should reject");
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn read_line_ranges_reject_out_of_bounds_requests() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("file.txt"), "one\ntwo\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: Some(1),
+            end_line: Some(3),
+        },
+    )
+    .expect_err("should reject");
+    match err {
+        safe_fs_tools::Error::InvalidPath(message) => assert!(message.contains("out of bounds")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}

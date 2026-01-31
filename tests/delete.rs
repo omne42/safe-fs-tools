@@ -117,3 +117,81 @@ fn delete_denies_requested_path_before_resolving_symlink_dirs() {
         "expected file to remain after denied delete"
     );
 }
+
+#[test]
+fn delete_is_not_allowed_on_readonly_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+
+    let err = delete_file(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::NotPermitted(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn delete_rejects_dot_and_empty_paths() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let err = delete_file(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("."),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { path, .. } => assert_eq!(path, PathBuf::from(".")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = delete_file(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from(""),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn delete_rejects_directories() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("subdir")).expect("mkdir");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let err = delete_file(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("subdir"),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("does not support directories"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}

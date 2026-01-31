@@ -1,7 +1,7 @@
 # safe-fs-tools
 
 `safe-fs-tools` is a small Rust library + CLI that provides filesystem tools:
-`read`, `glob`, `grep`, `edit`, `patch`, `delete`.
+`read`, `list_dir`, `glob`, `grep`, `stat`, `edit`, `patch`, `mkdir`, `write`, `move`, `copy_file`, `delete`.
 
 The point is **not** the commands — it is the **explicit safety model**:
 
@@ -41,7 +41,8 @@ Important boundaries:
 - For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).
 - `read`/`edit`/`patch`/`delete` responses include `requested_path` (normalized input path) and `path` (canonicalized resolved path); for symlinked files these can differ. For absolute inputs, `requested_path` is best-effort and may be returned as root-relative when possible.
 - `edit`/`patch` update existing files in-place (the target must already exist). Writes are atomic (temp file + fsync + replace/rename), but durability is best-effort: parent directories are not fsynced.
-- `delete` removes the path itself (does not follow symlinks) and rejects directories; it may remove non-regular files (FIFOs, sockets, device nodes) if they are within the root and not directories.
+- `delete_file` removes the path itself (does not follow symlinks) and rejects directories; it may remove non-regular files (FIFOs, sockets, device nodes) if they are within the root and not directories.
+- `delete_path` removes files and, with `recursive=true`, directories recursively (does not follow symlinks).
 - `secrets.deny_globs` hides paths from `glob`/`grep` and denies direct access (`read`/`edit`/`patch`/`delete`). Deny checks apply to the requested path (after `.`/`..` normalization) and to the resolved relative path used by the operation (`read`/`edit`/`patch`: canonicalized file path; `delete`: canonicalized parent dir + file name).
 - `traversal.skip_globs` skips paths during traversal (`glob`/`grep`) for performance, but does **not** deny direct access.
 - `secrets.redact_regexes` are applied to returned text (`read` file content and `grep` matched lines).

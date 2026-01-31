@@ -2,6 +2,8 @@
 name = "safe-fs-tools"
 version = "0.1.0"
 edition = "2024"
+description = "Safe filesystem tools (read/glob/grep/edit/patch/delete) with explicit sandbox policy."
+readme = "README.md"
 
 [workspace]
 members = ["cli"]

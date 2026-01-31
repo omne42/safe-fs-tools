@@ -7,9 +7,15 @@ mode = "read_only" # or "read_write"
 read = true
 glob = true
 grep = true
+list_dir = true
+stat = true
 edit = false
 patch = false
 delete = false
+mkdir = false
+write = false
+move = false
+copy_file = false
 
 [paths]
 # When false, tool request paths must be root-relative (absolute paths are rejected).

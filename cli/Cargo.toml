@@ -2,6 +2,7 @@
 name = "safe-fs-tools-cli"
 version = "0.1.0"
 edition = "2024"
+description = "CLI for safe-fs-tools (safe filesystem operations with explicit sandbox policy)."
 
 [[bin]]
 name = "safe-fs-tools"

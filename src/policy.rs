@@ -31,11 +31,23 @@ pub struct Permissions {
     #[serde(default)]
     pub grep: bool,
     #[serde(default)]
+    pub list_dir: bool,
+    #[serde(default)]
+    pub stat: bool,
+    #[serde(default)]
     pub edit: bool,
     #[serde(default)]
     pub patch: bool,
     #[serde(default)]
     pub delete: bool,
+    #[serde(default)]
+    pub mkdir: bool,
+    #[serde(default)]
+    pub write: bool,
+    #[serde(default, rename = "move")]
+    pub move_path: bool,
+    #[serde(default)]
+    pub copy_file: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

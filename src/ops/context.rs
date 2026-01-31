@@ -6,8 +6,11 @@ use crate::policy::{RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
 
 use super::{
-    Context, DeleteRequest, DeleteResponse, EditRequest, EditResponse, GlobRequest, GlobResponse,
-    GrepRequest, GrepResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse,
+    Context, CopyFileRequest, CopyFileResponse, DeletePathRequest, DeletePathResponse,
+    DeleteRequest, DeleteResponse, EditRequest, EditResponse, GlobRequest, GlobResponse,
+    GrepRequest, GrepResponse, ListDirRequest, ListDirResponse, MkdirRequest, MkdirResponse,
+    MovePathRequest, MovePathResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse,
+    StatRequest, StatResponse, WriteFileRequest, WriteFileResponse,
 };
 
 impl Context {
@@ -68,12 +71,20 @@ impl Context {
         super::read_file(self, request)
     }
 
+    pub fn list_dir(&self, request: ListDirRequest) -> Result<ListDirResponse> {
+        super::list_dir(self, request)
+    }
+
     pub fn glob_paths(&self, request: GlobRequest) -> Result<GlobResponse> {
         super::glob_paths(self, request)
     }
 
     pub fn grep(&self, request: GrepRequest) -> Result<GrepResponse> {
         super::grep(self, request)
+    }
+
+    pub fn stat(&self, request: StatRequest) -> Result<StatResponse> {
+        super::stat(self, request)
     }
 
     pub fn edit_range(&self, request: EditRequest) -> Result<EditResponse> {
@@ -86,6 +97,26 @@ impl Context {
 
     pub fn delete_file(&self, request: DeleteRequest) -> Result<DeleteResponse> {
         super::delete_file(self, request)
+    }
+
+    pub fn delete_path(&self, request: DeletePathRequest) -> Result<DeletePathResponse> {
+        super::delete_path(self, request)
+    }
+
+    pub fn mkdir(&self, request: MkdirRequest) -> Result<MkdirResponse> {
+        super::mkdir(self, request)
+    }
+
+    pub fn write_file(&self, request: WriteFileRequest) -> Result<WriteFileResponse> {
+        super::write_file(self, request)
+    }
+
+    pub fn move_path(&self, request: MovePathRequest) -> Result<MovePathResponse> {
+        super::move_path(self, request)
+    }
+
+    pub fn copy_file(&self, request: CopyFileRequest) -> Result<CopyFileResponse> {
+        super::copy_file(self, request)
     }
 
     pub(super) fn canonical_root(&self, root_id: &str) -> Result<&PathBuf> {

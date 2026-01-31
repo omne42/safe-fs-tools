@@ -153,4 +153,112 @@ impl super::Context {
         let relative = self.reject_secret_path(relative)?;
         Ok((canonical, relative, requested_path))
     }
+
+    pub(super) fn ensure_dir_under_root(
+        &self,
+        root_id: &str,
+        relative: &Path,
+        create_missing: bool,
+    ) -> Result<PathBuf> {
+        let canonical_root = self.canonical_root(root_id)?.clone();
+
+        let mut current = canonical_root.clone();
+        let mut current_relative = PathBuf::new();
+
+        for component in relative.components() {
+            match component {
+                std::path::Component::CurDir => continue,
+                std::path::Component::ParentDir => {
+                    return Err(Error::InvalidPath(format!(
+                        "invalid path {}: '..' segments are not allowed",
+                        relative.display()
+                    )));
+                }
+                std::path::Component::Normal(segment) => {
+                    current_relative.push(segment);
+                    let next = current.join(segment);
+
+                    match fs::symlink_metadata(&next) {
+                        Ok(meta) => {
+                            if meta.file_type().is_symlink() {
+                                let canonical = next.canonicalize().map_err(|err| {
+                                    Error::io_path("canonicalize", &current_relative, err)
+                                })?;
+                                let meta = fs::metadata(&canonical).map_err(|err| {
+                                    Error::io_path("metadata", &current_relative, err)
+                                })?;
+                                if !meta.is_dir() {
+                                    return Err(Error::InvalidPath(format!(
+                                        "path component {} is not a directory",
+                                        current_relative.display()
+                                    )));
+                                }
+                                if !crate::path_utils::starts_with_case_insensitive(
+                                    &canonical,
+                                    &canonical_root,
+                                ) {
+                                    return Err(Error::OutsideRoot {
+                                        root_id: root_id.to_string(),
+                                        path: current_relative,
+                                    });
+                                }
+                                current = canonical;
+                            } else if meta.is_dir() {
+                                let canonical = next.canonicalize().map_err(|err| {
+                                    Error::io_path("canonicalize", &current_relative, err)
+                                })?;
+                                if !crate::path_utils::starts_with_case_insensitive(
+                                    &canonical,
+                                    &canonical_root,
+                                ) {
+                                    return Err(Error::OutsideRoot {
+                                        root_id: root_id.to_string(),
+                                        path: current_relative,
+                                    });
+                                }
+                                current = canonical;
+                            } else {
+                                return Err(Error::InvalidPath(format!(
+                                    "path component {} is not a directory",
+                                    current_relative.display()
+                                )));
+                            }
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                            if !create_missing {
+                                return Err(Error::io_path("metadata", current_relative, err));
+                            }
+
+                            fs::create_dir(&next).map_err(|err| {
+                                Error::io_path("create_dir", &current_relative, err)
+                            })?;
+
+                            let canonical = next.canonicalize().map_err(|err| {
+                                Error::io_path("canonicalize", &current_relative, err)
+                            })?;
+                            if !crate::path_utils::starts_with_case_insensitive(
+                                &canonical,
+                                &canonical_root,
+                            ) {
+                                return Err(Error::OutsideRoot {
+                                    root_id: root_id.to_string(),
+                                    path: current_relative,
+                                });
+                            }
+                            current = canonical;
+                        }
+                        Err(err) => return Err(Error::io_path("metadata", current_relative, err)),
+                    }
+                }
+                _ => {
+                    return Err(Error::InvalidPath(format!(
+                        "invalid path segment in {}",
+                        relative.display()
+                    )));
+                }
+            }
+        }
+
+        Ok(current)
+    }
 }

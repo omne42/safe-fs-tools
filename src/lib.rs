@@ -9,9 +9,13 @@ pub mod redaction;
 pub use error::{Error, Result};
 
 pub use ops::{
-    Context, DeleteRequest, DeleteResponse, EditRequest, EditResponse, GlobRequest, GlobResponse,
-    GrepMatch, GrepRequest, GrepResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse,
-    ScanLimitReason, apply_unified_patch, delete_file, edit_range, glob_paths, grep, read_file,
+    Context, CopyFileRequest, CopyFileResponse, DeletePathRequest, DeletePathResponse,
+    DeleteRequest, DeleteResponse, EditRequest, EditResponse, GlobRequest, GlobResponse, GrepMatch,
+    GrepRequest, GrepResponse, ListDirEntry, ListDirRequest, ListDirResponse, MkdirRequest,
+    MkdirResponse, MovePathRequest, MovePathResponse, PatchRequest, PatchResponse, ReadRequest,
+    ReadResponse, ScanLimitReason, StatRequest, StatResponse, WriteFileRequest, WriteFileResponse,
+    apply_unified_patch, copy_file, delete_file, delete_path, edit_range, glob_paths, grep,
+    list_dir, mkdir, move_path, read_file, stat, write_file,
 };
 
 pub use policy::{

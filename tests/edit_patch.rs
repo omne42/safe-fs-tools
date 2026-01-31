@@ -381,3 +381,199 @@ fn patch_rejects_fifo_special_files() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+fn edit_rejects_invalid_line_ranges() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\ntwo\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: 0,
+            end_line: 1,
+            replacement: "ONE".to_string(),
+        },
+    )
+    .expect_err("should reject");
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: 2,
+            end_line: 1,
+            replacement: "ONE".to_string(),
+        },
+    )
+    .expect_err("should reject");
+    match err {
+        safe_fs_tools::Error::InvalidPath(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn edit_rejects_out_of_bounds_line_ranges() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: 2,
+            end_line: 2,
+            replacement: "TWO".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(message) => assert!(message.contains("out of bounds")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let empty_path = dir.path().join("empty.txt");
+    std::fs::write(&empty_path, "").expect("write");
+
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("empty.txt"),
+            start_line: 1,
+            end_line: 1,
+            replacement: "ONE".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(message) => assert!(message.contains("out of bounds")),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn edit_preserves_crlf_when_replacement_contains_crlf() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("crlf.txt");
+    std::fs::write(&path, "one\r\ntwo\r\nthree\r\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("crlf.txt"),
+            start_line: 2,
+            end_line: 2,
+            replacement: "TWO\r\n".to_string(),
+        },
+    )
+    .expect("edit");
+
+    let out = std::fs::read_to_string(&path).expect("read");
+    assert_eq!(out, "one\r\nTWO\r\nthree\r\n");
+}
+
+#[test]
+#[cfg(feature = "patch")]
+fn patch_rejects_invalid_patch_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            patch: "@@ -1,1 +1,1 @@\n".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::Patch(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(feature = "patch")]
+fn patch_rejects_patches_that_do_not_apply() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let patch = diffy::create_patch("two\n", "TWO\n").to_string();
+
+    let err = apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            patch,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::Patch(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(feature = "patch")]
+fn patch_respects_max_write_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.limits.max_write_bytes = 4;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let patch = diffy::create_patch("one\n", "one\nTWO\n").to_string();
+    let err = apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            patch,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::FileTooLarge {
+            path,
+            size_bytes,
+            max_bytes,
+        } => {
+            assert_eq!(path, PathBuf::from("file.txt"));
+            assert!(size_bytes > max_bytes);
+            assert_eq!(max_bytes, 4);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
