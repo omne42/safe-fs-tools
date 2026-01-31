@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- New filesystem operations: `list_dir`, `stat`, `mkdir`, `write_file`, `move_path`, `copy_file`, `delete_path` (all root-bounded and policy-gated).
+- New filesystem operations: `list_dir`, `stat`, `mkdir`, `write_file`, `move_path`, `copy_file` (all root-bounded and policy-gated).
+- `delete`: add `recursive` and `ignore_missing` support; return `{deleted, type}` in the response.
 - Policy: add `permissions.{list_dir,stat,mkdir,write,move,copy_file}`.
 - CLI: add commands `list-dir`, `stat`, `mkdir`, `write`, `move`, `copy-file` and extend `delete` with `--recursive` and `--ignore-missing`.
 

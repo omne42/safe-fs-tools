@@ -10,7 +10,6 @@ use crate::redaction::SecretRedactor;
 mod context;
 mod copy_file;
 mod delete;
-mod delete_path;
 mod edit;
 mod glob;
 mod grep;
@@ -26,8 +25,7 @@ mod traversal;
 mod write;
 
 pub use copy_file::{CopyFileRequest, CopyFileResponse, copy_file};
-pub use delete::{DeleteRequest, DeleteResponse, delete_file};
-pub use delete_path::{DeletePathRequest, DeletePathResponse, delete_path};
+pub use delete::{DeleteRequest, DeleteResponse, delete};
 pub use edit::{EditRequest, EditResponse, edit_range};
 pub use glob::{GlobRequest, GlobResponse, glob_paths};
 pub use grep::{GrepMatch, GrepRequest, GrepResponse, grep};

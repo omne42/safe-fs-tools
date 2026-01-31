@@ -10,7 +10,7 @@ use safe_fs_tools::ops::{Context, EditRequest, edit_range};
 use safe_fs_tools::policy::RootMode;
 
 #[cfg(feature = "patch")]
-use safe_fs_tools::ops::{DeleteRequest, PatchRequest, apply_unified_patch, delete_file};
+use safe_fs_tools::ops::{DeleteRequest, PatchRequest, apply_unified_patch, delete};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -145,11 +145,13 @@ fn edit_patch_delete_roundtrip() {
     let after_patch = std::fs::read_to_string(&path).expect("read");
     assert_eq!(after_patch, updated);
 
-    let delete = delete_file(
+    let delete = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("file.txt"),
+            recursive: false,
+            ignore_missing: false,
         },
     )
     .expect("delete");

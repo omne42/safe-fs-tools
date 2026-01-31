@@ -6,11 +6,11 @@ use crate::policy::{RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
 
 use super::{
-    Context, CopyFileRequest, CopyFileResponse, DeletePathRequest, DeletePathResponse,
-    DeleteRequest, DeleteResponse, EditRequest, EditResponse, GlobRequest, GlobResponse,
-    GrepRequest, GrepResponse, ListDirRequest, ListDirResponse, MkdirRequest, MkdirResponse,
-    MovePathRequest, MovePathResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse,
-    StatRequest, StatResponse, WriteFileRequest, WriteFileResponse,
+    Context, CopyFileRequest, CopyFileResponse, DeleteRequest, DeleteResponse, EditRequest,
+    EditResponse, GlobRequest, GlobResponse, GrepRequest, GrepResponse, ListDirRequest,
+    ListDirResponse, MkdirRequest, MkdirResponse, MovePathRequest, MovePathResponse, PatchRequest,
+    PatchResponse, ReadRequest, ReadResponse, StatRequest, StatResponse, WriteFileRequest,
+    WriteFileResponse,
 };
 
 impl Context {
@@ -95,12 +95,8 @@ impl Context {
         super::apply_unified_patch(self, request)
     }
 
-    pub fn delete_file(&self, request: DeleteRequest) -> Result<DeleteResponse> {
-        super::delete_file(self, request)
-    }
-
-    pub fn delete_path(&self, request: DeletePathRequest) -> Result<DeletePathResponse> {
-        super::delete_path(self, request)
+    pub fn delete(&self, request: DeleteRequest) -> Result<DeleteResponse> {
+        super::delete(self, request)
     }
 
     pub fn mkdir(&self, request: MkdirRequest) -> Result<MkdirResponse> {

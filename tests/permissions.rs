@@ -4,10 +4,9 @@ use std::path::PathBuf;
 
 use common::test_policy;
 use safe_fs_tools::ops::{
-    Context, CopyFileRequest, DeletePathRequest, DeleteRequest, EditRequest, GlobRequest,
-    GrepRequest, ListDirRequest, MkdirRequest, MovePathRequest, ReadRequest, StatRequest,
-    WriteFileRequest, copy_file, delete_file, delete_path, edit_range, glob_paths, grep, list_dir,
-    mkdir, move_path, read_file, stat, write_file,
+    Context, CopyFileRequest, DeleteRequest, EditRequest, GlobRequest, GrepRequest, ListDirRequest,
+    MkdirRequest, MovePathRequest, ReadRequest, StatRequest, WriteFileRequest, copy_file, delete,
+    edit_range, glob_paths, grep, list_dir, mkdir, move_path, read_file, stat, write_file,
 };
 use safe_fs_tools::policy::RootMode;
 
@@ -252,11 +251,13 @@ fn delete_is_disabled_by_policy() {
     policy.permissions.delete = false;
     let ctx = Context::new(policy).expect("ctx");
 
-    let err = delete_file(
+    let err = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("file.txt"),
+            recursive: false,
+            ignore_missing: false,
         },
     )
     .expect_err("should reject");
@@ -357,11 +358,13 @@ fn write_ops_are_disallowed_on_readonly_root() {
         }
     }
 
-    let err = delete_file(
+    let err = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("file.txt"),
+            recursive: false,
+            ignore_missing: false,
         },
     )
     .expect_err("should reject");
@@ -370,9 +373,9 @@ fn write_ops_are_disallowed_on_readonly_root() {
         other => panic!("unexpected error: {other:?}"),
     }
 
-    let err = delete_path(
+    let err = delete(
         &ctx,
-        DeletePathRequest {
+        DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("sub"),
             recursive: true,

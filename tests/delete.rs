@@ -3,7 +3,7 @@ mod common;
 use std::path::PathBuf;
 
 use common::test_policy;
-use safe_fs_tools::ops::{Context, DeleteRequest, delete_file};
+use safe_fs_tools::ops::{Context, DeleteRequest, delete};
 use safe_fs_tools::policy::RootMode;
 
 #[test]
@@ -12,19 +12,21 @@ fn delete_absolute_paths_report_relative_requested_path_on_errors() {
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let abs = dir.path().join("missing").join("file.txt");
-    let err = delete_file(
+    let err = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
             path: abs,
+            recursive: false,
+            ignore_missing: false,
         },
     )
     .expect_err("should reject");
 
     match err {
         safe_fs_tools::Error::IoPath { op, path, .. } => {
-            assert_eq!(op, "canonicalize");
-            assert_eq!(path, PathBuf::from("missing").join("file.txt"));
+            assert_eq!(op, "metadata");
+            assert_eq!(path, PathBuf::from("missing"));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -42,15 +44,19 @@ fn delete_unlinks_symlink_without_deleting_target() {
     symlink(&target, &link).expect("symlink");
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
-    let resp = delete_file(
+    let resp = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("link.txt"),
+            recursive: false,
+            ignore_missing: false,
         },
     )
     .expect("delete");
     assert_eq!(resp.requested_path, Some(PathBuf::from("link.txt")));
+    assert!(resp.deleted);
+    assert_eq!(resp.kind, "symlink");
 
     assert!(!link.exists());
     assert!(target.exists());
@@ -68,15 +74,19 @@ fn delete_unlinks_symlink_even_if_target_is_outside_root() {
     symlink(outside.path(), &link).expect("symlink");
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
-    let resp = delete_file(
+    let resp = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("outside-link.txt"),
+            recursive: false,
+            ignore_missing: false,
         },
     )
     .expect("delete");
     assert_eq!(resp.requested_path, Some(PathBuf::from("outside-link.txt")));
+    assert!(resp.deleted);
+    assert_eq!(resp.kind, "symlink");
 
     assert!(!link.exists());
     assert!(outside.path().exists());
@@ -96,11 +106,13 @@ fn delete_denies_requested_path_before_resolving_symlink_dirs() {
     policy.secrets.deny_globs = vec!["deny/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
-    let err = delete_file(
+    let err = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("deny/file.txt"),
+            recursive: false,
+            ignore_missing: false,
         },
     )
     .expect_err("should reject");
@@ -123,11 +135,13 @@ fn delete_is_not_allowed_on_readonly_root() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
 
-    let err = delete_file(
+    let err = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("file.txt"),
+            recursive: false,
+            ignore_missing: false,
         },
     )
     .expect_err("should reject");
@@ -143,54 +157,64 @@ fn delete_rejects_dot_and_empty_paths() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
-    let err = delete_file(
+    let err = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("."),
-        },
-    )
-    .expect_err("should reject");
-
-    match err {
-        safe_fs_tools::Error::OutsideRoot { path, .. } => assert_eq!(path, PathBuf::from(".")),
-        other => panic!("unexpected error: {other:?}"),
-    }
-
-    let err = delete_file(
-        &ctx,
-        DeleteRequest {
-            root_id: "root".to_string(),
-            path: PathBuf::from(""),
-        },
-    )
-    .expect_err("should reject");
-
-    match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-#[test]
-fn delete_rejects_directories() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir_all(dir.path().join("subdir")).expect("mkdir");
-
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
-
-    let err = delete_file(
-        &ctx,
-        DeleteRequest {
-            root_id: "root".to_string(),
-            path: PathBuf::from("subdir"),
+            recursive: false,
+            ignore_missing: false,
         },
     )
     .expect_err("should reject");
 
     match err {
         safe_fs_tools::Error::InvalidPath(message) => {
-            assert!(message.contains("does not support directories"));
+            assert!(message.contains("refusing to delete the root directory"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let err = delete(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from(""),
+            recursive: false,
+            ignore_missing: false,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("path is empty"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn delete_rejects_directories_without_recursive() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("subdir")).expect("mkdir");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let err = delete(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("subdir"),
+            recursive: false,
+            ignore_missing: false,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("recursive=true"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

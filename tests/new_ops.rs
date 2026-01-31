@@ -4,9 +4,8 @@ use std::path::PathBuf;
 
 use common::test_policy;
 use safe_fs_tools::ops::{
-    Context, CopyFileRequest, DeletePathRequest, ListDirRequest, MkdirRequest, MovePathRequest,
-    StatRequest, WriteFileRequest, copy_file, delete_path, list_dir, mkdir, move_path, stat,
-    write_file,
+    Context, CopyFileRequest, DeleteRequest, ListDirRequest, MkdirRequest, MovePathRequest,
+    StatRequest, WriteFileRequest, copy_file, delete, list_dir, mkdir, move_path, stat, write_file,
 };
 use safe_fs_tools::policy::RootMode;
 
@@ -191,15 +190,15 @@ fn copy_file_copies_regular_files() {
 }
 
 #[test]
-fn delete_path_deletes_dirs_recursively_and_ignores_missing() {
+fn delete_deletes_dirs_recursively_and_ignores_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
     std::fs::write(dir.path().join("sub").join("a.txt"), "hi").expect("write");
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
-    let resp = delete_path(
+    let resp = delete(
         &ctx,
-        DeletePathRequest {
+        DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("sub"),
             recursive: true,
@@ -212,9 +211,9 @@ fn delete_path_deletes_dirs_recursively_and_ignores_missing() {
     assert_eq!(resp.kind, "dir");
     assert!(!dir.path().join("sub").exists());
 
-    let resp = delete_path(
+    let resp = delete(
         &ctx,
-        DeletePathRequest {
+        DeleteRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("missing"),
             recursive: false,

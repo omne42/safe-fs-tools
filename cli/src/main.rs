@@ -4,9 +4,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use safe_fs_tools::ops::{
-    Context, CopyFileRequest, DeletePathRequest, EditRequest, GlobRequest, GrepRequest,
-    ListDirRequest, MkdirRequest, MovePathRequest, PatchRequest, ReadRequest, StatRequest,
-    WriteFileRequest,
+    Context, CopyFileRequest, DeleteRequest, EditRequest, GlobRequest, GrepRequest, ListDirRequest,
+    MkdirRequest, MovePathRequest, PatchRequest, ReadRequest, StatRequest, WriteFileRequest,
 };
 
 mod error;
@@ -359,9 +358,9 @@ fn run_with_policy(cli: &Cli, policy: safe_fs_tools::SandboxPolicy) -> Result<()
             path,
             recursive,
             ignore_missing,
-        } => serde_json::to_value(safe_fs_tools::ops::delete_path(
+        } => serde_json::to_value(safe_fs_tools::ops::delete(
             &ctx,
-            DeletePathRequest {
+            DeleteRequest {
                 root_id: root.clone(),
                 path: path.clone(),
                 recursive: *recursive,
