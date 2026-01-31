@@ -1,7 +1,8 @@
 # Decision: DB-backed Virtual FS (DB-VFS)
 
-Status: Proposed  
-Date: 2026-01-29
+Status: Implemented (MVP)  
+Date: 2026-01-29  
+Implementation: 2026-01-31
 
 ## Context
 
@@ -127,6 +128,27 @@ Budgets to enforce:
    - Postgres `pg_trgm` / FTS to reduce candidate sets before regex scanning.
 6. **Integration points**:
    - Allow higher-level products (e.g. `codex_pm`) to switch file tools to DB-VFS in server mode.
+
+## Implementation notes
+
+This decision is implemented in the sibling `db-vfs/` project (crate + HTTP service).
+
+Quick check:
+
+```bash
+cd ../db-vfs
+cargo test
+```
+
+Run the HTTP service (SQLite):
+
+```bash
+cd ../db-vfs
+cargo run -p db-vfs-service -- \
+  --sqlite ./db-vfs.sqlite \
+  --policy ./policy.example.toml \
+  --listen 127.0.0.1:8080
+```
 
 ## Open questions
 
