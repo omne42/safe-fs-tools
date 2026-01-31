@@ -110,6 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI `--redact-paths` now omits raw `io` error messages in JSON `error.details` and includes structured `io_kind`/`raw_os_error` instead.
 - `outside_root` and related `canonicalize` errors now report the normalized requested path (avoids leaking absolute root paths for relative inputs).
 - Root-level traversal (`glob`/`grep`) errors no longer leak absolute paths via `walkdir` errors.
+- Traversal now fails closed if a root-relative path cannot be derived (avoids falling back to absolute paths).
+- `glob`/`grep` now treat missing derived traversal roots as empty results, but surface permission/IO errors for existing but unreadable roots.
 - `requested_path` derivation for absolute inputs no longer depends on canonicalizing missing/unreadable parents; it uses lexical normalization and root-relative stripping when possible.
 - Paths that are lexically outside the selected root are now rejected before filesystem canonicalization, reducing filesystem probing side-channels for missing/outside paths.
 - `requested_path` no longer serializes as an empty string for `.` inputs.

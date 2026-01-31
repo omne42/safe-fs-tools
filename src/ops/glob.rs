@@ -92,21 +92,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         }
         None => root_path.clone(),
     };
-    if !walk_root.exists() {
-        return Ok(GlobResponse {
-            matches,
-            truncated: diag.truncated,
-            scanned_files: diag.scanned_files,
-            scan_limit_reached: diag.scan_limit_reached,
-            scan_limit_reason: diag.scan_limit_reason,
-            elapsed_ms: elapsed_ms(&started),
-            scanned_entries: diag.scanned_entries,
-            skipped_walk_errors: diag.skipped_walk_errors,
-            skipped_io_errors: diag.skipped_io_errors,
-            skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
-        });
-    }
-    diag = walk_traversal_files(
+    diag = match walk_traversal_files(
         ctx,
         &request.root_id,
         &root_path,
@@ -125,7 +111,24 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             }
             Ok(std::ops::ControlFlow::Continue(()))
         },
-    )?;
+    ) {
+        Ok(diag) => diag,
+        Err(Error::WalkDirRoot { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(GlobResponse {
+                matches,
+                truncated: diag.truncated,
+                scanned_files: diag.scanned_files,
+                scan_limit_reached: diag.scan_limit_reached,
+                scan_limit_reason: diag.scan_limit_reason,
+                elapsed_ms: elapsed_ms(&started),
+                scanned_entries: diag.scanned_entries,
+                skipped_walk_errors: diag.skipped_walk_errors,
+                skipped_io_errors: diag.skipped_io_errors,
+                skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
+            });
+        }
+        Err(err) => return Err(err),
+    };
 
     matches.sort();
     Ok(GlobResponse {

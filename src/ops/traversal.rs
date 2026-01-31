@@ -308,8 +308,12 @@ pub(super) fn walk_traversal_files(
         }
         diag.scanned_files = diag.scanned_files.saturating_add(1);
 
-        let relative = crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path)
-            .unwrap_or_else(|| entry.path().to_path_buf());
+        let Some(relative) =
+            crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path)
+        else {
+            diag.skipped_walk_errors = diag.skipped_walk_errors.saturating_add(1);
+            continue;
+        };
         if ctx.redactor.is_path_denied(&relative) {
             continue;
         }

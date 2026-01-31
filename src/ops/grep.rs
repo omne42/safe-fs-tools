@@ -111,22 +111,6 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         }
         None => root_path.clone(),
     };
-    if !walk_root.exists() {
-        return Ok(GrepResponse {
-            matches: Vec::new(),
-            truncated: false,
-            skipped_too_large_files: 0,
-            skipped_non_utf8_files: 0,
-            scanned_files: 0,
-            scan_limit_reached: false,
-            scan_limit_reason: None,
-            elapsed_ms: elapsed_ms(&started),
-            scanned_entries: 0,
-            skipped_walk_errors: 0,
-            skipped_io_errors: 0,
-            skipped_dangling_symlink_targets: 0,
-        });
-    }
 
     let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
 
@@ -142,7 +126,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut skipped_too_large_files: u64 = 0;
     let mut skipped_non_utf8_files: u64 = 0;
 
-    let diag = walk_traversal_files(
+    let diag = match walk_traversal_files(
         ctx,
         &request.root_id,
         &root_path,
@@ -211,7 +195,26 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
             Ok(std::ops::ControlFlow::Continue(()))
         },
-    )?;
+    ) {
+        Ok(diag) => diag,
+        Err(Error::WalkDirRoot { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(GrepResponse {
+                matches: Vec::new(),
+                truncated: false,
+                skipped_too_large_files: 0,
+                skipped_non_utf8_files: 0,
+                scanned_files: 0,
+                scan_limit_reached: false,
+                scan_limit_reason: None,
+                elapsed_ms: elapsed_ms(&started),
+                scanned_entries: 0,
+                skipped_walk_errors: 0,
+                skipped_io_errors: 0,
+                skipped_dangling_symlink_targets: 0,
+            });
+        }
+        Err(err) => return Err(err),
+    };
 
     matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
     Ok(GrepResponse {
