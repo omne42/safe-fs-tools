@@ -81,6 +81,15 @@ Notes:
 
 - DB-VFS “roots” are modeled as namespaces: `(workspace_id, path_prefix)` rather than OS paths.
 - `expected_version` avoids silent lost updates and makes concurrent edits explicit.
+- `path_prefix` is required for `grep` and for broad `glob` patterns (e.g. `"**/*.md"`). If a safe
+  literal prefix can be derived from the `glob` (e.g. `"docs/**/*.md"` → `"docs/"`), it can be used
+  as an implicit `path_prefix`.
+- Concurrency (CAS) semantics in the MVP implementation:
+  - `patch` requires `expected_version`.
+  - `write(expected_version = None)` is **create-only** (conflicts if the file exists); updates
+    require `expected_version`.
+  - `delete(expected_version = Some(v))` enforces CAS; `delete(expected_version = None)` is an
+    unconditional delete.
 
 ## Minimal schema (Postgres-ish)
 
@@ -112,21 +121,14 @@ Budgets to enforce:
 
 ## Future work (TODO)
 
-1. **Extract a reusable “core” layer**:
-   - `Policy`, `SecretRules`, `Limits`, request/response structs, stable error codes, redaction.
-2. **DB-VFS MVP**:
-   - SQLite backend (in-memory tests) for correctness.
-   - Postgres backend + schema migration story.
-3. **Conflict semantics**:
-   - Require `expected_version` for `patch` (likely yes).
-   - Decide whether `write/delete` require `expected_version` or allow unconditional writes with
-     audit logs.
-4. **Streaming and quotas**:
-   - Cursor streaming for `grep`.
-   - Per-workspace budgets + rate limits.
-5. **Search acceleration (optional)**:
+1. **Streaming and quotas**:
+   - Cursor/pagination for `grep` (and optionally `glob`).
+   - Per-workspace quotas + rate limits beyond per-request limits.
+2. **Search acceleration (optional)**:
    - Postgres `pg_trgm` / FTS to reduce candidate sets before regex scanning.
-6. **Integration points**:
+3. **Service hardening**:
+   - Postgres service mode (pooling, migrations at startup).
+4. **Integration points**:
    - Allow higher-level products (e.g. `codex_pm`) to switch file tools to DB-VFS in server mode.
 
 ## Implementation notes
@@ -152,6 +154,5 @@ cargo run -p db-vfs-service -- \
 
 ## Open questions
 
-- Library-only vs service-first? (service helps multi-language clients + centralized policy)
-- Should `grep` require `path_prefix` by default to prevent whole-workspace scans?
 - Do we want an append-only mode for crawlers (write new versions, never mutate)?
+- Do we want to standardize a cursor protocol for `grep` streaming?
