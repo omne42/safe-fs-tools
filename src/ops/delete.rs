@@ -28,37 +28,11 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
     }
     ctx.ensure_can_write(&request.root_id, "delete")?;
 
-    let resolved = ctx.policy.resolve_path(&request.root_id, &request.path)?;
-    let root = ctx.policy.root(&request.root_id)?;
-    let canonical_root = ctx.canonical_root(&request.root_id)?;
-    let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
-    let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
-    let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
-
-    let is_lexically_within_root = crate::path_utils::starts_with_case_insensitive(
-        &normalized_resolved,
-        &normalized_root_path,
-    ) || crate::path_utils::starts_with_case_insensitive(
-        &normalized_resolved,
-        &normalized_canonical_root,
-    );
-
-    let requested_path = if is_lexically_within_root || !request.path.is_absolute() {
-        super::resolve::derive_requested_path(&root.path, canonical_root, &request.path, &resolved)
-    } else {
-        normalized_resolved.clone()
-    };
-
-    if ctx.redactor.is_path_denied(&requested_path) {
-        return Err(Error::SecretPathDenied(requested_path));
-    }
-
-    if !is_lexically_within_root {
-        return Err(Error::OutsideRoot {
-            root_id: request.root_id.clone(),
-            path: requested_path,
-        });
-    }
+    let resolved =
+        super::resolve::resolve_path_in_root_lexically(ctx, &request.root_id, &request.path)?;
+    let canonical_root = resolved.canonical_root;
+    let requested_path = resolved.requested_path;
+    let resolved = resolved.resolved;
 
     let file_name = resolved
         .file_name()
@@ -80,7 +54,7 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
         Ok(canonical) => canonical,
         Err(err) => return Err(Error::io_path("canonicalize", requested_path, err)),
     };
-    if !crate::path_utils::starts_with_case_insensitive(&canonical_parent, canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive(&canonical_parent, &canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_path,
@@ -88,7 +62,7 @@ pub fn delete_file(ctx: &Context, request: DeleteRequest) -> Result<DeleteRespon
     }
 
     let relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, canonical_root)
+        crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, &canonical_root)
             .unwrap_or(canonical_parent);
     let relative = relative_parent.join(file_name);
     if ctx.redactor.is_path_denied(&relative) {

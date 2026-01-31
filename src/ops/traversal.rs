@@ -199,14 +199,34 @@ pub(super) fn walkdir_traversal_iter<'a>(
                 return true;
             }
             let is_dir = entry.file_type().is_dir();
-            let relative = entry.path().strip_prefix(root_path).unwrap_or(entry.path());
-            let probe = relative.join(TRAVERSAL_GLOB_PROBE_NAME);
-            if ctx.redactor.is_path_denied(relative)
+            let relative = match entry.path().strip_prefix(root_path) {
+                Ok(relative) => std::borrow::Cow::Borrowed(relative),
+                Err(_) => {
+                    #[cfg(windows)]
+                    {
+                        if let Some(relative) = crate::path_utils::strip_prefix_case_insensitive(
+                            entry.path(),
+                            root_path,
+                        ) {
+                            std::borrow::Cow::Owned(relative)
+                        } else {
+                            return false;
+                        }
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        return false;
+                    }
+                }
+            };
+
+            let probe = relative.as_ref().join(TRAVERSAL_GLOB_PROBE_NAME);
+            if ctx.redactor.is_path_denied(relative.as_ref())
                 || (is_dir && ctx.redactor.is_path_denied(&probe))
             {
                 return false;
             }
-            !(ctx.is_traversal_path_skipped(relative)
+            !(ctx.is_traversal_path_skipped(relative.as_ref())
                 || (is_dir && ctx.is_traversal_path_skipped(&probe)))
         })
 }

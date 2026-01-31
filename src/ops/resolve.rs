@@ -37,47 +37,70 @@ pub(super) fn derive_requested_path(
     }
 }
 
+pub(super) struct ResolvedPath {
+    pub(super) resolved: PathBuf,
+    pub(super) requested_path: PathBuf,
+    pub(super) canonical_root: PathBuf,
+}
+
+pub(super) fn resolve_path_in_root_lexically(
+    ctx: &super::Context,
+    root_id: &str,
+    path: &Path,
+) -> Result<ResolvedPath> {
+    let resolved = ctx.policy.resolve_path(root_id, path)?;
+    let root = ctx.policy.root(root_id)?;
+    let canonical_root = ctx.canonical_root(root_id)?.clone();
+
+    let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
+    let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
+    let normalized_canonical_root = crate::path_utils::normalize_path_lexical(&canonical_root);
+
+    let lexically_in_root = crate::path_utils::starts_with_case_insensitive(
+        &normalized_resolved,
+        &normalized_root_path,
+    ) || crate::path_utils::starts_with_case_insensitive(
+        &normalized_resolved,
+        &normalized_canonical_root,
+    );
+
+    if !lexically_in_root {
+        let requested_path = if path.is_absolute() {
+            normalized_resolved
+        } else {
+            derive_requested_path(&root.path, &canonical_root, path, &resolved)
+        };
+        let requested_path = ctx.reject_secret_path(requested_path)?;
+        return Err(Error::OutsideRoot {
+            root_id: root_id.to_string(),
+            path: requested_path,
+        });
+    }
+
+    let requested_path = ctx.reject_secret_path(derive_requested_path(
+        &root.path,
+        &canonical_root,
+        path,
+        &resolved,
+    ))?;
+
+    Ok(ResolvedPath {
+        resolved,
+        requested_path,
+        canonical_root,
+    })
+}
+
 impl super::Context {
     pub(super) fn canonical_path_in_root(
         &self,
         root_id: &str,
         path: &Path,
     ) -> Result<(PathBuf, PathBuf, PathBuf)> {
-        let resolved = self.policy.resolve_path(root_id, path)?;
-        let root = self.policy.root(root_id)?;
-        let canonical_root = self.canonical_root(root_id)?;
-
-        let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
-        let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
-        let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
-
-        let lexically_in_root = crate::path_utils::starts_with_case_insensitive(
-            &normalized_resolved,
-            &normalized_root_path,
-        ) || crate::path_utils::starts_with_case_insensitive(
-            &normalized_resolved,
-            &normalized_canonical_root,
-        );
-
-        if !lexically_in_root {
-            let requested_path = if path.is_absolute() {
-                normalized_resolved
-            } else {
-                derive_requested_path(&root.path, canonical_root, path, &resolved)
-            };
-            let requested_path = self.reject_secret_path(requested_path)?;
-            return Err(Error::OutsideRoot {
-                root_id: root_id.to_string(),
-                path: requested_path,
-            });
-        }
-
-        let requested_path = self.reject_secret_path(derive_requested_path(
-            &root.path,
-            canonical_root,
-            path,
-            &resolved,
-        ))?;
+        let resolved = resolve_path_in_root_lexically(self, root_id, path)?;
+        let requested_path = resolved.requested_path;
+        let canonical_root = resolved.canonical_root;
+        let resolved = resolved.resolved;
 
         let canonical = match resolved.canonicalize() {
             Ok(canonical) => canonical,
@@ -101,7 +124,7 @@ impl super::Context {
                             crate::path_utils::normalize_path_lexical(&resolved_target);
                         if !crate::path_utils::starts_with_case_insensitive(
                             &resolved_target,
-                            canonical_root,
+                            &canonical_root,
                         ) {
                             return Err(Error::OutsideRoot {
                                 root_id: root_id.to_string(),
@@ -113,14 +136,15 @@ impl super::Context {
                 return Err(Error::io_path("canonicalize", requested_path, err));
             }
         };
-        if !crate::path_utils::starts_with_case_insensitive(&canonical, canonical_root) {
+        if !crate::path_utils::starts_with_case_insensitive(&canonical, &canonical_root) {
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
                 path: requested_path,
             });
         }
-        let relative = crate::path_utils::strip_prefix_case_insensitive(&canonical, canonical_root)
-            .unwrap_or(canonical.clone());
+        let relative =
+            crate::path_utils::strip_prefix_case_insensitive(&canonical, &canonical_root)
+                .unwrap_or(canonical.clone());
         let relative = if relative.as_os_str().is_empty() {
             PathBuf::from(".")
         } else {

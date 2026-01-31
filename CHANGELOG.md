@@ -81,9 +81,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal: split `ops` implementation into smaller modules for readability.
 - Tests: split the large `basic` integration test into smaller per-area test files.
 - Internal: make the `delete` directory error message more precise.
+- Internal: share lexical root/requested path resolution between `delete` and `canonical_path_in_root`.
+- Docs: clarify how `secrets.deny_globs` applies to `delete` (parent canonicalization vs unlink target).
 
 ### Fixed
 
+- `read_bytes_limited` now validates the opened file metadata and fails closed on metadata errors (hardens special-file rejection).
+- Traversal deny/skip filtering now derives relative paths case-insensitively on Windows.
 - `--no-default-features` now builds cleanly (gate `walkdir` error variant behind traversal features).
 - `delete` now applies `secrets.deny_globs` to the normalized requested path (prevents bypass via symlinked directories).
 - `secrets.deny_globs` can no longer be bypassed via symlink paths (deny rules are applied before resolving symlink targets).
