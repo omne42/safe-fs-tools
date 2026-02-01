@@ -152,6 +152,16 @@ cargo run -p db-vfs-service -- \
   --listen 127.0.0.1:8080
 ```
 
+Run the HTTP service (Postgres; requires `--features postgres`):
+
+```bash
+cd ../db-vfs
+cargo run -p db-vfs-service --features postgres -- \
+  --postgres "postgres://user:pass@localhost:5432/db_vfs" \
+  --policy ./policy.example.toml \
+  --listen 127.0.0.1:8080
+```
+
 ## Open questions
 
 - Do we want an append-only mode for crawlers (write new versions, never mutate)?
