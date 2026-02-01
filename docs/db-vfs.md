@@ -129,7 +129,7 @@ Budgets to enforce:
 3. **Service hardening**:
    - Postgres service mode (pooling, migrations at startup).
 4. **Integration points**:
-   - Allow higher-level products (e.g. `codex_pm`) to switch file tools to DB-VFS in server mode.
+   - Allow higher-level products (e.g. `omne-agent`) to switch file tools to DB-VFS in server mode.
 
 ## Implementation notes
 

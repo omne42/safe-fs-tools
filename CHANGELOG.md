@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dev: pre-commit rejects oversized Rust files (default 1000 lines; configurable via `SAFE_FS_MAX_RS_LINES`).
 - Docs: expand README and policy example to include new operations and permissions.
 - Docs: mark DB-VFS decision implemented, reference the `db-vfs` project, clarify `path_prefix`/CAS semantics, and add a Postgres run example for `db-vfs-service`.
+- Docs: update the example upstream integration name to `omne-agent`.
 
 ### Fixed
 
