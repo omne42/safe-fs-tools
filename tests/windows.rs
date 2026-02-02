@@ -206,11 +206,9 @@ fn traversal_skip_globs_are_case_insensitive_on_windows() {
     )
     .expect("glob");
 
+    let blocked = PathBuf::from(".git/config");
     assert!(
-        !resp
-            .matches
-            .iter()
-            .any(|path| path == PathBuf::from(".git/config")),
+        !resp.matches.iter().any(|path| path == &blocked),
         "expected traversal.skip_globs to exclude .git/config: {:?}",
         resp.matches
     );
