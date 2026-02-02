@@ -30,7 +30,7 @@ mod policy_io {
                 r#"
 [[roots]]
 id = "workspace"
-path = "{}"
+path = '{}'
 mode = "read_only"
 
 [permissions]
@@ -125,12 +125,12 @@ read = true
                 r#"
 [[roots]]
 id = "dup"
-path = "{}"
+path = '{}'
 mode = "read_only"
 
 [[roots]]
 id = "dup"
-path = "{}"
+path = '{}'
 mode = "read_only"
 "#,
                 root_path.display(),
