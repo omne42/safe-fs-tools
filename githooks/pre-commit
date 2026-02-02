@@ -92,13 +92,10 @@ if [[ -z "$workspace_root" ]]; then
   exit 0
 fi
 
-echo "pre-commit: running Rust gates in $workspace_root" >&2
+gate_script="$repo_root/scripts/gate.sh"
+if [[ ! -x "$gate_script" ]]; then
+  echo "pre-commit: missing gate script: $gate_script" >&2
+  exit 1
+fi
 
-(
-  cd "$workspace_root"
-  cargo fmt --all -- --check
-  cargo check --workspace --all-targets
-  cargo check --workspace --all-targets --no-default-features
-  cargo clippy --workspace --all-targets -- -D warnings
-  cargo test --workspace
-)
+"$gate_script"

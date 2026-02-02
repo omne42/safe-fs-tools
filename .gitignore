@@ -1,1 +1,10 @@
-/target
+# Rust
+target/
+**/target/
+
+# Dist (release artifacts)
+dist/
+
+# OS / tooling
+.DS_Store
+.github-agent-data/

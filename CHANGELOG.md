@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New filesystem operations: `list_dir`, `stat`, `mkdir`, `write_file`, `move_path`, `copy_file` (all root-bounded and policy-gated).
 - Policy: add `permissions.{list_dir,stat,mkdir,write,move,copy_file}`.
 - CLI: add commands `list-dir`, `stat`, `mkdir`, `write`, `move`, `copy-file` and extend `delete` with `--recursive` and `--ignore-missing`.
+- Dev: add GitHub Actions workflows (CI/docs/release) and a shared `scripts/gate.sh`.
 
 ### Changed
 

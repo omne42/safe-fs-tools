@@ -1,0 +1,193 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    name: Build binaries (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release -p safe-fs-tools-cli
+
+      - name: Package (tar.gz)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          bin_name="safe-fs-tools"
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          if [[ "$os" == "darwin" ]]; then os="macos"; fi
+          arch="$(uname -m)"
+          case "$arch" in
+            x86_64) arch="x64" ;;
+            aarch64|arm64) arch="arm64" ;;
+          esac
+
+          asset="safe-fs-tools-${os}-${arch}.tar.gz"
+          tar -C target/release -czf "dist/${asset}" "${bin_name}"
+          (
+            cd dist
+            shasum -a 256 "${asset}" | awk '{print $1 "  " $2}' >"${asset}.sha256"
+          )
+
+      - name: Package (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $os = "windows"
+          $arch = $env:RUNNER_ARCH.ToLower()
+          if ($arch -eq "x64") { $arch = "x64" }
+          elseif ($arch -eq "arm64") { $arch = "arm64" }
+          $asset = "safe-fs-tools-$os-$arch.zip"
+          $exe = "target\\release\\safe-fs-tools.exe"
+          Compress-Archive -Path $exe -DestinationPath ("dist\\" + $asset) -Force
+          $hash = (Get-FileHash ("dist\\" + $asset) -Algorithm SHA256).Hash.ToLower()
+          "$hash  $asset" | Out-File -Encoding utf8NoBOM ("dist\\" + $asset + ".sha256")
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.os }}
+          path: dist/*
+
+  publish:
+    name: Publish (GitHub Release + crates.io)
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify tag matches crate versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --no-deps --format-version 1 | python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          version = tag[1:] if tag.startswith("v") else tag
+          m = json.load(sys.stdin)
+          versions = {p["name"]: p["version"] for p in m.get("packages", [])}
+          expected = ("safe-fs-tools", "safe-fs-tools-cli")
+
+          missing = [name for name in expected if name not in versions]
+          if missing:
+            print(f"Missing packages in cargo metadata: {missing}", file=sys.stderr)
+            sys.exit(1)
+
+          mismatched = [(name, versions[name]) for name in expected if versions[name] != version]
+          if mismatched:
+            for name, v in mismatched:
+              print(f"Tag version ({version}) does not match {name} version ({v})", file=sys.stderr)
+            sys.exit(1)
+          PY
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          merge-multiple: true
+          path: dist
+
+      - name: Create SHA256SUMS.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          ls -la
+          cat *.sha256 >SHA256SUMS.txt
+
+      - name: Create GitHub release (attach binaries)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+          generate_release_notes: true
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+            echo "Skipping crates.io publish (CARGO_REGISTRY_TOKEN is not set)."
+            exit 0
+          fi
+
+          cargo metadata --no-deps --format-version 1 | python3 - <<'PY'
+          import json
+          import sys
+
+          m = json.load(sys.stdin)
+          pkgs = {p["name"]: p for p in m.get("packages", [])}
+          required = ("safe-fs-tools", "safe-fs-tools-cli")
+          missing = [name for name in required if name not in pkgs]
+          if missing:
+            print(f"Skipping crates.io publish (missing packages in metadata): {missing}")
+            sys.exit(0)
+
+          no_license = []
+          for name in required:
+            p = pkgs[name]
+            if not (p.get("license") or p.get("license_file")):
+              no_license.append(name)
+          if no_license:
+            print(
+              "Skipping crates.io publish (missing license/license-file in Cargo.toml for: "
+              + ", ".join(no_license)
+              + ")."
+            )
+            sys.exit(0)
+          PY
+
+          for attempt in 1 2 3 4 5 6; do
+            if cargo publish -p safe-fs-tools; then
+              break
+            fi
+            echo "safe-fs-tools publish failed (attempt ${attempt}); retrying in 15s..." >&2
+            sleep 15
+          done
+
+          for attempt in 1 2 3 4 5 6; do
+            if cargo publish -p safe-fs-tools-cli; then
+              exit 0
+            fi
+            echo "safe-fs-tools-cli publish failed (attempt ${attempt}); retrying in 15s..." >&2
+            sleep 15
+          done
+
+          echo "crates.io publish still failing after retries." >&2
+          exit 1
