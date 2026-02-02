@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- CI: fix Windows build by using `MoveFileExW` for atomic replacement (avoid missing `ReplaceFileW` bindings).
+- Docs: add a GitHub Pages root `index.html` redirect so the docs site doesn’t 404.
+
 ## [0.1.0] - 2026-01-31
 
 ### Added

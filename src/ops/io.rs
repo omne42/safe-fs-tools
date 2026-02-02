@@ -115,33 +115,26 @@ pub(super) fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> 
 
 #[cfg(windows)]
 fn replace_file(tmp_path: &Path, dest_path: &Path) -> std::io::Result<()> {
-    use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
-    use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_IGNORE_MERGE_ERRORS, ReplaceFileW};
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MoveFileExW};
 
-    if !dest_path.exists() {
-        return fs::rename(tmp_path, dest_path);
-    }
-
-    fn to_wide_null(s: &OsStr) -> Vec<u16> {
-        let mut wide: Vec<u16> = s.encode_wide().collect();
+    fn to_wide_null(p: &Path) -> Vec<u16> {
+        let mut wide: Vec<u16> = p.as_os_str().encode_wide().collect();
         wide.push(0);
         wide
     }
 
-    let replaced = unsafe {
-        ReplaceFileW(
-            to_wide_null(dest_path.as_os_str()).as_ptr(),
-            to_wide_null(tmp_path.as_os_str()).as_ptr(),
-            std::ptr::null(),
-            REPLACEFILE_IGNORE_MERGE_ERRORS,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
+    let tmp_w = to_wide_null(tmp_path);
+    let dest_w = to_wide_null(dest_path);
 
-    if replaced == 0 {
+    let mut flags = 0;
+    if dest_path.exists() {
+        flags |= MOVEFILE_REPLACE_EXISTING;
+    }
+
+    let moved = unsafe { MoveFileExW(tmp_w.as_ptr(), dest_w.as_ptr(), flags) };
+    if moved == 0 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())

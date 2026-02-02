@@ -37,7 +37,21 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build rustdoc
-        run: cargo doc --workspace --no-deps
+        run: cargo doc -p safe-fs-tools --no-deps
+
+      - name: Add root index.html
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > target/doc/index.html <<'EOF'
+          <!doctype html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=safe_fs_tools/">
+          <link rel="canonical" href="safe_fs_tools/">
+          <title>safe-fs-tools docs</title>
+          <p>Redirecting to <a href="safe_fs_tools/">safe-fs-tools</a>…</p>
+          EOF
+          touch target/doc/.nojekyll
 
       - name: Configure Pages
         if: github.event.repository.private == false
