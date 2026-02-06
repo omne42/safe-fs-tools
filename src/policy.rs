@@ -15,6 +15,7 @@ pub enum RootMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Root {
     pub id: String,
     pub path: PathBuf,
@@ -23,6 +24,7 @@ pub struct Root {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Permissions {
     #[serde(default)]
     pub read: bool,
@@ -51,6 +53,7 @@ pub struct Permissions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Limits {
     #[serde(default = "default_max_read_bytes")]
     pub max_read_bytes: u64,
@@ -118,6 +121,7 @@ impl Default for Limits {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecretRules {
     #[serde(default = "default_secret_deny_globs")]
     pub deny_globs: Vec<String>,
@@ -128,6 +132,7 @@ pub struct SecretRules {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TraversalRules {
     /// Glob patterns that should be skipped during traversal (`glob`/`grep`) for performance.
     ///
@@ -137,6 +142,7 @@ pub struct TraversalRules {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PathRules {
     /// Whether absolute request paths are accepted.
     ///
@@ -183,6 +189,7 @@ impl Default for SecretRules {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SandboxPolicy {
     pub roots: Vec<Root>,
     #[serde(default)]
@@ -308,6 +315,10 @@ impl SandboxPolicy {
     /// On Windows, this also rejects drive-relative paths (e.g. `C:foo`) and
     /// paths containing `:` in a normal component (blocks NTFS alternate data
     /// streams like `file.txt:stream`).
+    ///
+    /// This function is purely lexical: it does not touch the filesystem and does not attempt to
+    /// detect Windows reparse points / junctions. Root boundary enforcement is best-effort and
+    /// happens in `ops::Context` (and is not TOCTOU-hardened).
     pub fn resolve_path(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
         let root = self.root(root_id)?;
         if path.as_os_str().is_empty() {

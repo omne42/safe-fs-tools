@@ -49,6 +49,10 @@ impl SecretRedactor {
         })
     }
 
+    /// Returns `true` if a **root-relative** path is denied by `secrets.deny_globs`.
+    ///
+    /// The deny glob patterns are defined relative to the selected root (e.g. `.git/**`), so
+    /// callers should pass paths relative to the root. Absolute paths will typically not match.
     pub fn is_path_denied(&self, relative: &Path) -> bool {
         self.deny.is_match(normalize_path_for_glob(relative))
     }

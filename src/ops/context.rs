@@ -1,5 +1,9 @@
+use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::policy::{RootMode, SandboxPolicy};
@@ -18,7 +22,7 @@ impl Context {
         policy.validate()?;
         let redactor = SecretRedactor::from_rules(&policy.secrets)?;
 
-        let mut canonical_roots = Vec::<(String, PathBuf)>::new();
+        let mut canonical_roots = HashMap::<String, PathBuf>::new();
         for root in &policy.roots {
             let canonical = root.path.canonicalize().map_err(|err| {
                 Error::InvalidPolicy(format!(
@@ -41,7 +45,7 @@ impl Context {
                     canonical.display()
                 )));
             }
-            canonical_roots.push((root.id.clone(), canonical));
+            canonical_roots.insert(root.id.clone(), canonical);
         }
 
         #[cfg(any(feature = "glob", feature = "grep"))]
@@ -117,8 +121,7 @@ impl Context {
 
     pub(super) fn canonical_root(&self, root_id: &str) -> Result<&PathBuf> {
         self.canonical_roots
-            .iter()
-            .find_map(|(id, path)| (id == root_id).then_some(path))
+            .get(root_id)
             .ok_or_else(|| Error::RootNotFound(root_id.to_string()))
     }
 

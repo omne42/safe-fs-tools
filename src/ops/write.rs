@@ -120,7 +120,7 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        open_options.mode(0o666);
+        open_options.mode(0o600);
     }
 
     let mut file = open_options

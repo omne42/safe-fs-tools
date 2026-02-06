@@ -107,14 +107,18 @@ pub(super) fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> 
     fs::set_permissions(&tmp_path, perms)
         .map_err(|err| Error::io_path("set_permissions", relative, err))?;
 
-    replace_file(tmp_path.as_ref(), path)
+    rename_replace(tmp_path.as_ref(), path, true)
         .map_err(|err| Error::io_path("replace_file", relative, err))?;
 
     Ok(())
 }
 
 #[cfg(windows)]
-fn replace_file(tmp_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+pub(super) fn rename_replace(
+    src_path: &Path,
+    dest_path: &Path,
+    replace_existing: bool,
+) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
     use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MoveFileExW};
@@ -125,15 +129,18 @@ fn replace_file(tmp_path: &Path, dest_path: &Path) -> std::io::Result<()> {
         wide
     }
 
-    let tmp_w = to_wide_null(tmp_path);
+    let src_w = to_wide_null(src_path);
     let dest_w = to_wide_null(dest_path);
 
-    let mut flags = 0;
-    if dest_path.exists() {
-        flags |= MOVEFILE_REPLACE_EXISTING;
-    }
+    let flags = if replace_existing {
+        MOVEFILE_REPLACE_EXISTING
+    } else {
+        0
+    };
 
-    let moved = unsafe { MoveFileExW(tmp_w.as_ptr(), dest_w.as_ptr(), flags) };
+    // Safety: `src_w` and `dest_w` are NUL-terminated UTF-16 paths kept alive for the duration of
+    // the call; `MoveFileExW` reads them synchronously and does not store the pointers.
+    let moved = unsafe { MoveFileExW(src_w.as_ptr(), dest_w.as_ptr(), flags) };
     if moved == 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -141,6 +148,10 @@ fn replace_file(tmp_path: &Path, dest_path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(not(windows))]
-fn replace_file(tmp_path: &Path, dest_path: &Path) -> std::io::Result<()> {
-    fs::rename(tmp_path, dest_path)
+pub(super) fn rename_replace(
+    src_path: &Path,
+    dest_path: &Path,
+    _replace_existing: bool,
+) -> std::io::Result<()> {
+    fs::rename(src_path, dest_path)
 }

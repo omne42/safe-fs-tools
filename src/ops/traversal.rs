@@ -244,7 +244,7 @@ pub(super) fn walk_traversal_files(
         &mut TraversalDiagnostics,
     ) -> Result<std::ops::ControlFlow<()>>,
 ) -> Result<TraversalDiagnostics> {
-    if !walk_root.starts_with(root_path) {
+    if !crate::path_utils::starts_with_case_insensitive(walk_root, root_path) {
         return Err(Error::InvalidPath(
             "derived traversal root escapes selected root".to_string(),
         ));

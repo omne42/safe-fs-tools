@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -21,6 +22,7 @@ mod patch;
 mod read;
 mod resolve;
 mod stat;
+#[cfg(any(feature = "glob", feature = "grep"))]
 mod traversal;
 mod write;
 
@@ -44,7 +46,7 @@ mod tests;
 pub struct Context {
     policy: SandboxPolicy,
     redactor: SecretRedactor,
-    canonical_roots: Vec<(String, PathBuf)>,
+    canonical_roots: HashMap<String, PathBuf>,
     #[cfg(any(feature = "glob", feature = "grep"))]
     traversal_skip_globs: Option<GlobSet>,
 }

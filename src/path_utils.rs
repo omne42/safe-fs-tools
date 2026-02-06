@@ -1,3 +1,16 @@
+//! Path utilities used across policy/path validation and traversal.
+//!
+//! This module is intentionally **lexical**: it does not touch the filesystem and therefore does
+//! not resolve symlinks. Its job is to normalize and compare paths in a way that is predictable
+//! across platforms.
+//!
+//! Invariants of `normalize_path_lexical`:
+//! - Removes `.` segments.
+//! - Resolves `..` against preceding *normal* segments when possible.
+//! - Preserves leading `..` for relative paths (e.g. `../../a/../b` → `../../b`).
+//! - For absolute paths, `..` cannot escape the filesystem root (e.g. `/../etc` → `/etc`).
+//! - On Windows, preserves path prefixes (Disk/UNC/verbatim) and does not drop them when
+//!   normalizing.
 use std::borrow::Cow;
 #[cfg(windows)]
 use std::ffi::OsStr;

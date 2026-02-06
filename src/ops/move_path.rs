@@ -120,13 +120,13 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         });
     }
 
-    let meta = fs::symlink_metadata(&source)
+    let source_meta = fs::symlink_metadata(&source)
         .map_err(|err| Error::io_path("metadata", &from_relative, err))?;
-    let kind = if meta.file_type().is_file() {
+    let kind = if source_meta.file_type().is_file() {
         "file"
-    } else if meta.file_type().is_dir() {
+    } else if source_meta.file_type().is_dir() {
         "dir"
-    } else if meta.file_type().is_symlink() {
+    } else if source_meta.file_type().is_symlink() {
         "symlink"
     } else {
         "other"
@@ -143,24 +143,30 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         });
     }
 
-    match fs::symlink_metadata(&destination) {
-        Ok(meta) => {
-            if meta.is_dir() {
-                return Err(Error::InvalidPath(
-                    "destination exists and is a directory".to_string(),
-                ));
-            }
-            if !request.overwrite {
-                return Err(Error::InvalidPath("destination exists".to_string()));
-            }
-            fs::remove_file(&destination)
-                .map_err(|err| Error::io_path("remove_file", &to_relative, err))?;
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+    let destination_meta = match fs::symlink_metadata(&destination) {
+        Ok(meta) => Some(meta),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => return Err(Error::io_path("metadata", &to_relative, err)),
+    };
+
+    if let Some(dest_meta) = &destination_meta {
+        if dest_meta.is_dir() {
+            return Err(Error::InvalidPath(
+                "destination exists and is a directory".to_string(),
+            ));
+        }
+        if !request.overwrite {
+            return Err(Error::InvalidPath("destination exists".to_string()));
+        }
+        if source_meta.is_dir() {
+            return Err(Error::InvalidPath(
+                "refusing to overwrite an existing destination with a directory".to_string(),
+            ));
+        }
     }
 
-    fs::rename(&source, &destination).map_err(|err| Error::io_path("rename", &to_relative, err))?;
+    super::io::rename_replace(&source, &destination, request.overwrite)
+        .map_err(|err| Error::io_path("rename", &to_relative, err))?;
 
     Ok(MovePathResponse {
         from: from_relative,

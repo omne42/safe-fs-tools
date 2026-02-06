@@ -1,3 +1,4 @@
+use std::collections::BinaryHeap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -34,6 +35,32 @@ pub struct ListDirResponse {
     pub skipped_io_errors: u64,
 }
 
+#[derive(Debug)]
+struct Candidate(ListDirEntry);
+
+impl PartialEq for Candidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.name == other.0.name && self.0.path == other.0.path
+    }
+}
+
+impl Eq for Candidate {}
+
+impl PartialOrd for Candidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Candidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .name
+            .cmp(&other.0.name)
+            .then_with(|| self.0.path.cmp(&other.0.path))
+    }
+}
+
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
     if !ctx.policy.permissions.list_dir {
         return Err(Error::NotPermitted(
@@ -59,34 +86,35 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     }
 
     let root_path = ctx.canonical_root(&request.root_id)?.clone();
-    let mut entries = Vec::<ListDirEntry>::new();
-    let mut truncated = false;
+    let mut heap = BinaryHeap::<Candidate>::new();
+    let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;
 
-    let mut rows = fs::read_dir(&dir)
-        .map_err(|err| Error::io_path("read_dir", &relative_dir, err))?
-        .collect::<std::io::Result<Vec<_>>>()
-        .map_err(|err| Error::io_path("read_dir", &relative_dir, err))?;
-    rows.sort_by_key(|entry| entry.file_name());
-
-    for entry in rows {
+    for entry in fs::read_dir(&dir).map_err(|err| Error::io_path("read_dir", &relative_dir, err))? {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                skipped_io_errors = skipped_io_errors.saturating_add(1);
+                continue;
+            }
+        };
         let path = entry.path();
-        let relative = crate::path_utils::strip_prefix_case_insensitive(&path, &root_path)
-            .unwrap_or(path.clone());
+        let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, &root_path) {
+            Some(relative) => relative,
+            None => {
+                skipped_io_errors = skipped_io_errors.saturating_add(1);
+                continue;
+            }
+        };
 
         if ctx.redactor.is_path_denied(&relative) {
             continue;
         }
 
-        if entries.len() >= max_entries {
-            truncated = true;
-            break;
-        }
-
         let file_type = match entry.file_type() {
             Ok(value) => value,
             Err(_) => {
-                skipped_io_errors += 1;
+                skipped_io_errors = skipped_io_errors.saturating_add(1);
                 continue;
             }
         };
@@ -105,17 +133,36 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         if file_type.is_file() {
             match entry.metadata() {
                 Ok(meta) => size_bytes = meta.len(),
-                Err(_) => skipped_io_errors += 1,
+                Err(_) => skipped_io_errors = skipped_io_errors.saturating_add(1),
             }
         }
 
-        entries.push(ListDirEntry {
+        let candidate = Candidate(ListDirEntry {
             path: relative,
             name: entry.file_name().to_string_lossy().into_owned(),
             kind: kind.to_string(),
             size_bytes,
         });
+
+        matched_entries = matched_entries.saturating_add(1);
+        if heap.len() < max_entries {
+            heap.push(candidate);
+            continue;
+        }
+
+        let should_replace = heap
+            .peek()
+            .is_some_and(|top| candidate.cmp(top) == std::cmp::Ordering::Less);
+        if should_replace {
+            let _ = heap.pop();
+            heap.push(candidate);
+        }
     }
+
+    let truncated = matched_entries > max_entries;
+
+    let mut entries = heap.into_vec().into_iter().map(|c| c.0).collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
 
     Ok(ListDirResponse {
         path: relative_dir,

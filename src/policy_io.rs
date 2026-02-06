@@ -24,6 +24,14 @@ pub fn load_policy(path: impl AsRef<Path>) -> Result<SandboxPolicy> {
     load_policy_limited(path, DEFAULT_MAX_POLICY_BYTES)
 }
 
+/// Load and validate a policy file from disk with a byte limit.
+///
+/// Format detection is by file extension:
+/// - `.json` => JSON
+/// - `.toml` or no extension => TOML
+///
+/// This rejects symlink paths and non-regular files (FIFOs, sockets, device nodes) to avoid
+/// blocking behavior and related DoS risks.
 pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<SandboxPolicy> {
     if max_bytes == 0 {
         return Err(Error::InvalidPolicy(
@@ -32,7 +40,14 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
     }
 
     let path = path.as_ref();
-    let meta = std::fs::metadata(path).map_err(|err| Error::io_path("metadata", path, err))?;
+    let meta =
+        std::fs::symlink_metadata(path).map_err(|err| Error::io_path("metadata", path, err))?;
+    if meta.file_type().is_symlink() {
+        return Err(Error::InvalidPath(format!(
+            "path {} is a symlink; refusing to load policy from symlink paths",
+            path.display()
+        )));
+    }
     if !meta.is_file() {
         return Err(Error::InvalidPath(format!(
             "path {} is not a regular file",

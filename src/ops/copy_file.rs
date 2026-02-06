@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -159,15 +160,50 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
             if !request.overwrite {
                 return Err(Error::InvalidPath("destination exists".to_string()));
             }
-            fs::remove_file(&destination)
-                .map_err(|err| Error::io_path("remove_file", &to_relative, err))?;
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(Error::io_path("metadata", &to_relative, err)),
     }
 
-    let bytes =
-        fs::copy(&source, &destination).map_err(|err| Error::io_path("copy", &to_relative, err))?;
+    let input =
+        fs::File::open(&source).map_err(|err| Error::io_path("open", &from_relative, err))?;
+
+    let parent = destination.parent().ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "invalid destination path {}: missing parent directory",
+            to_relative.display()
+        ))
+    })?;
+
+    let mut tmp_file = tempfile::Builder::new()
+        .prefix(".safe-fs-tools.")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .map_err(|err| Error::io_path("create_temp", &to_relative, err))?;
+
+    let limit = ctx.policy.limits.max_write_bytes.saturating_add(1);
+    let bytes = std::io::copy(&mut input.take(limit), tmp_file.as_file_mut())
+        .map_err(|err| Error::io_path("copy", &to_relative, err))?;
+    if bytes > ctx.policy.limits.max_write_bytes {
+        return Err(Error::FileTooLarge {
+            path: from_relative.clone(),
+            size_bytes: bytes,
+            max_bytes: ctx.policy.limits.max_write_bytes,
+        });
+    }
+
+    tmp_file
+        .as_file_mut()
+        .sync_all()
+        .map_err(|err| Error::io_path("sync", &to_relative, err))?;
+
+    let perms = meta.permissions();
+    let tmp_path = tmp_file.into_temp_path();
+    fs::set_permissions(&tmp_path, perms)
+        .map_err(|err| Error::io_path("set_permissions", &to_relative, err))?;
+
+    super::io::rename_replace(tmp_path.as_ref(), &destination, request.overwrite)
+        .map_err(|err| Error::io_path("rename", &to_relative, err))?;
 
     Ok(CopyFileResponse {
         from: from_relative,
