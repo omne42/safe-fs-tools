@@ -201,3 +201,27 @@ fn normalize_path_lexical_preserves_verbatim_prefix_root() {
         PathBuf::from(r"\\?\C:\foo")
     );
 }
+
+#[test]
+#[cfg(windows)]
+fn rename_replace_honors_replace_existing_flag() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("src.txt");
+    let dest = dir.path().join("dest.txt");
+
+    fs::write(&src, "new").expect("write src");
+    fs::write(&dest, "old").expect("write dest");
+
+    let err = io::rename_replace(&src, &dest, false).expect_err("should not overwrite");
+    assert!(
+        err.kind() == std::io::ErrorKind::AlreadyExists
+            || err.raw_os_error() == Some(80)
+            || err.raw_os_error() == Some(183),
+        "unexpected error: {err:?}"
+    );
+
+    io::rename_replace(&src, &dest, true).expect("overwrite");
+    let out = fs::read_to_string(&dest).expect("read dest");
+    assert_eq!(out, "new");
+    assert!(!src.exists());
+}

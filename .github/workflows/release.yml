@@ -47,7 +47,13 @@ jobs:
           esac
 
           asset="safe-fs-tools-${os}-${arch}.tar.gz"
-          tar -C target/release -czf "dist/${asset}" "${bin_name}"
+          stage_root="dist/stage"
+          stage_dir="${stage_root}/safe-fs-tools-${os}-${arch}"
+          rm -rf "${stage_root}"
+          mkdir -p "${stage_dir}"
+          cp "target/release/${bin_name}" "${stage_dir}/${bin_name}"
+          cp "README.md" "policy.example.toml" "${stage_dir}/"
+          tar -C "${stage_root}" -czf "dist/${asset}" "safe-fs-tools-${os}-${arch}"
           (
             cd dist
             shasum -a 256 "${asset}" | awk '{print $1 "  " $2}' >"${asset}.sha256"
@@ -63,8 +69,12 @@ jobs:
           if ($arch -eq "x64") { $arch = "x64" }
           elseif ($arch -eq "arm64") { $arch = "arm64" }
           $asset = "safe-fs-tools-$os-$arch.zip"
-          $exe = "target\\release\\safe-fs-tools.exe"
-          Compress-Archive -Path $exe -DestinationPath ("dist\\" + $asset) -Force
+          $stage = Join-Path "dist" ("safe-fs-tools-" + $os + "-" + $arch)
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "target\\release\\safe-fs-tools.exe" -Destination (Join-Path $stage "safe-fs-tools.exe") -Force
+          Copy-Item "README.md" -Destination (Join-Path $stage "README.md") -Force
+          Copy-Item "policy.example.toml" -Destination (Join-Path $stage "policy.example.toml") -Force
+          Compress-Archive -Path $stage -DestinationPath ("dist\\" + $asset) -Force
           $hash = (Get-FileHash ("dist\\" + $asset) -Algorithm SHA256).Hash.ToLower()
           "$hash  $asset" | Out-File -Encoding utf8NoBOM ("dist\\" + $asset + ".sha256")
 
@@ -75,7 +85,7 @@ jobs:
           path: dist/*
 
   publish:
-    name: Publish (GitHub Release + crates.io)
+    name: Publish (GitHub Release)
     needs: build-binaries
     runs-on: ubuntu-latest
     permissions:
@@ -86,6 +96,9 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Run workspace tests
+        run: cargo test --workspace
 
       - name: Verify tag matches crate versions
         shell: bash
@@ -135,59 +148,3 @@ jobs:
           files: |
             dist/*
           generate_release_notes: true
-
-      - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
-            echo "Skipping crates.io publish (CARGO_REGISTRY_TOKEN is not set)."
-            exit 0
-          fi
-
-          cargo metadata --no-deps --format-version 1 | python3 - <<'PY'
-          import json
-          import sys
-
-          m = json.load(sys.stdin)
-          pkgs = {p["name"]: p for p in m.get("packages", [])}
-          required = ("safe-fs-tools", "safe-fs-tools-cli")
-          missing = [name for name in required if name not in pkgs]
-          if missing:
-            print(f"Skipping crates.io publish (missing packages in metadata): {missing}")
-            sys.exit(0)
-
-          no_license = []
-          for name in required:
-            p = pkgs[name]
-            if not (p.get("license") or p.get("license_file")):
-              no_license.append(name)
-          if no_license:
-            print(
-              "Skipping crates.io publish (missing license/license-file in Cargo.toml for: "
-              + ", ".join(no_license)
-              + ")."
-            )
-            sys.exit(0)
-          PY
-
-          for attempt in 1 2 3 4 5 6; do
-            if cargo publish -p safe-fs-tools; then
-              break
-            fi
-            echo "safe-fs-tools publish failed (attempt ${attempt}); retrying in 15s..." >&2
-            sleep 15
-          done
-
-          for attempt in 1 2 3 4 5 6; do
-            if cargo publish -p safe-fs-tools-cli; then
-              exit 0
-            fi
-            echo "safe-fs-tools-cli publish failed (attempt ${attempt}); retrying in 15s..." >&2
-            sleep 15
-          done
-
-          echo "crates.io publish still failing after retries." >&2
-          exit 1

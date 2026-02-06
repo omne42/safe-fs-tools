@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Policy: add `permissions.{list_dir,stat,mkdir,write,move,copy_file}`.
 - CLI: add commands `list-dir`, `stat`, `mkdir`, `write`, `move`, `copy-file` and extend `delete` with `--recursive` and `--ignore-missing`.
 - Dev: add GitHub Actions workflows (CI/docs/release) and a shared `scripts/gate.sh`.
+- Tests: add a Windows regression test for `rename_replace` overwrite semantics.
 
 ### Changed
 
@@ -21,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs: expand README and policy example to include new operations and permissions.
 - Docs: mark DB-VFS decision implemented, reference the `db-vfs` project, clarify `path_prefix`/CAS semantics, and add a Postgres run example for `db-vfs-service`.
 - Docs: update the example upstream integration name to `omne-agent`.
+- CI: `release` workflow now runs `cargo test --workspace` before publishing artifacts.
+- Docs: README now includes a TOC and a "常见失败" troubleshooting section.
 
 ### Fixed
 
@@ -28,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI: fix Windows-only test compilation (`PathBuf` comparison).
 - CI: fix Windows `policy_io` TOML tests (avoid backslash escape issues in `path`).
 - Docs: add a GitHub Pages root `index.html` redirect so the docs site doesn’t 404.
+- CLI: reject symlink paths for patch/content input files loaded by `load_text_limited`.
 
 ## [0.1.0] - 2026-01-31
 

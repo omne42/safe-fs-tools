@@ -3,6 +3,8 @@
 `safe-fs-tools` is a small Rust library + CLI that provides filesystem tools:
 `read`, `list_dir`, `glob`, `grep`, `stat`, `edit`, `patch`, `mkdir`, `write`, `move`, `copy_file`, `delete`.
 
+MSRV / toolchain: this project is pinned via `rust-toolchain.toml` (currently Rust 1.92.0).
+
 The point is **not** the commands — it is the **explicit safety model**:
 
 - `SandboxPolicy`: what is allowed at all
@@ -17,11 +19,23 @@ Important boundaries:
 - Text ops (`read`/`edit`/`patch`) only operate on regular files; special files (FIFOs, sockets, device nodes) are rejected to prevent blocking/DoS.
 - See `SECURITY.md` for the threat model.
 
+## 目录
+
+- [Semantics](#semantics)
+- [CLI](#cli)
+- [Library](#library)
+- [Policy format (TOML)](#policy-format-toml)
+- [Optional: policy-io](#optional-policy-io)
+- [Cargo features](#cargo-features)
+- [Dev](#dev)
+- [常见失败](#常见失败)
+
 ## Semantics
 
 - Roots are configured explicitly in `SandboxPolicy.roots` and canonicalized in `ops::Context::new`.
 - `root.path` must be an absolute path to an existing directory (absolute-path validation happens in `SandboxPolicy::validate`; existence/directory checks happen in `Context::new`).
 - Relative paths are resolved by `root.path.join(path)`; absolute paths are accepted by default (`policy.paths.allow_absolute=true`) but must still end up inside the selected root (paths that are lexically outside the root are rejected before filesystem canonicalization). Set `policy.paths.allow_absolute=false` to require root-relative inputs.
+- `list_dir` lists direct children of a directory and returns entries sorted by name. `max_entries` caps results (default: `limits.max_results`); when exceeded, it returns a deterministic partial result (the first N names) with `truncated=true`. For very large directories, this can still be expensive (it must consider all entries to preserve ordering/truncation semantics).
 - Directory traversal (`glob`/`grep`) uses `walkdir` with `follow_links(false)` and is best-effort: unreadable entries are skipped.
 - Directory traversal does **not** read or respect `.gitignore` (only policy deny/skip rules). See `docs/example-survey.md` for related tradeoffs in other projects.
 - Symlinked **files** are treated as files, but their resolved targets must stay within the selected root; symlinked **directories** are not traversed.
@@ -37,6 +51,7 @@ Important boundaries:
 - `limits.max_walk_ms` optionally caps wall-clock traversal time for `glob`/`grep` (responses include `elapsed_ms`).
 - When a cap is hit, responses set `scan_limit_reached=true` and `scan_limit_reason` (`entries`/`files`/`time`/`results`).
 - `limits.max_read_bytes` is a hard cap (no implicit truncation). `read`/`edit`/`patch` fail if the operation would exceed the cap; `grep` skips files above the cap.
+- `limits.max_write_bytes` is a hard cap for write-like operations. `write`/`edit`/`patch` fail if the result would exceed the cap, and `copy_file` fails if the source file is larger than the cap.
 - `limits.max_patch_bytes` optionally caps unified-diff patch *input* size (defaults to `limits.max_read_bytes` if unset).
 - For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).
 - `read`/`edit`/`patch`/`delete` responses include `requested_path` (normalized input path) and `path` (resolved path relative to the root; canonicalized when possible). For symlinked files these can differ. For absolute inputs, `requested_path` is best-effort and may be returned as root-relative when possible. For `delete` with `ignore_missing=true`, `path` may equal `requested_path` when the target (or its parent directory) does not exist.
@@ -65,6 +80,8 @@ Security note: the CLI is **not** a hard sandbox boundary. The `--policy` path a
 The CLI rejects non-regular policy/patch input files (FIFOs, sockets, device nodes) to avoid blocking/DoS.
 
 If you expose tool stderr to untrusted users, use `--error-format json --redact-paths` to avoid leaking absolute paths in error output (best-effort). Paths outside configured roots may still reveal sensitive file names; use `--redact-paths-strict` for stricter redaction.
+
+Note: `--redact-paths` uses the configured root paths (and best-effort canonicalized roots) to strip prefixes. If a root cannot be canonicalized, redaction may fall back to file-name-only output for absolute paths outside known roots.
 
 ```bash
 safe-fs-tools --policy policy.toml read  --root workspace path/to/file.txt
@@ -158,3 +175,11 @@ Enable hooks:
 ```bash
 git config core.hooksPath githooks
 ```
+
+## 常见失败
+
+- `invalid path` / `outside_root`：请求路径超出 root，或 `paths.allow_absolute=false` 时使用了绝对路径。
+- `secret_path_denied`：命中 `secrets.deny_globs`，先检查策略是否过宽。
+- `file_too_large` / `input_too_large`：超出 `limits.*` 配置，按场景调大或分片处理输入。
+- `invalid utf-8`：`read`/`edit`/`patch` 仅支持 UTF-8 文本文件。
+- `not_permitted`：对应 `permissions.*` 被关闭，或 root 为 `read_only`。
