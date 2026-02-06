@@ -30,7 +30,7 @@ max_results = 2000
 max_walk_entries = 500000
 max_walk_files = 200000
 # Optional wall-clock traversal budget for `glob`/`grep` (ms). Omit for no budget.
-# max_walk_ms = 1000
+# max_walk_ms = 1000 # recommended starting point for untrusted inputs
 max_line_bytes = 4096
 
 # Suggested tighter budgets for server / untrusted workloads (example only):
@@ -53,6 +53,8 @@ deny_globs = [
 ]
 redact_regexes = [
   "OPENAI_API_KEY=[A-Za-z0-9_\\-]+",
+  # More generic example (tune to your environment; avoid overly-broad patterns):
+  # "(?i)\\b(token|api[_-]?key)=[A-Za-z0-9_\\-]{16,}\\b",
 ]
 replacement = "***REDACTED***"
 

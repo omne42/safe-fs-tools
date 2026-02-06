@@ -13,7 +13,9 @@ echo "gate: rust (fmt/check/clippy/test)" >&2
   cd "$repo_root"
   cargo fmt --all -- --check
   cargo check --workspace --all-targets
-  cargo check --workspace --all-targets --no-default-features
+  # Note: `--workspace --no-default-features` is not enough here because workspace members can
+  # enable features on each other (feature unification). Check the library crate explicitly.
+  cargo check -p safe-fs-tools --all-targets --no-default-features
   cargo clippy --workspace --all-targets -- -D warnings
   cargo test --workspace
 )

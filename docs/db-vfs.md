@@ -162,6 +162,21 @@ cargo run -p db-vfs-service --features postgres -- \
   --listen 127.0.0.1:8080
 ```
 
+## Semantic differences vs local-fs `safe-fs-tools`
+
+Even if the high-level operations look similar (`read/glob/grep/write/patch/delete`), DB-VFS is
+**not** a drop-in replacement for the local filesystem backend:
+
+- **Path model**: DB-VFS paths live in a namespace `(workspace_id, path)` (optionally constrained by
+  a `path_prefix`), not OS paths. There are no drive letters, UNC prefixes, or platform-specific
+  separators.
+- **Symlinks / special files**: local-fs semantics must defend against symlinks, special files, and
+  best-effort root boundary enforcement. DB-VFS can (and should) exclude these concepts entirely.
+- **Concurrency model**: DB-VFS uses CAS/versioning (`expected_version`) to make concurrent edits
+  explicit. Local-fs `safe-fs-tools` is best-effort and not TOCTOU-hardened.
+- **Traversal cost**: DB-VFS “glob/grep” should be scoped by `path_prefix` and can leverage DB
+  indexes; local-fs traversal is a directory walk with strict budgets.
+
 ## Open questions
 
 - Do we want an append-only mode for crawlers (write new versions, never mutate)?

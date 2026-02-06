@@ -10,6 +10,7 @@ fi
 
 has_changelog=0
 other_count=0
+changelog_required=0
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
   if [[ "$path" == "CHANGELOG.md" ]]; then
@@ -17,24 +18,34 @@ while IFS= read -r path; do
   else
     other_count=$((other_count + 1))
   fi
+
+  case "$path" in
+    src/* | cli/* | Cargo.toml | policy.example.toml)
+      changelog_required=1
+      ;;
+  esac
 done <<<"$staged_files"
 
-if [[ "$has_changelog" -ne 1 ]]; then
-  cat >&2 <<'EOF'
+if [[ "$changelog_required" -eq 1 && "$has_changelog" -ne 1 ]]; then
+  if [[ "${SAFE_FS_ALLOW_NO_CHANGELOG:-}" == "1" ]]; then
+    echo "pre-commit: skipping CHANGELOG.md requirement (SAFE_FS_ALLOW_NO_CHANGELOG=1)." >&2
+  else
+    cat >&2 <<'EOF'
 pre-commit: CHANGELOG.md must be updated in the same commit.
 
 - Add an entry under [Unreleased] in CHANGELOG.md.
 - Stage it: git add CHANGELOG.md
 EOF
-  exit 1
+    exit 1
+  fi
 fi
 
-if [[ "$other_count" -eq 0 ]]; then
+if [[ "$has_changelog" -eq 1 && "$other_count" -eq 0 ]]; then
   echo "pre-commit: refusing changelog-only commit; commit the actual change together with CHANGELOG.md." >&2
   exit 1
 fi
 
-if [[ "${SAFE_FS_ALLOW_CHANGELOG_RELEASE_EDIT:-}" != "1" ]]; then
+if [[ "$has_changelog" -eq 1 && "${SAFE_FS_ALLOW_CHANGELOG_RELEASE_EDIT:-}" != "1" ]]; then
   head_changelog="$(git show HEAD:CHANGELOG.md 2>/dev/null || true)"
   index_changelog="$(git show :CHANGELOG.md 2>/dev/null || true)"
 
@@ -57,10 +68,28 @@ EOF
 fi
 
 max_rs_lines="${SAFE_FS_MAX_RS_LINES:-1000}"
+exempt_prefixes_raw="${SAFE_FS_MAX_RS_LINES_EXEMPT_PREFIXES:-}"
+IFS=',' read -r -a exempt_prefixes <<<"${exempt_prefixes_raw}"
+
+is_exempt_rs_path() {
+  local p="${1:?}"
+  for prefix in "${exempt_prefixes[@]}"; do
+    # Allow commas/spaces in env var; trim leading/trailing spaces in each prefix.
+    prefix="${prefix#"${prefix%%[![:space:]]*}"}"
+    prefix="${prefix%"${prefix##*[![:space:]]}"}"
+    [[ -z "$prefix" ]] && continue
+    [[ "$p" == "$prefix"* ]] && return 0
+  done
+  return 1
+}
+
 offenders=()
 tracked_rs_files="$(git ls-files '*.rs' || true)"
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
+  if is_exempt_rs_path "$path"; then
+    continue
+  fi
   lines="$(git show ":$path" 2>/dev/null | awk 'END{print NR}')"
   if [[ "${lines:-0}" -gt "$max_rs_lines" ]]; then
     offenders+=("$path ($lines)")
@@ -78,6 +107,9 @@ $(printf '  - %s\n' "${offenders[@]}")
 
 如果你确实需要临时放宽限制，可设置：
   SAFE_FS_MAX_RS_LINES=<N> git commit ...
+
+如果你确实需要对某些目录豁免（例如生成代码/fixture），可设置：
+  SAFE_FS_MAX_RS_LINES_EXEMPT_PREFIXES=path/prefix1/,path/prefix2/ git commit ...
 EOF
   exit 1
 fi

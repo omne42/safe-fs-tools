@@ -60,3 +60,13 @@ It exists to justify and keep `safe-fs-tools`' boundaries explicit and minimal.
 - **Symlink traversal**: `safe-fs-tools` chooses `follow_links(false)` (CodexMonitor-style) for `glob`/`grep` to avoid crawling symlinked directories, which simplifies root-boundary reasoning. `codex` file-search can enable `follow_links(true)` for UX/search completeness, but that comes with more complex boundary expectations.
 - **Search implementation**: projects like `oh-my-opencode-slim` delegate content search to `rg` and enforce time/output limits in the wrapper. `safe-fs-tools` keeps a library-first, dependency-light implementation (WalkDir + bounded reads) so redaction/deny-globs/limits apply uniformly across library + CLI without shelling out.
 - **Patch semantics**: `ai`’s `apply_patch` tool is operation-based (and streams deltas) rather than unified-diff based. `safe-fs-tools` intentionally sticks to unified-diff patching (`diffy`) to keep filesystem semantics explicit and minimal.
+
+## Conclusions (for safe-fs-tools)
+
+The “iron rules” this project follows:
+
+- **Explicit policy boundary**: every operation is gated by `SandboxPolicy` (roots/permissions/limits/secrets). No implicit “smart” behavior.
+- **Root-bounded paths**: paths are resolved against an explicit root and rejected if they escape it (best-effort; not TOCTOU-hardened).
+- **No symlink dir traversal**: traversal uses `walkdir` with `follow_links(false)`; symlinked *files* are allowed only if their targets stay within the root.
+- **No `.gitignore` semantics**: traversal ignores `.gitignore`; only policy deny/skip rules apply.
+- **Budgets over completeness**: traversal ops (`glob`/`grep`) may return deterministic partial results under strict budgets and explain skips via counters.

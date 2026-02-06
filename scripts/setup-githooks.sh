@@ -8,7 +8,14 @@ if [[ -z "$repo_root" ]]; then
 fi
 
 git -C "$repo_root" config core.hooksPath githooks
-chmod +x "$repo_root/githooks/"*
+for hook in pre-commit commit-msg; do
+  hook_path="$repo_root/githooks/$hook"
+  if [[ ! -f "$hook_path" ]]; then
+    echo "setup-githooks: missing hook: $hook_path" >&2
+    exit 1
+  fi
+  chmod +x "$hook_path"
+done
 
 echo "Configured git hooks: core.hooksPath=githooks" >&2
 echo "Hooks enabled: pre-commit, commit-msg" >&2

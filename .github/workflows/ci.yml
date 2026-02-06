@@ -29,11 +29,6 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Gates (linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Gates
         shell: bash
         run: ./scripts/gate.sh
-
-      - name: Tests (macOS / Windows)
-        if: matrix.os != 'ubuntu-latest'
-        run: cargo test --workspace

@@ -37,7 +37,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build rustdoc
-        run: cargo doc -p safe-fs-tools --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc -p safe-fs-tools --no-deps --all-features
 
       - name: Add root index.html
         shell: bash
