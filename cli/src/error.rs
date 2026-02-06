@@ -107,6 +107,15 @@ pub(crate) fn tool_error_details(tool: &safe_fs_tools::Error) -> Option<serde_js
     tool_error_details_with(tool, None, false, false)
 }
 
+fn details_map(kind: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    out.insert(
+        "kind".to_string(),
+        serde_json::Value::String(kind.to_string()),
+    );
+    out
+}
+
 pub(crate) fn tool_error_details_with(
     tool: &safe_fs_tools::Error,
     redaction: Option<&PathRedaction>,
@@ -115,11 +124,7 @@ pub(crate) fn tool_error_details_with(
 ) -> Option<serde_json::Value> {
     match tool {
         safe_fs_tools::Error::Io(err) => {
-            let mut out = serde_json::Map::new();
-            out.insert(
-                "kind".to_string(),
-                serde_json::Value::String("io".to_string()),
-            );
+            let mut out = details_map("io");
             out.insert(
                 "io_kind".to_string(),
                 serde_json::Value::String(format!("{:?}", err.kind())),
@@ -136,11 +141,7 @@ pub(crate) fn tool_error_details_with(
             Some(serde_json::Value::Object(out))
         }
         safe_fs_tools::Error::IoPath { op, path, source } => {
-            let mut out = serde_json::Map::new();
-            out.insert(
-                "kind".to_string(),
-                serde_json::Value::String("io_path".to_string()),
-            );
+            let mut out = details_map("io_path");
             out.insert("op".to_string(), serde_json::Value::String(op.to_string()));
             out.insert(
                 "path".to_string(),
@@ -167,11 +168,7 @@ pub(crate) fn tool_error_details_with(
             Some(serde_json::Value::Object(out))
         }
         safe_fs_tools::Error::InvalidPolicy(message) => {
-            let mut out = serde_json::Map::new();
-            out.insert(
-                "kind".to_string(),
-                serde_json::Value::String("invalid_policy".to_string()),
-            );
+            let mut out = details_map("invalid_policy");
             out.insert(
                 "message".to_string(),
                 serde_json::Value::String(if redact_paths {
@@ -183,11 +180,7 @@ pub(crate) fn tool_error_details_with(
             Some(serde_json::Value::Object(out))
         }
         safe_fs_tools::Error::InvalidPath(message) => {
-            let mut out = serde_json::Map::new();
-            out.insert(
-                "kind".to_string(),
-                serde_json::Value::String("invalid_path".to_string()),
-            );
+            let mut out = details_map("invalid_path");
             out.insert(
                 "message".to_string(),
                 serde_json::Value::String(if redact_paths {
@@ -246,11 +239,7 @@ pub(crate) fn tool_error_details_with(
             "max_bytes": max_bytes,
         })),
         safe_fs_tools::Error::WalkDirRoot { path, source } => {
-            let mut out = serde_json::Map::new();
-            out.insert(
-                "kind".to_string(),
-                serde_json::Value::String("walkdir".to_string()),
-            );
+            let mut out = details_map("walkdir");
             out.insert(
                 "path".to_string(),
                 serde_json::Value::String(format_path_for_error(
@@ -277,11 +266,7 @@ pub(crate) fn tool_error_details_with(
         }
         safe_fs_tools::Error::WalkDir(err) => {
             if redact_paths {
-                let mut out = serde_json::Map::new();
-                out.insert(
-                    "kind".to_string(),
-                    serde_json::Value::String("walkdir".to_string()),
-                );
+                let mut out = details_map("walkdir");
                 if let Some(path) = err.path() {
                     out.insert(
                         "path".to_string(),

@@ -2,7 +2,9 @@
 name = "safe-fs-tools-cli"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.92"
 description = "CLI for safe-fs-tools (safe filesystem operations with explicit sandbox policy)."
+publish = false
 
 [[bin]]
 name = "safe-fs-tools"
