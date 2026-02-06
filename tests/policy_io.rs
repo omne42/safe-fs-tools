@@ -1,19 +1,12 @@
 #[cfg(feature = "policy-io")]
+#[cfg(unix)]
+#[path = "common/unix_helpers.rs"]
+mod unix_helpers;
+
+#[cfg(feature = "policy-io")]
 mod policy_io {
     use safe_fs_tools::ops::Context;
     use safe_fs_tools::policy::{Permissions, Root, RootMode, SandboxPolicy};
-
-    #[cfg(unix)]
-    fn create_fifo(path: &std::path::Path) {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt;
-
-        let c_path = CString::new(path.as_os_str().as_bytes()).expect("c path");
-        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
-        if rc != 0 {
-            panic!("mkfifo failed: {}", std::io::Error::last_os_error());
-        }
-    }
 
     #[test]
     fn load_policy_toml_and_json() {
@@ -96,7 +89,7 @@ read = true
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("policy.toml");
-        create_fifo(&path);
+        crate::unix_helpers::create_fifo(&path);
 
         let mut fifo_writer = std::fs::OpenOptions::new()
             .read(true)
@@ -108,6 +101,43 @@ read = true
         let err = safe_fs_tools::policy_io::load_policy_limited(&path, 8).expect_err("reject");
         match err {
             safe_fs_tools::Error::InvalidPath(_) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn load_policy_rejects_symlink_paths() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+
+        let real_policy = dir.path().join("real.toml");
+        std::fs::write(
+            &real_policy,
+            format!(
+                r#"
+[[roots]]
+id = "workspace"
+path = '{}'
+mode = "read_only"
+
+[permissions]
+read = true
+"#,
+                root_path.display()
+            ),
+        )
+        .expect("write toml");
+
+        let link_policy = dir.path().join("policy.toml");
+        symlink(&real_policy, &link_policy).expect("symlink");
+
+        let err = safe_fs_tools::policy_io::load_policy(&link_policy).expect_err("reject");
+        match err {
+            safe_fs_tools::Error::InvalidPath(msg) => assert!(msg.contains("symlink")),
             other => panic!("unexpected error: {other:?}"),
         }
     }

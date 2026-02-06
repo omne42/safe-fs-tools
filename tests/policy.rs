@@ -115,3 +115,26 @@ fn context_rejects_file_roots() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+fn policy_deserialization_rejects_unknown_fields() {
+    let raw = r#"
+{
+  "roots": [
+    {
+      "id": "root",
+      "path": "/",
+      "mode": "read_only",
+      "unknown_field": true
+    }
+  ],
+  "permissions": { "read": true }
+}
+"#;
+
+    let err = serde_json::from_str::<SandboxPolicy>(raw).expect_err("should reject");
+    assert!(
+        err.to_string().contains("unknown field"),
+        "unexpected error: {err}"
+    );
+}

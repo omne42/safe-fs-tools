@@ -11,6 +11,12 @@ use safe_fs_tools::policy::RootMode;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(unix)]
+fn is_root_user() -> bool {
+    // Safety: libc call with no preconditions.
+    unsafe { libc::geteuid() == 0 }
+}
+
 #[test]
 fn glob_patterns_support_leading_dot_slash() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -104,6 +110,11 @@ fn glob_does_not_follow_symlink_root_prefix() {
 #[test]
 #[cfg(unix)]
 fn glob_skips_walkdir_errors() {
+    if is_root_user() {
+        eprintln!("skipping: permission-based walkdir error tests do not work as root");
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
 
@@ -134,6 +145,11 @@ fn glob_skips_walkdir_errors() {
 #[test]
 #[cfg(unix)]
 fn glob_root_walkdir_error_does_not_leak_absolute_paths() {
+    if is_root_user() {
+        eprintln!("skipping: permission-based walkdir error tests do not work as root");
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
 
     let blocked = dir.path().join("blocked");

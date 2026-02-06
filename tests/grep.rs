@@ -14,6 +14,12 @@ use safe_fs_tools::ops::{GlobRequest, glob_paths};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(unix)]
+fn is_root_user() -> bool {
+    // Safety: libc call with no preconditions.
+    unsafe { libc::geteuid() == 0 }
+}
+
 #[test]
 fn grep_globs_support_leading_dot_slash() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -117,6 +123,11 @@ fn grep_does_not_follow_symlink_root_prefix() {
 #[test]
 #[cfg(unix)]
 fn grep_skips_walkdir_errors() {
+    if is_root_user() {
+        eprintln!("skipping: permission-based walkdir error tests do not work as root");
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
 
@@ -150,6 +161,11 @@ fn grep_skips_walkdir_errors() {
 #[test]
 #[cfg(unix)]
 fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
+    if is_root_user() {
+        eprintln!("skipping: permission-based walkdir error tests do not work as root");
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
 
     let blocked = dir.path().join("blocked");
@@ -189,6 +205,11 @@ fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
 #[test]
 #[cfg(unix)]
 fn grep_skips_unreadable_files() {
+    if is_root_user() {
+        eprintln!("skipping: permission-based unreadable file tests do not work as root");
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
     let unreadable = dir.path().join("b.txt");
