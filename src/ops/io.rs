@@ -138,8 +138,26 @@ pub(super) fn rename_replace(
         0
     };
 
-    // Safety: `src_w` and `dest_w` are NUL-terminated UTF-16 paths kept alive for the duration of
-    // the call; `MoveFileExW` reads them synchronously and does not store the pointers.
+    // WHY THIS UNSAFE EXISTS (and why we intentionally keep it):
+    //
+    // `safe-fs-tools` treats in-place updates as atomic replacement (temp file -> replace target)
+    // so readers never observe a "destination missing" gap during overwrite. A pure std fallback
+    // (`remove_*` + `fs::rename`) is not equivalent on Windows: it introduces a non-atomic window
+    // where destination can disappear, violating replacement semantics and weakening tool-level
+    // safety guarantees for concurrent readers.
+    //
+    // `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` provides the platform primitive for overwrite
+    // rename semantics without that delete-then-rename gap, so this call is a deliberate tradeoff:
+    // keep one narrow FFI boundary to preserve the atomicity contract.
+    //
+    // Safety conditions for this call:
+    // - `src_w` / `dest_w` are owned, NUL-terminated UTF-16 buffers.
+    // - Pointers passed to Win32 are valid for the full duration of the synchronous call.
+    // - Win32 does not retain these pointers after return.
+    // - All filesystem policy/root checks are performed by higher layers before reaching here.
+    //
+    // If someone wants to remove this `unsafe`, they must replace it with a Windows API path that
+    // preserves overwrite atomicity. Replacing with delete+rename is explicitly not acceptable.
     let moved = unsafe { MoveFileExW(src_w.as_ptr(), dest_w.as_ptr(), flags) };
     if moved == 0 {
         return Err(std::io::Error::last_os_error());
