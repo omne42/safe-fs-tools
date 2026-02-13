@@ -84,8 +84,9 @@ Notes:
 - `path_prefix` is optional in the API shape, but request validation should require a bounded scope:
   - `grep`: require explicit `path_prefix` (or an exact-path query that is already bounded).
   - `glob`: require `path_prefix` when the pattern is broad (for example `"**/*.md"`).
-  - If a safe literal prefix can be derived from the glob (for example `"docs/**/*.md"` ->
-    `"docs/"`), the service may use that derived prefix and accept omitted `path_prefix`.
+  - Derivation rule: auto-derive only when the glob starts with a contiguous literal directory prefix
+    before the first wildcard (for example `"docs/**/*.md"` -> `"docs/"`).
+  - Otherwise (no safe literal prefix), reject requests that omit `path_prefix`.
 - Concurrency (CAS) semantics in the MVP implementation:
   - `patch` requires `expected_version`.
   - `write(expected_version = None)` is **create-only** (conflicts if the file exists); updates
@@ -135,7 +136,8 @@ Budgets to enforce:
 
 ## Implementation notes
 
-This decision is implemented in the sibling `db-vfs/` project (crate + HTTP service).
+This decision is implemented in the sibling `db-vfs/` project (crate + HTTP service). For reproducible
+local validation, pin to a known commit/tag in that repository before running the examples below.
 
 Quick check:
 
@@ -164,6 +166,9 @@ cargo run -p db-vfs-service --features postgres -- \
   --policy ./policy.example.toml \
   --listen 127.0.0.1:8080
 ```
+
+Security note: do not put production credentials directly on a shell command line; prefer secrets
+injection or protected environment configuration.
 
 ## Semantic differences vs local-fs `safe-fs-tools`
 

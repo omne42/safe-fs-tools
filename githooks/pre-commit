@@ -3,26 +3,56 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-if ! IFS= read -r -d '' _first_staged < <(git diff --cached --name-only --diff-filter=ACMRD -z); then
+has_changelog=0
+changelog_deleted=0
+other_count=0
+changelog_required=0
+staged_count=0
+while IFS= read -r -d '' status; do
+  staged_count=$((staged_count + 1))
+  code="${status:0:1}"
+  has_non_changelog=0
+
+  if [[ "$code" == "R" || "$code" == "C" ]]; then
+    IFS= read -r -d '' old_path || break
+    IFS= read -r -d '' new_path || break
+    paths=("$old_path" "$new_path")
+  else
+    IFS= read -r -d '' path || break
+    paths=("$path")
+  fi
+
+  for path in "${paths[@]}"; do
+    if [[ "$path" == "CHANGELOG.md" ]]; then
+      if [[ "$code" == "D" ]]; then
+        changelog_deleted=1
+      else
+        has_changelog=1
+      fi
+    else
+      has_non_changelog=1
+    fi
+
+    case "$path" in
+      src/* | cli/* | Cargo.toml | policy.example.toml)
+        changelog_required=1
+        ;;
+    esac
+  done
+
+  if [[ "$has_non_changelog" -eq 1 ]]; then
+    other_count=$((other_count + 1))
+  fi
+done < <(git diff --cached --name-status --diff-filter=ACMRD -z || true)
+
+if [[ "$staged_count" -eq 0 ]]; then
   exit 0
 fi
 
-has_changelog=0
-other_count=0
-changelog_required=0
-while IFS= read -r -d '' path; do
-  if [[ "$path" == "CHANGELOG.md" ]]; then
-    has_changelog=1
-  else
-    other_count=$((other_count + 1))
-  fi
-
-  case "$path" in
-    src/* | cli/* | Cargo.toml | policy.example.toml)
-      changelog_required=1
-      ;;
-  esac
-done < <(git diff --cached --name-only --diff-filter=ACMRD -z || true)
+if [[ "$changelog_deleted" -eq 1 ]]; then
+  echo "pre-commit: refusing to delete CHANGELOG.md." >&2
+  exit 1
+fi
 
 if [[ "$changelog_required" -eq 1 && "$has_changelog" -ne 1 ]]; then
   if [[ "${SAFE_FS_ALLOW_NO_CHANGELOG:-}" == "1" ]]; then

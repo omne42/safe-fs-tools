@@ -37,8 +37,8 @@ Reasoning:
 
 Current position:
 
-- We do targeted TOCTOU reductions where practical (for example, open-handle validation in several
-  file operations).
+- We do targeted TOCTOU reductions where practical (for example, open-handle validation in
+  `read`/`edit`/`patch` paths and atomic replace semantics in write-like operations).
 - We do **not** claim complete race-resistant confinement at the filesystem boundary.
 - For hostile multi-tenant or adversarial-local-process scenarios, run `safe-fs-tools` inside an
   OS sandbox/container and treat this crate's policy layer as one defense-in-depth component.
@@ -69,7 +69,11 @@ If untrusted callers can control `path` inputs and observe detailed errors/timin
 
 ## Reporting
 
-If you discover a security issue, please open an issue with:
+If you discover a security issue, prefer a private disclosure channel first (for example GitHub
+private security reporting if enabled). Do not post full exploit details in a public issue before a
+fix is available.
+
+When reporting, include:
 
 - A minimal reproduction (commands / policy file / filesystem layout)
 - Expected vs actual behavior

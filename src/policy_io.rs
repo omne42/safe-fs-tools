@@ -40,17 +40,37 @@ fn open_policy_file(path: &Path) -> Result<std::fs::File> {
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn open_policy_file(path: &Path) -> Result<std::fs::File> {
-    let meta =
-        std::fs::symlink_metadata(path).map_err(|err| Error::io_path("metadata", path, err))?;
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options
+        .open(path)
+        .map_err(|err| Error::io_path("open", path, err))?;
+    let meta = file
+        .metadata()
+        .map_err(|err| Error::io_path("metadata", path, err))?;
     if meta.file_type().is_symlink() {
         return Err(Error::InvalidPath(format!(
             "path {} is a symlink; refusing to load policy from symlink paths",
             path.display()
         )));
     }
-    std::fs::File::open(path).map_err(|err| Error::io_path("open", path, err))
+    Ok(file)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn open_policy_file(path: &Path) -> Result<std::fs::File> {
+    let _ = path;
+    Err(Error::InvalidPath(
+        "loading policy files on this platform requires an atomic no-follow open primitive"
+            .to_string(),
+    ))
 }
 
 pub fn parse_policy(raw: &str, format: PolicyFormat) -> Result<SandboxPolicy> {
@@ -113,14 +133,23 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
     }
 
     let raw = std::str::from_utf8(&bytes).map_err(|_| Error::InvalidUtf8(path.to_path_buf()))?;
-    let format = match path.extension().and_then(|ext| ext.to_str()) {
-        Some("json") => PolicyFormat::Json,
-        Some("toml") | None => PolicyFormat::Toml,
-        Some(other) => {
-            return Err(Error::InvalidPolicy(format!(
-                "unsupported policy format {other:?}; expected .toml or .json"
-            )));
-        }
+    let format = match path.extension() {
+        None => PolicyFormat::Toml,
+        Some(ext) => match ext.to_str() {
+            Some("json") => PolicyFormat::Json,
+            Some("toml") => PolicyFormat::Toml,
+            Some(other) => {
+                return Err(Error::InvalidPolicy(format!(
+                    "unsupported policy format {other:?}; expected .toml or .json"
+                )));
+            }
+            None => {
+                return Err(Error::InvalidPolicy(
+                    "unsupported policy format with non-UTF-8 extension; expected .toml or .json"
+                        .to_string(),
+                ));
+            }
+        },
     };
     parse_policy(raw, format)
 }

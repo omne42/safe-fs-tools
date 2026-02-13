@@ -260,6 +260,8 @@ pub(super) fn walk_traversal_files(
     }
 
     let mut diag = TraversalDiagnostics::default();
+    let max_walk_entries = u64::try_from(ctx.policy.limits.max_walk_entries).unwrap_or(u64::MAX);
+    let max_walk_files = u64::try_from(ctx.policy.limits.max_walk_files).unwrap_or(u64::MAX);
 
     for entry in walkdir_traversal_iter(ctx, root_path, walk_root) {
         if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
@@ -273,7 +275,7 @@ pub(super) fn walk_traversal_files(
                 if err.depth() == 0 {
                     return Err(walkdir_root_error(root_path, walk_root, err));
                 }
-                if diag.scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
+                if diag.scanned_entries >= max_walk_entries {
                     diag.mark_limit_reached(ScanLimitReason::Entries);
                     break;
                 }
@@ -284,7 +286,7 @@ pub(super) fn walk_traversal_files(
         };
 
         if entry.depth() > 0 {
-            if diag.scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
+            if diag.scanned_entries >= max_walk_entries {
                 diag.mark_limit_reached(ScanLimitReason::Entries);
                 break;
             }
@@ -295,7 +297,7 @@ pub(super) fn walk_traversal_files(
         if !(file_type.is_file() || file_type.is_symlink()) {
             continue;
         }
-        if diag.scanned_files as usize >= ctx.policy.limits.max_walk_files {
+        if diag.scanned_files >= max_walk_files {
             diag.mark_limit_reached(ScanLimitReason::Files);
             break;
         }

@@ -41,11 +41,10 @@ fn deny_globs_reject_absolute_and_parent_segments() {
         let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
         policy.secrets.deny_globs = vec![pattern.to_string()];
         let err = Context::new(policy).expect_err("should reject");
-
-        match err {
-            safe_fs_tools::Error::InvalidPolicy(_) => {}
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert!(
+            matches!(err, safe_fs_tools::Error::InvalidPolicy(_)),
+            "pattern {pattern:?} should fail with InvalidPolicy, got: {err:?}"
+        );
     }
 }
 

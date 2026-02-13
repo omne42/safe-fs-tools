@@ -75,12 +75,13 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         });
     }
 
-    if updated != content {
+    let changed = updated != content;
+    if changed {
         super::io::write_bytes_atomic_checked(&path, &relative, updated.as_bytes(), identity)?;
     }
     Ok(PatchResponse {
         path: relative,
         requested_path: Some(requested_path),
-        bytes_written: updated.len() as u64,
+        bytes_written: if changed { updated.len() as u64 } else { 0 },
     })
 }

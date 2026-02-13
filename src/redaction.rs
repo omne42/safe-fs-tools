@@ -56,7 +56,10 @@ impl SecretRedactor {
         if !is_root_relative(relative) {
             return true;
         }
-        self.deny.is_match(normalize_path_for_glob(relative))
+        match normalize_path_for_glob(relative) {
+            Some(path) => self.deny.is_match(path.as_ref()),
+            None => true,
+        }
     }
 
     pub fn redact_text(&self, input: &str) -> String {
@@ -74,7 +77,7 @@ impl SecretRedactor {
 
 fn is_root_relative(path: &Path) -> bool {
     for component in path.components() {
-        if matches!(component, Component::RootDir) {
+        if matches!(component, Component::RootDir | Component::ParentDir) {
             return false;
         }
         #[cfg(windows)]
@@ -105,18 +108,26 @@ fn normalize_relative_path(path: &Path) -> Cow<'_, Path> {
 }
 
 #[cfg(windows)]
-fn normalize_path_for_glob(path: &Path) -> Cow<'_, Path> {
+fn has_lossy_utf8(path: &Path) -> bool {
+    path.to_string_lossy().contains('\u{FFFD}')
+}
+
+#[cfg(windows)]
+fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
     let path = normalize_relative_path(path);
+    if has_lossy_utf8(path.as_ref()) {
+        return None;
+    }
     let raw = path.to_string_lossy();
     if !raw.contains('\\') {
-        return path;
+        return Some(path);
     }
-    Cow::Owned(std::path::PathBuf::from(raw.replace('\\', "/")))
+    Some(Cow::Owned(std::path::PathBuf::from(raw.replace('\\', "/"))))
 }
 
 #[cfg(not(windows))]
-fn normalize_path_for_glob(path: &Path) -> Cow<'_, Path> {
-    normalize_relative_path(path)
+fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
+    Some(normalize_relative_path(path))
 }
 
 #[cfg(test)]
@@ -155,5 +166,17 @@ mod tests {
         let absolute = Path::new(r"C:\tmp\.git\config");
 
         assert!(redactor.is_path_denied(absolute));
+    }
+
+    #[test]
+    fn parent_relative_paths_are_denied_defensively() {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: Vec::new(),
+            replacement: "***".to_string(),
+        })
+        .expect("redactor");
+
+        assert!(redactor.is_path_denied(Path::new("../.git/config")));
     }
 }

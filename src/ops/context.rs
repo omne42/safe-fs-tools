@@ -45,7 +45,12 @@ impl Context {
                     canonical.display()
                 )));
             }
-            canonical_roots.insert(root.id.clone(), canonical);
+            if canonical_roots.insert(root.id.clone(), canonical).is_some() {
+                return Err(Error::InvalidPolicy(format!(
+                    "duplicate root id: {}",
+                    root.id
+                )));
+            }
         }
 
         #[cfg(any(feature = "glob", feature = "grep"))]

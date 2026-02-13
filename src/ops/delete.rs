@@ -82,7 +82,10 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
 
     let relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, &canonical_root)
-            .unwrap_or_else(|| canonical_parent.clone());
+            .ok_or_else(|| Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_path.clone(),
+            })?;
     let relative = relative_parent.join(file_name);
 
     if ctx.redactor.is_path_denied(&relative) {

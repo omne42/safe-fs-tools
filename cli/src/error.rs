@@ -73,6 +73,10 @@ pub(crate) fn format_path_for_error(
         return path.display().to_string();
     }
 
+    if strict_redact_paths {
+        return "<redacted>".to_string();
+    }
+
     if !path.is_absolute() {
         return path.display().to_string();
     }
@@ -92,10 +96,6 @@ pub(crate) fn format_path_for_error(
                 return relative.display().to_string();
             }
         }
-    }
-
-    if strict_redact_paths {
-        return "<redacted>".to_string();
     }
 
     path.file_name()
@@ -355,12 +355,6 @@ pub(crate) fn tool_public_message(
         safe_fs_tools::Error::WalkDirRoot { .. } | safe_fs_tools::Error::WalkDir(_) => {
             "walkdir error".to_string()
         }
-        _ => {
-            if redact_paths {
-                tool.code().to_string()
-            } else {
-                tool.to_string()
-            }
-        }
+        _ => tool.code().to_string(),
     }
 }

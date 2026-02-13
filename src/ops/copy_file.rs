@@ -120,17 +120,6 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         });
     }
 
-    if source == destination {
-        return Ok(CopyFileResponse {
-            from: from_relative,
-            to: to_relative,
-            requested_from: Some(requested_from),
-            requested_to: Some(requested_to),
-            copied: false,
-            bytes: 0,
-        });
-    }
-
     let (input, source_meta) = super::io::open_regular_file_for_read(&source, &from_relative)?;
     if source_meta.is_dir() {
         return Err(Error::InvalidPath("path is a directory".to_string()));
@@ -143,6 +132,17 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
             path: from_relative.clone(),
             size_bytes: source_meta.len(),
             max_bytes: ctx.policy.limits.max_write_bytes,
+        });
+    }
+
+    if source == destination {
+        return Ok(CopyFileResponse {
+            from: from_relative,
+            to: to_relative,
+            requested_from: Some(requested_from),
+            requested_to: Some(requested_to),
+            copied: false,
+            bytes: 0,
         });
     }
 

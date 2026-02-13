@@ -34,24 +34,46 @@ fn open_input_file(path: &Path) -> Result<std::fs::File, safe_fs_tools::Error> {
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn open_input_file(path: &Path) -> Result<std::fs::File, safe_fs_tools::Error> {
-    let meta = std::fs::symlink_metadata(path).map_err(|err| safe_fs_tools::Error::IoPath {
-        op: "metadata",
-        path: path.to_path_buf(),
-        source: err,
-    })?;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options
+        .open(path)
+        .map_err(|err| safe_fs_tools::Error::IoPath {
+            op: "open",
+            path: path.to_path_buf(),
+            source: err,
+        })?;
+    let meta = file
+        .metadata()
+        .map_err(|err| safe_fs_tools::Error::IoPath {
+            op: "metadata",
+            path: path.to_path_buf(),
+            source: err,
+        })?;
     if meta.file_type().is_symlink() {
         return Err(safe_fs_tools::Error::InvalidPath(format!(
             "path {} is a symlink; refusing to read text inputs from symlink paths",
             path.display()
         )));
     }
-    std::fs::File::open(path).map_err(|err| safe_fs_tools::Error::IoPath {
-        op: "open",
-        path: path.to_path_buf(),
-        source: err,
-    })
+    Ok(file)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn open_input_file(path: &Path) -> Result<std::fs::File, safe_fs_tools::Error> {
+    let _ = path;
+    Err(safe_fs_tools::Error::InvalidPath(
+        "loading text inputs on this platform requires an atomic no-follow open primitive"
+            .to_string(),
+    ))
 }
 
 pub(crate) fn load_text_limited(
@@ -102,7 +124,5 @@ pub(crate) fn load_text_limited(
         });
     }
 
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| safe_fs_tools::Error::InvalidUtf8(path.to_path_buf()))?;
-    Ok(text.to_string())
+    String::from_utf8(bytes).map_err(|_| safe_fs_tools::Error::InvalidUtf8(path.to_path_buf()))
 }

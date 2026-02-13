@@ -426,29 +426,21 @@ fn serialize_json(value: &serde_json::Value, pretty: bool) -> Result<String, Cli
     }
 }
 
+fn map_broken_pipe(result: std::io::Result<()>) -> Result<(), CliError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(err) => Err(CliError::Tool(safe_fs_tools::Error::Io(err))),
+    }
+}
+
 fn write_stdout_line(line: &str) -> Result<(), CliError> {
     use std::io::Write;
 
     let mut stdout = std::io::stdout().lock();
-    if let Err(err) = stdout.write_all(line.as_bytes()) {
-        if err.kind() == std::io::ErrorKind::BrokenPipe {
-            return Ok(());
-        }
-        return Err(CliError::Tool(safe_fs_tools::Error::Io(err)));
-    }
-    if let Err(err) = stdout.write_all(b"\n") {
-        if err.kind() == std::io::ErrorKind::BrokenPipe {
-            return Ok(());
-        }
-        return Err(CliError::Tool(safe_fs_tools::Error::Io(err)));
-    }
-    if let Err(err) = stdout.flush() {
-        if err.kind() == std::io::ErrorKind::BrokenPipe {
-            return Ok(());
-        }
-        return Err(CliError::Tool(safe_fs_tools::Error::Io(err)));
-    }
-    Ok(())
+    map_broken_pipe(stdout.write_all(line.as_bytes()))?;
+    map_broken_pipe(stdout.write_all(b"\n"))?;
+    map_broken_pipe(stdout.flush())
 }
 
 #[cfg(test)]

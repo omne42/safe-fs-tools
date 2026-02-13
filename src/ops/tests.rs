@@ -110,7 +110,7 @@ fn traversal_skip_globs_apply_to_directories_via_probe() {
 
     let root_path = ctx.canonical_root("root").expect("root").clone();
     let seen = traversal::walkdir_traversal_iter(&ctx, &root_path, &root_path)
-        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.expect("walkdir entry"))
         .filter(|entry| entry.depth() > 0)
         .map(|entry| {
             entry

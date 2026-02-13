@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,25 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 use super::Context;
+
+fn ensure_target_dir_within_root(
+    root_id: &str,
+    canonical_root: &Path,
+    target: &Path,
+    relative: &Path,
+    requested_path: &Path,
+) -> Result<()> {
+    let canonical_target = target
+        .canonicalize()
+        .map_err(|err| Error::io_path("canonicalize", relative, err))?;
+    if !crate::path_utils::starts_with_case_insensitive(&canonical_target, canonical_root) {
+        return Err(Error::OutsideRoot {
+            root_id: root_id.to_string(),
+            path: requested_path.to_path_buf(),
+        });
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MkdirRequest {
@@ -122,7 +142,19 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 if err.kind() == std::io::ErrorKind::AlreadyExists {
                     let existing = fs::symlink_metadata(&target)
                         .map_err(|meta_err| Error::io_path("metadata", &relative, meta_err))?;
+                    if existing.file_type().is_symlink() {
+                        return Err(Error::InvalidPath(
+                            "refusing to create directory through symlink".to_string(),
+                        ));
+                    }
                     if existing.is_dir() && request.ignore_existing {
+                        ensure_target_dir_within_root(
+                            &request.root_id,
+                            &canonical_root,
+                            &target,
+                            &relative,
+                            &requested_path,
+                        )?;
                         return Ok(MkdirResponse {
                             path: relative,
                             requested_path: Some(requested_path),
@@ -135,6 +167,13 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 }
                 return Err(Error::io_path("create_dir", &relative, err));
             }
+            ensure_target_dir_within_root(
+                &request.root_id,
+                &canonical_root,
+                &target,
+                &relative,
+                &requested_path,
+            )?;
             Ok(MkdirResponse {
                 path: relative,
                 requested_path: Some(requested_path),

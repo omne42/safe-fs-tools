@@ -45,6 +45,9 @@ pub(crate) fn normalize_glob_pattern_for_matching(pattern: &str) -> String {
 pub(crate) fn validate_root_relative_glob_pattern(
     pattern: &str,
 ) -> std::result::Result<(), &'static str> {
+    let normalized = normalize_glob_pattern(pattern);
+    let pattern = normalized.as_ref();
+
     if pattern.starts_with('/') {
         return Err("glob patterns must be root-relative (must not start with '/')");
     }

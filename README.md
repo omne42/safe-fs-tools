@@ -3,7 +3,7 @@
 `safe-fs-tools` is a small Rust library + CLI that provides filesystem tools:
 `read`, `list_dir`, `glob`, `grep`, `stat`, `edit`, `patch`, `mkdir`, `write`, `move`, `copy_file`, `delete`.
 
-MSRV: Rust 1.92.
+MSRV: Rust 1.92.0.
 Toolchain pin (for development/CI): `rust-toolchain.toml` (currently Rust 1.92.0).
 
 The point is **not** the commands — it is the **explicit safety model**:
@@ -26,7 +26,7 @@ Local-first scope note:
   explicit policy boundaries.
 - We are aware that a full descriptor-chain confinement model (`openat`/`cap-std`-style) can
   reduce TOCTOU risk further.
-- We intentionally do not fully enforce that model today due cross-platform complexity, codebase
+- We intentionally do not fully enforce that model today due to cross-platform complexity, codebase
   complexity, and maintenance tradeoffs relative to the project scope.
 - If your threat model includes adversarial concurrent local processes, run this inside an OS
   sandbox/container and treat this crate as policy enforcement, not as a complete confinement layer.

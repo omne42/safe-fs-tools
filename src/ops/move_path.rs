@@ -7,6 +7,23 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
+#[cfg(unix)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(windows)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MovePathRequest {
     pub root_id: String,
@@ -89,10 +106,17 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
 
     let from_relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&from_parent, &canonical_root)
-            .unwrap_or_else(|| from_parent.clone());
+            .ok_or_else(|| Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_from.clone(),
+            })?;
     let to_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root)
-            .unwrap_or_else(|| to_parent.clone());
+        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root).ok_or_else(
+            || Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_to.clone(),
+            },
+        )?;
 
     let from_relative = from_relative_parent.join(from_name);
     let to_relative = to_relative_parent.join(to_name);
@@ -164,24 +188,27 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         Err(err) => return Err(Error::io_path("metadata", &to_relative, err)),
     };
 
+    let mut same_destination_entity = false;
     if let Some(dest_meta) = &destination_meta {
-        if dest_meta.is_dir() {
+        same_destination_entity = metadata_same_file(&source_meta, dest_meta);
+        if !same_destination_entity && dest_meta.is_dir() {
             return Err(Error::InvalidPath(
                 "destination exists and is a directory".to_string(),
             ));
         }
-        if !request.overwrite {
+        if !request.overwrite && !same_destination_entity {
             return Err(Error::InvalidPath("destination exists".to_string()));
         }
-        if source_meta.is_dir() {
+        if !same_destination_entity && source_meta.is_dir() {
             return Err(Error::InvalidPath(
                 "refusing to overwrite an existing destination with a directory".to_string(),
             ));
         }
     }
 
-    super::io::rename_replace(&source, &destination, request.overwrite).map_err(|err| {
-        if !request.overwrite && err.kind() == std::io::ErrorKind::AlreadyExists {
+    let replace_existing = request.overwrite || same_destination_entity;
+    super::io::rename_replace(&source, &destination, replace_existing).map_err(|err| {
+        if !replace_existing && err.kind() == std::io::ErrorKind::AlreadyExists {
             return Error::InvalidPath("destination exists".to_string());
         }
         Error::io_path("rename", &to_relative, err)

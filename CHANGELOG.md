@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Hooks/scripts: `pre-commit` now parses staged files via `--name-status -z` (including rename/copy cases) and explicitly rejects deleting `CHANGELOG.md`; `scripts/gate.sh` now derives the workspace root from script location instead of caller `pwd`.
+- Docs/examples: tighten wording in `README.md`/`AGENTS.md`/`SECURITY.md`, clarify DB-VFS `path_prefix` derivation rules, and make `policy.example.toml` use a neutral absolute-path placeholder with a Windows example.
+- Workspace: `cli/Cargo.toml` now uses only the local `path` dependency for `safe-fs-tools` (drops redundant fixed `version`).
+
 - Breaking: consolidate delete APIs as `delete` (remove `delete_file`/`delete_path`); `DeleteRequest` adds `recursive`/`ignore_missing` and the response adds `{deleted, type}`.
 - `policy-io`: `parse_policy` now validates by default; use `parse_policy_unvalidated` when raw parse-without-validate is explicitly required.
 - Windows: keep atomic overwrite replacement semantics by using `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` behind a single, documented `unsafe` boundary in `rename_replace` (explicitly reject delete+rename fallback for overwrite paths).
@@ -33,8 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- CLI: strict path redaction now redacts relative paths too (`--redact-paths-strict` no longer leaks path fragments), and stdout `BrokenPipe` handling is centralized.
+- Limits/path correctness: `glob`/`grep` now enforce `max_results` before pushing matches; `edit` line indexes now use checked `u64 -> usize` conversion; traversal limit comparisons now avoid lossy integer casts.
+- Policy/path safety: `root.id` now rejects leading/trailing whitespace; `policy-io` now treats non-UTF-8 extensions as invalid instead of defaulting to TOML; deny checks now defensively reject parent-relative (`..`) paths.
+- Write/move/delete semantics: `copy_file` same-path no-op now still validates source existence/type; `patch` reports `bytes_written=0` on no-op; `move_path`/`delete` now fail closed when root-relative derivation fails instead of falling back to absolute paths.
+- `move_path`: destination-exists checks now allow same-entity case-only renames on case-insensitive filesystems.
+- `mkdir`: `AlreadyExists` races through symlinks now return explicit symlink errors, and created/accepted directories get an additional canonical post-check against the selected root.
+- Platform hardening: on Windows, `policy-io` and CLI input loading now use no-follow (reparse-point) open semantics with handle-based symlink checks; on unsupported non-Unix/non-Windows platforms these paths now fail closed.
+- Non-Linux/Android Unix: no-replace rename fallback no longer uses `exists()+rename` (TOCTOU-prone); it now returns `Unsupported` when an atomic primitive is unavailable.
+
 - Unix: file reads and policy/CLI text inputs now open with `O_NOFOLLOW` and validate type on the opened handle, reducing symlink/FIFO TOCTOU windows.
-- Non-Windows: `rename_replace(..., replace_existing = false)` now enforces no-replace semantics (Linux/Android uses `renameat2(RENAME_NOREPLACE)`; other Unix uses a best-effort already-exists check).
+- Non-Windows: `rename_replace(..., replace_existing = false)` now enforces no-replace semantics (Linux/Android uses `renameat2(RENAME_NOREPLACE)`; other Unix fails with `Unsupported` when no atomic primitive exists).
 - Unix: atomic rename paths now fsync parent directories after rename for better crash consistency.
 - `write_file`: create-new writes now use temp-file + no-replace rename, preventing readers from observing partially written new files.
 - `copy_file`/`move_path`/`write_file`: race-time `AlreadyExists` on no-overwrite paths now maps to stable `invalid_path` errors.

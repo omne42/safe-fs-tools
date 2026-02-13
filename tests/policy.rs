@@ -46,6 +46,26 @@ fn policy_rejects_duplicate_root_ids() {
 }
 
 #[test]
+fn policy_rejects_root_id_with_surrounding_whitespace() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = SandboxPolicy {
+        roots: vec![Root {
+            id: "root ".to_string(),
+            path: dir.path().to_path_buf(),
+            mode: RootMode::ReadOnly,
+        }],
+        permissions: Permissions::default(),
+        limits: Limits::default(),
+        secrets: SecretRules::default(),
+        traversal: TraversalRules::default(),
+        paths: PathRules::default(),
+    };
+
+    let err = Context::new(policy).expect_err("should reject");
+    assert_invalid_policy_contains(err, "must not contain leading/trailing whitespace");
+}
+
+#[test]
 fn policy_rejects_relative_root_paths() {
     let policy = SandboxPolicy {
         roots: vec![Root {

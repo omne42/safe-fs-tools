@@ -1,6 +1,7 @@
 [[roots]]
 id = "workspace"
-path = "/absolute/path/to/your/workspace"
+# Use an absolute path. Example (Windows): "C:\\work\\repo"
+path = "<ABSOLUTE_PATH>"
 mode = "read_only" # or "read_write"
 
 [permissions]

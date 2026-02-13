@@ -198,13 +198,20 @@ pub(super) fn write_bytes_atomic_checked(
 ) -> Result<()> {
     // Preserve prior behavior: fail if the original file isn't writable.
     let (_existing_file, meta) = open_regular_file_for_write(path, relative)?;
-    if let (Some(expected), Some(actual)) = (expected_identity, FileIdentity::from_metadata(&meta))
-        && expected != actual
-    {
-        return Err(Error::InvalidPath(format!(
-            "path {} changed during operation",
-            relative.display()
-        )));
+    match (expected_identity, FileIdentity::from_metadata(&meta)) {
+        (Some(expected), Some(actual)) if expected != actual => {
+            return Err(Error::InvalidPath(format!(
+                "path {} changed during operation",
+                relative.display()
+            )));
+        }
+        (Some(_), None) => {
+            return Err(Error::InvalidPath(format!(
+                "cannot verify identity for path {} on this platform",
+                relative.display()
+            )));
+        }
+        _ => {}
     }
 
     let perms = meta.permissions();
@@ -387,11 +394,10 @@ fn rename_no_replace(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
     not(any(target_os = "linux", target_os = "android"))
 ))]
 fn rename_no_replace(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
-    if dest_path.exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "destination exists",
-        ));
-    }
-    fs::rename(src_path, dest_path)
+    let _ = src_path;
+    let _ = dest_path;
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-replace rename is unsupported on this platform",
+    ))
 }

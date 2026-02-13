@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-safe-fs-tools = { path = "..", version = "0.1.0", default-features = false, features = ["glob", "grep", "patch", "policy-io"] }
+safe-fs-tools = { path = "..", default-features = false, features = ["glob", "grep", "patch", "policy-io"] }
 serde_json = "1"
 
 [dev-dependencies]

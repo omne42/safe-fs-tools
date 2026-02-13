@@ -271,12 +271,19 @@ impl SandboxPolicy {
                 "limits.max_line_bytes must be > 0".to_string(),
             ));
         }
-        let mut seen_ids = std::collections::HashSet::<&str>::new();
+        let mut seen_ids = std::collections::HashSet::<String>::new();
         for root in &self.roots {
-            if root.id.trim().is_empty() {
+            let normalized_id = root.id.trim();
+            if normalized_id.is_empty() {
                 return Err(Error::InvalidPolicy("root.id is empty".to_string()));
             }
-            if !seen_ids.insert(root.id.as_str()) {
+            if normalized_id != root.id {
+                return Err(Error::InvalidPolicy(format!(
+                    "root.id must not contain leading/trailing whitespace: {:?}",
+                    root.id
+                )));
+            }
+            if !seen_ids.insert(normalized_id.to_string()) {
                 return Err(Error::InvalidPolicy(format!(
                     "duplicate root.id: {:?}",
                     root.id

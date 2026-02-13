@@ -102,7 +102,8 @@ fn write_file_creates_new_files_and_respects_overwrite() {
     .expect("write");
     assert!(resp.created);
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("sub").join("file.txt")).unwrap(),
+        std::fs::read_to_string(dir.path().join("sub").join("file.txt"))
+            .expect("read created file"),
         "hi"
     );
 
@@ -132,7 +133,8 @@ fn write_file_creates_new_files_and_respects_overwrite() {
     .expect("write");
     assert!(!resp.created);
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("sub").join("file.txt")).unwrap(),
+        std::fs::read_to_string(dir.path().join("sub").join("file.txt"))
+            .expect("read overwritten file"),
         "bye"
     );
 }
@@ -158,7 +160,7 @@ fn move_path_renames_entries() {
     assert!(resp.moved);
     assert!(!dir.path().join("a.txt").exists());
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("b.txt")).unwrap(),
+        std::fs::read_to_string(dir.path().join("b.txt")).expect("read moved file"),
         "hi"
     );
 }
@@ -205,9 +207,34 @@ fn copy_file_copies_regular_files() {
     assert!(resp.copied);
     assert_eq!(resp.bytes, 2);
     assert_eq!(
-        std::fs::read_to_string(dir.path().join("b.txt")).unwrap(),
+        std::fs::read_to_string(dir.path().join("b.txt")).expect("read copied file"),
         "hi"
     );
+}
+
+#[test]
+fn copy_file_same_path_still_validates_source_exists() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let err = copy_file(
+        &ctx,
+        CopyFileRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("missing.txt"),
+            to: PathBuf::from("missing.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("same-path copy should still validate source");
+
+    match err {
+        safe_fs_tools::Error::IoPath { source, .. } => {
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]

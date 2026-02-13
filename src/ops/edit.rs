@@ -47,8 +47,11 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
     } else {
         content.split_inclusive('\n').collect()
     };
-    let start = (request.start_line - 1) as usize;
-    let end = (request.end_line - 1) as usize;
+    let start = usize::try_from(request.start_line - 1).map_err(|_| {
+        Error::InvalidPath(format!("line number too large: {}", request.start_line))
+    })?;
+    let end = usize::try_from(request.end_line - 1)
+        .map_err(|_| Error::InvalidPath(format!("line number too large: {}", request.end_line)))?;
     if start >= lines.len() || end >= lines.len() {
         return Err(Error::InvalidPath(format!(
             "line range {}..{} out of bounds (file has {} lines)",

@@ -262,9 +262,10 @@ fn tool_error_details_redacts_walkdir_root_message() {
 #[test]
 fn tool_error_details_includes_walkdir_root_message_when_not_redacting() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("missing");
 
     let err = safe_fs_tools::Error::WalkDirRoot {
-        path: PathBuf::from("missing"),
+        path: missing.clone(),
         source: std::io::Error::from_raw_os_error(2),
     };
 
@@ -275,7 +276,7 @@ fn tool_error_details_includes_walkdir_root_message_when_not_redacting() {
     );
     assert_eq!(
         details.get("path").and_then(|v| v.as_str()),
-        Some("missing")
+        Some(missing.to_string_lossy().as_ref())
     );
     assert!(
         details.get("message").and_then(|v| v.as_str()).is_some(),
@@ -292,8 +293,8 @@ fn tool_error_details_includes_walkdir_root_message_when_not_redacting() {
 
     let rendered = details.to_string();
     assert!(
-        !rendered.contains(&dir.path().display().to_string()),
-        "expected details to not contain absolute root path: {rendered}"
+        rendered.contains(&dir.path().display().to_string()),
+        "expected details to include absolute path in non-redacted mode: {rendered}"
     );
 }
 

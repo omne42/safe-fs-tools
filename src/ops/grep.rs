@@ -179,18 +179,18 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
                 let text = line[..end].to_string();
                 let text = ctx.redactor.redact_text(&text);
-                matches.push(GrepMatch {
-                    path: file.relative_path.clone(),
-                    line: idx.saturating_add(1) as u64,
-                    text,
-                    line_truncated,
-                });
                 if matches.len() >= ctx.policy.limits.max_results {
                     diag.truncated = true;
                     diag.scan_limit_reached = true;
                     diag.scan_limit_reason = Some(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
+                matches.push(GrepMatch {
+                    path: file.relative_path.clone(),
+                    line: idx.saturating_add(1) as u64,
+                    text,
+                    line_truncated,
+                });
             }
 
             Ok(std::ops::ControlFlow::Continue(()))
