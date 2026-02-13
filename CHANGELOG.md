@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Error/CLI contract: `tool_error_details*` now always returns a JSON object, and `patch` error details/messages are path-redaction aware.
+- API typing: `stat` response `type` is now modeled by `StatKind` enum in Rust while preserving lowercase JSON serialization.
+- Internal API cleanup: `Context::canonical_root` now returns `&Path` instead of `&PathBuf` to avoid leaking storage details.
+- Docs: refresh `README`/`SECURITY`/`docs/db-vfs.md`/`AGENTS.md` wording for command naming, disclosure channel, reproducible DB-VFS setup, and execution flow.
+
 - Hooks/scripts: `pre-commit` now parses staged files via `--name-status -z` (including rename/copy cases) and explicitly rejects deleting `CHANGELOG.md`; `scripts/gate.sh` now derives the workspace root from script location instead of caller `pwd`.
 - Docs/examples: tighten wording in `README.md`/`AGENTS.md`/`SECURITY.md`, clarify DB-VFS `path_prefix` derivation rules, and make `policy.example.toml` use a neutral absolute-path placeholder with a Windows example.
 - Workspace: `cli/Cargo.toml` now uses only the local `path` dependency for `safe-fs-tools` (drops redundant fixed `version`).
@@ -36,6 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs: README now includes a TOC and a "常见失败" troubleshooting section.
 
 ### Fixed
+
+- `write_file` overwrite path now re-checks canonicalized relative paths against `secrets.deny_globs`, and size conversions avoid lossy `as u64` casts.
+- `delete(ignore_missing=true)` now consistently handles `NotFound` races during `remove_file`/`remove_dir_all`.
+- `move_path` now delays destination parent creation until after key validations and early-returns `moved=false` for same-entity destinations.
+- `mkdir` now re-validates root boundaries for `ignore_existing` directories and rolls back newly-created directories on post-create boundary check failures.
+- `policy-io` extension detection is now ASCII case-insensitive (`.JSON`/`.Toml` accepted).
+- `pre-commit` now detects `CHANGELOG.md` deletion via rename (`R old -> new`) in addition to direct deletes.
 
 - CLI: strict path redaction now redacts relative paths too (`--redact-paths-strict` no longer leaks path fragments), and stdout `BrokenPipe` handling is centralized.
 - Limits/path correctness: `glob`/`grep` now enforce `max_results` before pushing matches; `edit` line indexes now use checked `u64 -> usize` conversion; traversal limit comparisons now avoid lossy integer casts.

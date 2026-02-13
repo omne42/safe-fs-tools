@@ -3,7 +3,10 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_candidate="$(cd "$script_dir/.." && pwd -P)"
-repo_root="$(git -C "$repo_candidate" rev-parse --show-toplevel 2>/dev/null || echo "$repo_candidate")"
+repo_root="$repo_candidate"
+if [[ ! -f "$repo_root/Cargo.toml" ]]; then
+  repo_root="$(git -C "$repo_candidate" rev-parse --show-toplevel 2>/dev/null || echo "$repo_candidate")"
+fi
 core_crate="${SAFE_FS_CORE_CRATE:-safe-fs-tools}"
 
 if [[ ! -f "$repo_root/Cargo.toml" ]]; then

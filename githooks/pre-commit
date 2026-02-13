@@ -16,6 +16,9 @@ while IFS= read -r -d '' status; do
   if [[ "$code" == "R" || "$code" == "C" ]]; then
     IFS= read -r -d '' old_path || break
     IFS= read -r -d '' new_path || break
+    if [[ "$code" == "R" && "$old_path" == "CHANGELOG.md" && "$new_path" != "CHANGELOG.md" ]]; then
+      changelog_deleted=1
+    fi
     paths=("$old_path" "$new_path")
   else
     IFS= read -r -d '' path || break

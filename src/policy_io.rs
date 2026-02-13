@@ -98,8 +98,9 @@ pub fn load_policy(path: impl AsRef<Path>) -> Result<SandboxPolicy> {
 /// - `.json` => JSON
 /// - `.toml` or no extension => TOML
 ///
-/// This rejects symlink paths and non-regular files (FIFOs, sockets, device nodes) to avoid
-/// blocking behavior and related DoS risks.
+/// This rejects symlink/reparse-point policy file targets (for the final path component) and
+/// non-regular files (FIFOs, sockets, device nodes) to avoid blocking behavior and related DoS
+/// risks.
 pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<SandboxPolicy> {
     if max_bytes == 0 {
         return Err(Error::InvalidPolicy(
@@ -136,8 +137,8 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
     let format = match path.extension() {
         None => PolicyFormat::Toml,
         Some(ext) => match ext.to_str() {
-            Some("json") => PolicyFormat::Json,
-            Some("toml") => PolicyFormat::Toml,
+            Some(ext) if ext.eq_ignore_ascii_case("json") => PolicyFormat::Json,
+            Some(ext) if ext.eq_ignore_ascii_case("toml") => PolicyFormat::Toml,
             Some(other) => {
                 return Err(Error::InvalidPolicy(format!(
                     "unsupported policy format {other:?}; expected .toml or .json"

@@ -44,6 +44,27 @@ use super::traversal::{
     elapsed_ms, globset_is_match, walk_traversal_files,
 };
 
+#[cfg(feature = "glob")]
+fn build_glob_response(
+    mut matches: Vec<PathBuf>,
+    diag: TraversalDiagnostics,
+    started: &Instant,
+) -> GlobResponse {
+    matches.sort();
+    GlobResponse {
+        matches,
+        truncated: diag.truncated,
+        scanned_files: diag.scanned_files,
+        scan_limit_reached: diag.scan_limit_reached,
+        scan_limit_reason: diag.scan_limit_reason,
+        elapsed_ms: elapsed_ms(started),
+        scanned_entries: diag.scanned_entries,
+        skipped_walk_errors: diag.skipped_walk_errors,
+        skipped_io_errors: diag.skipped_io_errors,
+        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
+    }
+}
+
 #[cfg(not(feature = "glob"))]
 pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let _ = ctx;
@@ -62,7 +83,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     }
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
-    let root_path = ctx.canonical_root(&request.root_id)?.clone();
+    let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
     let matcher = compile_glob(&request.pattern)?;
 
     let mut matches = Vec::<PathBuf>::new();
@@ -75,18 +96,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                 || ctx.is_traversal_path_skipped(&prefix)
                 || ctx.is_traversal_path_skipped(&probe)
             {
-                return Ok(GlobResponse {
-                    matches,
-                    truncated: diag.truncated,
-                    scanned_files: diag.scanned_files,
-                    scan_limit_reached: diag.scan_limit_reached,
-                    scan_limit_reason: diag.scan_limit_reason,
-                    elapsed_ms: elapsed_ms(&started),
-                    scanned_entries: diag.scanned_entries,
-                    skipped_walk_errors: diag.skipped_walk_errors,
-                    skipped_io_errors: diag.skipped_io_errors,
-                    skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
-                });
+                return Ok(build_glob_response(matches, diag, &started));
             }
             root_path.join(prefix)
         }
@@ -114,33 +124,10 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     ) {
         Ok(diag) => diag,
         Err(Error::WalkDirRoot { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(GlobResponse {
-                matches,
-                truncated: diag.truncated,
-                scanned_files: diag.scanned_files,
-                scan_limit_reached: diag.scan_limit_reached,
-                scan_limit_reason: diag.scan_limit_reason,
-                elapsed_ms: elapsed_ms(&started),
-                scanned_entries: diag.scanned_entries,
-                skipped_walk_errors: diag.skipped_walk_errors,
-                skipped_io_errors: diag.skipped_io_errors,
-                skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
-            });
+            return Ok(build_glob_response(matches, diag, &started));
         }
         Err(err) => return Err(err),
     };
 
-    matches.sort();
-    Ok(GlobResponse {
-        matches,
-        truncated: diag.truncated,
-        scanned_files: diag.scanned_files,
-        scan_limit_reached: diag.scan_limit_reached,
-        scan_limit_reason: diag.scan_limit_reason,
-        elapsed_ms: elapsed_ms(&started),
-        scanned_entries: diag.scanned_entries,
-        skipped_walk_errors: diag.skipped_walk_errors,
-        skipped_io_errors: diag.skipped_io_errors,
-        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
-    })
+    Ok(build_glob_response(matches, diag, &started))
 }

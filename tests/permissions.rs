@@ -13,6 +13,10 @@ use safe_fs_tools::policy::RootMode;
 #[cfg(feature = "patch")]
 use safe_fs_tools::ops::{PatchRequest, apply_unified_patch};
 
+fn assert_not_permitted(err: safe_fs_tools::Error) {
+    assert!(matches!(err, safe_fs_tools::Error::NotPermitted(_)));
+}
+
 #[test]
 fn read_is_disabled_by_policy() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -32,11 +36,7 @@ fn read_is_disabled_by_policy() {
         },
     )
     .expect_err("should reject");
-
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -57,10 +57,7 @@ fn glob_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -83,10 +80,7 @@ fn grep_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -108,10 +102,7 @@ fn list_dir_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -132,10 +123,7 @@ fn stat_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -159,10 +147,7 @@ fn edit_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -185,10 +170,7 @@ fn patch_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -210,10 +192,7 @@ fn mkdir_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -236,10 +215,7 @@ fn write_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -262,10 +238,7 @@ fn delete_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -288,10 +261,7 @@ fn move_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -314,10 +284,7 @@ fn copy_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]
@@ -336,10 +303,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 
     #[cfg(feature = "patch")]
     {
@@ -352,10 +316,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
             },
         )
         .expect_err("should reject");
-        match err {
-            safe_fs_tools::Error::NotPermitted(_) => {}
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_not_permitted(err);
     }
 
     let err = delete(
@@ -368,10 +329,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 
     let err = delete(
         &ctx,
@@ -383,10 +341,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 
     let err = mkdir(
         &ctx,
@@ -398,10 +353,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 
     let err = write_file(
         &ctx,
@@ -414,10 +366,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 
     let err = move_path(
         &ctx,
@@ -430,10 +379,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 
     let err = copy_file(
         &ctx,
@@ -446,10 +392,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_not_permitted(err);
 }
 
 #[test]

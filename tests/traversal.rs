@@ -6,6 +6,14 @@ use common::test_policy;
 use safe_fs_tools::ops::Context;
 use safe_fs_tools::policy::RootMode;
 
+fn setup_skip_glob_fixture() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("node_modules")).expect("mkdir");
+    std::fs::write(dir.path().join("keep.txt"), "needle\n").expect("write");
+    std::fs::write(dir.path().join("node_modules").join("skip.txt"), "needle\n").expect("write");
+    dir
+}
+
 #[test]
 #[cfg(feature = "grep")]
 fn traversal_skip_globs_support_leading_dot_slash() {
@@ -13,10 +21,7 @@ fn traversal_skip_globs_support_leading_dot_slash() {
 
     use safe_fs_tools::ops::{GrepRequest, ReadRequest, grep, read_file};
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir_all(dir.path().join("node_modules")).expect("mkdir");
-    std::fs::write(dir.path().join("keep.txt"), "needle\n").expect("write");
-    std::fs::write(dir.path().join("node_modules").join("skip.txt"), "needle\n").expect("write");
+    let dir = setup_skip_glob_fixture();
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
     policy.traversal.skip_globs = vec!["./node_modules/**".to_string()];
@@ -51,7 +56,6 @@ fn traversal_skip_globs_support_leading_dot_slash() {
 }
 
 #[test]
-#[cfg(any(feature = "glob", feature = "grep"))]
 fn traversal_skip_globs_reject_absolute_and_parent_segments() {
     let dir = tempfile::tempdir().expect("tempdir");
 
@@ -74,10 +78,7 @@ fn traversal_skip_globs_skip_in_traversal_but_allow_direct_read() {
 
     use safe_fs_tools::ops::{GrepRequest, ReadRequest, grep, read_file};
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir_all(dir.path().join("node_modules")).expect("mkdir");
-    std::fs::write(dir.path().join("keep.txt"), "needle\n").expect("write");
-    std::fs::write(dir.path().join("node_modules").join("skip.txt"), "needle\n").expect("write");
+    let dir = setup_skip_glob_fixture();
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
     policy.traversal.skip_globs = vec!["node_modules/**".to_string()];

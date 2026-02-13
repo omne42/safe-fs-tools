@@ -1,5 +1,6 @@
 [[roots]]
 id = "workspace"
+# Replace this placeholder with a real absolute path before using this policy (for example `/home/user/repo`).
 # Use an absolute path. Example (Windows): "C:\\work\\repo"
 path = "<ABSOLUTE_PATH>"
 mode = "read_only" # or "read_write"

@@ -85,7 +85,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         )));
     }
 
-    let root_path = ctx.canonical_root(&request.root_id)?.clone();
+    let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
     let mut heap = BinaryHeap::<Candidate>::new();
     let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;

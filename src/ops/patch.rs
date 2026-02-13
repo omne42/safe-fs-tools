@@ -49,7 +49,7 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         .limits
         .max_patch_bytes
         .unwrap_or(ctx.policy.limits.max_read_bytes);
-    let patch_bytes = request.patch.len() as u64;
+    let patch_bytes = u64::try_from(request.patch.len()).unwrap_or(u64::MAX);
     if patch_bytes > max_patch_bytes {
         return Err(Error::InputTooLarge {
             size_bytes: patch_bytes,
@@ -67,10 +67,11 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
     let updated = apply(&content, &parsed)
         .map_err(|err| Error::Patch(format!("{}: {err}", relative.display())))?;
 
-    if updated.len() as u64 > ctx.policy.limits.max_write_bytes {
+    let updated_len = u64::try_from(updated.len()).unwrap_or(u64::MAX);
+    if updated_len > ctx.policy.limits.max_write_bytes {
         return Err(Error::FileTooLarge {
             path: relative.clone(),
-            size_bytes: updated.len() as u64,
+            size_bytes: updated_len,
             max_bytes: ctx.policy.limits.max_write_bytes,
         });
     }
@@ -82,6 +83,6 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
     Ok(PatchResponse {
         path: relative,
         requested_path: Some(requested_path),
-        bytes_written: if changed { updated.len() as u64 } else { 0 },
+        bytes_written: if changed { updated_len } else { 0 },
     })
 }

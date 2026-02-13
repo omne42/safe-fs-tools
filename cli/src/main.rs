@@ -222,9 +222,7 @@ fn run() -> ExitCode {
                     } else {
                         tool_error_details(tool)
                     };
-                    if let Some(details) = details {
-                        error.insert("details".to_string(), details);
-                    }
+                    error.insert("details".to_string(), details);
                 }
 
                 let out = serde_json::json!({ "error": error });

@@ -101,8 +101,15 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     let to_parent_rel = requested_to.parent().unwrap_or_else(|| Path::new(""));
 
     let from_parent = ctx.ensure_dir_under_root(&request.root_id, from_parent_rel, false)?;
-    let to_parent =
-        ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, request.create_parents)?;
+    let mut to_parent = match ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, false) {
+        Ok(path) => Some(path),
+        Err(Error::IoPath { source, .. })
+            if request.create_parents && source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            None
+        }
+        Err(err) => return Err(err),
+    };
 
     let from_relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&from_parent, &canonical_root)
@@ -110,16 +117,9 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
                 root_id: request.root_id.clone(),
                 path: requested_from.clone(),
             })?;
-    let to_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root).ok_or_else(
-            || Error::OutsideRoot {
-                root_id: request.root_id.clone(),
-                path: requested_to.clone(),
-            },
-        )?;
 
     let from_relative = from_relative_parent.join(from_name);
-    let to_relative = to_relative_parent.join(to_name);
+    let mut to_relative = requested_to.clone();
 
     if ctx.redactor.is_path_denied(&from_relative) {
         return Err(Error::SecretPathDenied(from_relative));
@@ -129,6 +129,37 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     }
 
     let source = from_parent.join(from_name);
+
+    let source_meta = fs::symlink_metadata(&source)
+        .map_err(|err| Error::io_path("metadata", &from_relative, err))?;
+    let kind = if source_meta.file_type().is_file() {
+        "file"
+    } else if source_meta.file_type().is_dir() {
+        "dir"
+    } else if source_meta.file_type().is_symlink() {
+        "symlink"
+    } else {
+        "other"
+    };
+
+    if to_parent.is_none() {
+        to_parent = Some(ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, true)?);
+    }
+    let to_parent = to_parent.ok_or_else(|| {
+        Error::InvalidPath("failed to prepare destination parent directory".to_string())
+    })?;
+    let to_relative_parent =
+        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root).ok_or_else(
+            || Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_to.clone(),
+            },
+        )?;
+    to_relative = to_relative_parent.join(to_name);
+    if ctx.redactor.is_path_denied(&to_relative) {
+        return Err(Error::SecretPathDenied(to_relative));
+    }
+
     let destination = to_parent.join(to_name);
 
     if !crate::path_utils::starts_with_case_insensitive(&source, &canonical_root) {
@@ -143,18 +174,6 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
             path: requested_to,
         });
     }
-
-    let source_meta = fs::symlink_metadata(&source)
-        .map_err(|err| Error::io_path("metadata", &from_relative, err))?;
-    let kind = if source_meta.file_type().is_file() {
-        "file"
-    } else if source_meta.file_type().is_dir() {
-        "dir"
-    } else if source_meta.file_type().is_symlink() {
-        "symlink"
-    } else {
-        "other"
-    };
 
     if source == destination {
         return Ok(MovePathResponse {
@@ -188,25 +207,34 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         Err(err) => return Err(Error::io_path("metadata", &to_relative, err)),
     };
 
-    let mut same_destination_entity = false;
     if let Some(dest_meta) = &destination_meta {
-        same_destination_entity = metadata_same_file(&source_meta, dest_meta);
-        if !same_destination_entity && dest_meta.is_dir() {
+        let same_destination_entity = metadata_same_file(&source_meta, dest_meta);
+        if same_destination_entity {
+            return Ok(MovePathResponse {
+                from: from_relative,
+                to: to_relative,
+                requested_from: Some(requested_from),
+                requested_to: Some(requested_to),
+                moved: false,
+                kind: kind.to_string(),
+            });
+        }
+        if dest_meta.is_dir() {
             return Err(Error::InvalidPath(
                 "destination exists and is a directory".to_string(),
             ));
         }
-        if !request.overwrite && !same_destination_entity {
+        if !request.overwrite {
             return Err(Error::InvalidPath("destination exists".to_string()));
         }
-        if !same_destination_entity && source_meta.is_dir() {
+        if source_meta.is_dir() {
             return Err(Error::InvalidPath(
                 "refusing to overwrite an existing destination with a directory".to_string(),
             ));
         }
     }
 
-    let replace_existing = request.overwrite || same_destination_entity;
+    let replace_existing = request.overwrite;
     super::io::rename_replace(&source, &destination, replace_existing).map_err(|err| {
         if !replace_existing && err.kind() == std::io::ErrorKind::AlreadyExists {
             return Error::InvalidPath("destination exists".to_string());

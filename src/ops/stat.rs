@@ -13,13 +13,21 @@ pub struct StatRequest {
     pub path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatKind {
+    File,
+    Dir,
+    Other,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatResponse {
     pub path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_path: Option<PathBuf>,
     #[serde(rename = "type")]
-    pub kind: String,
+    pub kind: StatKind,
     pub size_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified_ms: Option<u64>,
@@ -37,11 +45,11 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
 
     let meta = fs::metadata(&path).map_err(|err| Error::io_path("metadata", &relative, err))?;
     let kind = if meta.is_file() {
-        "file"
+        StatKind::File
     } else if meta.is_dir() {
-        "dir"
+        StatKind::Dir
     } else {
-        "other"
+        StatKind::Other
     };
 
     let size_bytes = if meta.is_file() { meta.len() } else { 0 };
@@ -55,7 +63,7 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
     Ok(StatResponse {
         path: relative,
         requested_path: Some(requested_path),
-        kind: kind.to_string(),
+        kind,
         size_bytes,
         modified_ms,
     })

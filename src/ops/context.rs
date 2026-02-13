@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
-
-#[cfg(any(feature = "glob", feature = "grep"))]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::policy::{RootMode, SandboxPolicy};
@@ -124,9 +121,10 @@ impl Context {
         super::copy_file(self, request)
     }
 
-    pub(super) fn canonical_root(&self, root_id: &str) -> Result<&PathBuf> {
+    pub(super) fn canonical_root(&self, root_id: &str) -> Result<&Path> {
         self.canonical_roots
             .get(root_id)
+            .map(PathBuf::as_path)
             .ok_or_else(|| Error::RootNotFound(root_id.to_string()))
     }
 

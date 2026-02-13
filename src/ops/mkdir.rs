@@ -125,6 +125,13 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
             }
             if meta.is_dir() {
                 if request.ignore_existing {
+                    ensure_target_dir_within_root(
+                        &request.root_id,
+                        &canonical_root,
+                        &target,
+                        &relative,
+                        &requested_path,
+                    )?;
                     return Ok(MkdirResponse {
                         path: relative,
                         requested_path: Some(requested_path),
@@ -164,6 +171,9 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                     if existing.is_dir() {
                         return Err(Error::InvalidPath("directory exists".to_string()));
                     }
+                    return Err(Error::InvalidPath(
+                        "path exists and is not a directory".to_string(),
+                    ));
                 }
                 return Err(Error::io_path("create_dir", &relative, err));
             }
@@ -173,7 +183,10 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 &target,
                 &relative,
                 &requested_path,
-            )?;
+            )
+            .inspect_err(|_err| {
+                let _ = fs::remove_dir(&target);
+            })?;
             Ok(MkdirResponse {
                 path: relative,
                 requested_path: Some(requested_path),

@@ -159,6 +159,18 @@ fn prefixes_eq(a: std::path::Prefix<'_>, b: std::path::Prefix<'_>) -> bool {
     }
 }
 
+#[cfg(windows)]
+fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
+    match (a, b) {
+        (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
+        (Component::RootDir, Component::RootDir) => true,
+        (Component::Normal(a), Component::Normal(b)) => lower(a) == lower(b),
+        (Component::CurDir, Component::CurDir) => true,
+        (Component::ParentDir, Component::ParentDir) => true,
+        _ => false,
+    }
+}
+
 /// A case-insensitive `Path::starts_with` for Windows paths.
 ///
 /// On non-Windows platforms this is equivalent to `Path::starts_with`.
@@ -173,16 +185,7 @@ pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
                 return false;
             };
 
-            let ok = match (path_comp, prefix_comp) {
-                (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
-                (Component::RootDir, Component::RootDir) => true,
-                (Component::Normal(a), Component::Normal(b)) => lower(a) == lower(b),
-                (Component::CurDir, Component::CurDir) => true,
-                (Component::ParentDir, Component::ParentDir) => true,
-                _ => false,
-            };
-
-            if !ok {
+            if !components_eq_case_insensitive(path_comp, prefix_comp) {
                 return false;
             }
         }
@@ -207,16 +210,7 @@ pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathB
         for prefix_comp in prefix.components() {
             let path_comp = path_components.next()?;
 
-            let ok = match (path_comp, prefix_comp) {
-                (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
-                (Component::RootDir, Component::RootDir) => true,
-                (Component::Normal(a), Component::Normal(b)) => lower(a) == lower(b),
-                (Component::CurDir, Component::CurDir) => true,
-                (Component::ParentDir, Component::ParentDir) => true,
-                _ => false,
-            };
-
-            if !ok {
+            if !components_eq_case_insensitive(path_comp, prefix_comp) {
                 return None;
             }
         }

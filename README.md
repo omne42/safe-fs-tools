@@ -2,6 +2,7 @@
 
 `safe-fs-tools` is a small Rust library + CLI that provides filesystem tools:
 `read`, `list_dir`, `glob`, `grep`, `stat`, `edit`, `patch`, `mkdir`, `write`, `move`, `copy_file`, `delete`.
+Library APIs use `snake_case` names (for example `list_dir`/`copy_file`); CLI subcommands use `kebab-case` (`list-dir`/`copy-file`).
 
 MSRV: Rust 1.92.0.
 Toolchain pin (for development/CI): `rust-toolchain.toml` (currently Rust 1.92.0).
@@ -84,7 +85,7 @@ Non-goals (by design):
 
 ## CLI
 
-All commands require a policy file (`.toml` or `.json`) and output JSON on success (errors are printed to stderr and exit with code 1). Use `--pretty` for pretty-printed JSON, and `--error-format json` for machine-parsable errors.
+All business commands require a policy file (`.toml` or `.json`) and output JSON on success (errors are printed to stderr and exit with code 1). `--help` can run without `--policy`. Use `--pretty` for pretty-printed JSON, and `--error-format json` for machine-parsable errors.
 
 For `patch`, you can also cap the patch *input* size (stdin or file) via `--max-patch-bytes` (defaults to `policy.limits.max_patch_bytes` if set, otherwise `policy.limits.max_read_bytes`).
 

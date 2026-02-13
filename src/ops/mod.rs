@@ -36,7 +36,7 @@ pub use mkdir::{MkdirRequest, MkdirResponse, mkdir};
 pub use move_path::{MovePathRequest, MovePathResponse, move_path};
 pub use patch::{PatchRequest, PatchResponse, apply_unified_patch};
 pub use read::{ReadRequest, ReadResponse, read_file};
-pub use stat::{StatRequest, StatResponse, stat};
+pub use stat::{StatKind, StatRequest, StatResponse, stat};
 pub use write::{WriteFileRequest, WriteFileResponse, write_file};
 
 #[cfg(test)]

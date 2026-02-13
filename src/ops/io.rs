@@ -52,9 +52,25 @@ fn open_readonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
     options.open(path)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn open_readonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
-    fs::File::open(path)
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn open_readonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    let _ = path;
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "platform does not support atomic no-follow reads",
+    ))
 }
 
 #[cfg(unix)]
@@ -62,13 +78,31 @@ fn open_writeonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
     let mut options = fs::OpenOptions::new();
-    options.write(true).custom_flags(libc::O_NOFOLLOW);
+    options
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     options.open(path)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn open_writeonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
-    fs::OpenOptions::new().write(true).open(path)
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .write(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn open_writeonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    let _ = path;
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "platform does not support atomic no-follow writes",
+    ))
 }
 
 pub(super) fn open_regular_file_for_read(
@@ -126,27 +160,7 @@ pub(super) fn open_private_temp_file(path: &Path) -> std::io::Result<fs::File> {
 
 pub(super) fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     let (file, meta) = open_regular_file_for_read(path, relative)?;
-    if meta.len() > max_bytes {
-        return Err(Error::FileTooLarge {
-            path: relative.to_path_buf(),
-            size_bytes: meta.len(),
-            max_bytes,
-        });
-    }
-
-    let limit = max_bytes.saturating_add(1);
-    let mut bytes = Vec::<u8>::new();
-    file.take(limit)
-        .read_to_end(&mut bytes)
-        .map_err(|err| Error::io_path("read", relative, err))?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(Error::FileTooLarge {
-            path: relative.to_path_buf(),
-            size_bytes: bytes.len() as u64,
-            max_bytes,
-        });
-    }
-    Ok(bytes)
+    read_open_file_limited(file, relative, max_bytes, meta.len())
 }
 
 pub(super) fn read_string_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<String> {
@@ -160,30 +174,42 @@ pub(super) fn read_string_limited_with_identity(
     max_bytes: u64,
 ) -> Result<(String, Option<FileIdentity>)> {
     let (file, meta) = open_regular_file_for_read(path, relative)?;
-    if meta.len() > max_bytes {
-        return Err(Error::FileTooLarge {
-            path: relative.to_path_buf(),
-            size_bytes: meta.len(),
-            max_bytes,
-        });
-    }
     let identity = FileIdentity::from_metadata(&meta);
+    let bytes = read_open_file_limited(file, relative, max_bytes, meta.len())?;
+    std::str::from_utf8(&bytes)
+        .map_err(|_| Error::InvalidUtf8(relative.to_path_buf()))
+        .map(str::to_string)
+        .map(|text| (text, identity))
+}
+
+fn file_too_large(relative: &Path, size_bytes: u64, max_bytes: u64) -> Error {
+    Error::FileTooLarge {
+        path: relative.to_path_buf(),
+        size_bytes,
+        max_bytes,
+    }
+}
+
+fn read_open_file_limited(
+    file: fs::File,
+    relative: &Path,
+    max_bytes: u64,
+    known_size: u64,
+) -> Result<Vec<u8>> {
+    if known_size > max_bytes {
+        return Err(file_too_large(relative, known_size, max_bytes));
+    }
+
     let limit = max_bytes.saturating_add(1);
     let mut bytes = Vec::<u8>::new();
     file.take(limit)
         .read_to_end(&mut bytes)
         .map_err(|err| Error::io_path("read", relative, err))?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(Error::FileTooLarge {
-            path: relative.to_path_buf(),
-            size_bytes: bytes.len() as u64,
-            max_bytes,
-        });
+    let read_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if read_size > max_bytes {
+        return Err(file_too_large(relative, read_size, max_bytes));
     }
-    std::str::from_utf8(&bytes)
-        .map_err(|_| Error::InvalidUtf8(relative.to_path_buf()))
-        .map(str::to_string)
-        .map(|text| (text, identity))
+    Ok(bytes)
 }
 
 pub(super) fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {

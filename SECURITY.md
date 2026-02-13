@@ -69,9 +69,11 @@ If untrusted callers can control `path` inputs and observe detailed errors/timin
 
 ## Reporting
 
-If you discover a security issue, prefer a private disclosure channel first (for example GitHub
-private security reporting if enabled). Do not post full exploit details in a public issue before a
-fix is available.
+If you discover a security issue, use the repository's private GitHub Security Advisory channel:
+`https://github.com/omne42/safe-fs-tools/security/advisories/new`.
+Do not post full exploit details in a public issue before a fix is available.
+
+Target response: initial triage within 5 business days.
 
 When reporting, include:
 

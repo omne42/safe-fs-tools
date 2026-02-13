@@ -139,6 +139,19 @@ Budgets to enforce:
 This decision is implemented in the sibling `db-vfs/` project (crate + HTTP service). For reproducible
 local validation, pin to a known commit/tag in that repository before running the examples below.
 
+Prerequisites:
+
+- Repository: `https://github.com/omne42/db-vfs`
+- Example setup:
+
+```bash
+git clone https://github.com/omne42/db-vfs.git ../db-vfs
+cd ../db-vfs
+git checkout <tag-or-commit>
+```
+
+Directory assumption for the commands below: this repository and `db-vfs/` are sibling directories.
+
 Quick check:
 
 ```bash
@@ -160,7 +173,8 @@ Run the HTTP service (Postgres; requires `--features postgres`):
 
 ```bash
 cd ../db-vfs
-export DB_VFS_DSN="postgres://user:pass@localhost:5432/db_vfs"
+# Example only; do not commit or expose real credentials.
+export DB_VFS_DSN="postgres://<user>:<password>@localhost:5432/<db>"
 cargo run -p db-vfs-service --features postgres -- \
   --postgres "$DB_VFS_DSN" \
   --policy ./policy.example.toml \

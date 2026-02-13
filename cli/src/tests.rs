@@ -14,6 +14,15 @@ fn create_fifo(path: &std::path::Path) {
     }
 }
 
+fn json_contains_string(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains(needle),
+        serde_json::Value::Array(values) => values.iter().any(|v| json_contains_string(v, needle)),
+        serde_json::Value::Object(map) => map.values().any(|v| json_contains_string(v, needle)),
+        _ => false,
+    }
+}
+
 #[test]
 fn cli_rejects_zero_max_patch_bytes() {
     let parsed = Cli::try_parse_from([
@@ -89,7 +98,7 @@ fn load_text_limited_rejects_fifo_special_files() {
 #[test]
 fn tool_error_details_covers_invalid_path() {
     let err = safe_fs_tools::Error::InvalidPath("bad path".to_string());
-    let details = tool_error_details(&err).expect("details");
+    let details = tool_error_details(&err);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
         Some("invalid_path")
@@ -103,7 +112,7 @@ fn tool_error_details_covers_invalid_path() {
 #[test]
 fn tool_error_details_includes_safe_invalid_path_message_when_redacting() {
     let err = safe_fs_tools::Error::InvalidPath("bad path".to_string());
-    let details = tool_error_details_with(&err, None, true, false).expect("details");
+    let details = tool_error_details_with(&err, None, true, false);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
         Some("invalid_path")
@@ -117,7 +126,7 @@ fn tool_error_details_includes_safe_invalid_path_message_when_redacting() {
 #[test]
 fn tool_error_details_covers_root_not_found() {
     let err = safe_fs_tools::Error::RootNotFound("missing".to_string());
-    let details = tool_error_details(&err).expect("details");
+    let details = tool_error_details(&err);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
         Some("root_not_found")
@@ -131,7 +140,7 @@ fn tool_error_details_covers_root_not_found() {
 #[test]
 fn tool_error_details_includes_safe_invalid_policy_message_when_redacting() {
     let err = safe_fs_tools::Error::InvalidPolicy("bad policy".to_string());
-    let details = tool_error_details_with(&err, None, true, false).expect("details");
+    let details = tool_error_details_with(&err, None, true, false);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
         Some("invalid_policy")
@@ -194,7 +203,7 @@ fn tool_error_details_redacts_walkdir_message() {
         .expect("walkdir error");
     let err = safe_fs_tools::Error::WalkDir(walk_err);
 
-    let details = tool_error_details_with(&err, Some(&redaction), true, false).expect("details");
+    let details = tool_error_details_with(&err, Some(&redaction), true, false);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
         Some("walkdir")
@@ -208,10 +217,9 @@ fn tool_error_details_redacts_walkdir_message() {
         Some("missing")
     );
 
-    let rendered = details.to_string();
     assert!(
-        !rendered.contains(&dir.path().display().to_string()),
-        "expected redacted details to not contain absolute root path: {rendered}"
+        !json_contains_string(&details, &dir.path().display().to_string()),
+        "expected redacted details to not contain absolute root path: {details}"
     );
 }
 
@@ -230,7 +238,7 @@ fn tool_error_details_redacts_walkdir_root_message() {
         source: std::io::Error::from_raw_os_error(2),
     };
 
-    let details = tool_error_details_with(&err, Some(&redaction), true, false).expect("details");
+    let details = tool_error_details_with(&err, Some(&redaction), true, false);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
         Some("walkdir")
@@ -252,10 +260,9 @@ fn tool_error_details_redacts_walkdir_root_message() {
         Some(2)
     );
 
-    let rendered = details.to_string();
     assert!(
-        !rendered.contains(&dir.path().display().to_string()),
-        "expected redacted details to not contain absolute root path: {rendered}"
+        !json_contains_string(&details, &dir.path().display().to_string()),
+        "expected redacted details to not contain absolute root path: {details}"
     );
 }
 
@@ -269,7 +276,7 @@ fn tool_error_details_includes_walkdir_root_message_when_not_redacting() {
         source: std::io::Error::from_raw_os_error(2),
     };
 
-    let details = tool_error_details_with(&err, None, false, false).expect("details");
+    let details = tool_error_details_with(&err, None, false, false);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
         Some("walkdir")
@@ -291,17 +298,16 @@ fn tool_error_details_includes_walkdir_root_message_when_not_redacting() {
         Some(2)
     );
 
-    let rendered = details.to_string();
     assert!(
-        rendered.contains(&dir.path().display().to_string()),
-        "expected details to include absolute path in non-redacted mode: {rendered}"
+        json_contains_string(&details, &dir.path().display().to_string()),
+        "expected details to include absolute path in non-redacted mode: {details}"
     );
 }
 
 #[test]
 fn tool_error_details_redacts_io_message() {
     let err = safe_fs_tools::Error::Io(std::io::Error::from_raw_os_error(2));
-    let details = tool_error_details_with(&err, None, true, false).expect("details");
+    let details = tool_error_details_with(&err, None, true, false);
     assert_eq!(details.get("kind").and_then(|v| v.as_str()), Some("io"));
     assert!(
         details.get("message").is_none(),
@@ -320,7 +326,7 @@ fn tool_error_details_redacts_io_message() {
 #[test]
 fn tool_error_details_includes_io_details_when_not_redacting() {
     let err = safe_fs_tools::Error::Io(std::io::Error::from_raw_os_error(2));
-    let details = tool_error_details_with(&err, None, false, false).expect("details");
+    let details = tool_error_details_with(&err, None, false, false);
     assert_eq!(details.get("kind").and_then(|v| v.as_str()), Some("io"));
     assert!(
         details.get("message").and_then(|v| v.as_str()).is_some(),
@@ -351,7 +357,7 @@ fn tool_error_details_redacts_io_path_details() {
         path: dir.path().join("file.txt"),
         source: std::io::Error::from_raw_os_error(2),
     };
-    let details = tool_error_details_with(&err, Some(&redaction), true, false).expect("details");
+    let details = tool_error_details_with(&err, Some(&redaction), true, false);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
         Some("io_path")
@@ -370,10 +376,9 @@ fn tool_error_details_redacts_io_path_details() {
         Some(2)
     );
 
-    let rendered = details.to_string();
     assert!(
-        !rendered.contains(&dir.path().display().to_string()),
-        "expected redacted details to not contain absolute root path: {rendered}"
+        !json_contains_string(&details, &dir.path().display().to_string()),
+        "expected redacted details to not contain absolute root path: {details}"
     );
 }
 
@@ -384,7 +389,7 @@ fn tool_error_details_includes_io_path_details_when_not_redacting() {
         path: PathBuf::from("file.txt"),
         source: std::io::Error::from_raw_os_error(2),
     };
-    let details = tool_error_details_with(&err, None, false, false).expect("details");
+    let details = tool_error_details_with(&err, None, false, false);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
         Some("io_path")
@@ -406,4 +411,33 @@ fn tool_error_details_includes_io_path_details_when_not_redacting() {
         details.get("raw_os_error").and_then(|v| v.as_i64()),
         Some(2)
     );
+}
+
+#[test]
+fn tool_error_details_redacts_patch_message() {
+    let err = safe_fs_tools::Error::Patch("/abs/path/file.txt: bad patch".to_string());
+    let details = tool_error_details_with(&err, None, true, false);
+    assert_eq!(details.get("kind").and_then(|v| v.as_str()), Some("patch"));
+    assert!(
+        details.get("message").is_none(),
+        "expected patch message omitted in redacted mode"
+    );
+}
+
+#[test]
+fn tool_error_details_keeps_patch_message_when_not_redacting() {
+    let err = safe_fs_tools::Error::Patch("file.txt: bad patch".to_string());
+    let details = tool_error_details_with(&err, None, false, false);
+    assert_eq!(details.get("kind").and_then(|v| v.as_str()), Some("patch"));
+    assert_eq!(
+        details.get("message").and_then(|v| v.as_str()),
+        Some("file.txt: bad patch")
+    );
+}
+
+#[test]
+fn tool_public_message_redacts_patch_message() {
+    let err = safe_fs_tools::Error::Patch("/abs/path/file.txt: bad patch".to_string());
+    let message = tool_public_message(&err, None, true, false);
+    assert_eq!(message, "failed to apply patch");
 }

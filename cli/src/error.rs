@@ -103,7 +103,7 @@ pub(crate) fn format_path_for_error(
         .unwrap_or_else(|| "<redacted>".to_string())
 }
 
-pub(crate) fn tool_error_details(tool: &safe_fs_tools::Error) -> Option<serde_json::Value> {
+pub(crate) fn tool_error_details(tool: &safe_fs_tools::Error) -> serde_json::Value {
     tool_error_details_with(tool, None, false, false)
 }
 
@@ -121,7 +121,7 @@ pub(crate) fn tool_error_details_with(
     redaction: Option<&PathRedaction>,
     redact_paths: bool,
     strict_redact_paths: bool,
-) -> Option<serde_json::Value> {
+) -> serde_json::Value {
     match tool {
         safe_fs_tools::Error::Io(err) => {
             let mut out = details_map("io");
@@ -138,7 +138,7 @@ pub(crate) fn tool_error_details_with(
                     serde_json::Value::String(err.to_string()),
                 );
             }
-            Some(serde_json::Value::Object(out))
+            serde_json::Value::Object(out)
         }
         safe_fs_tools::Error::IoPath { op, path, source } => {
             let mut out = details_map("io_path");
@@ -165,7 +165,7 @@ pub(crate) fn tool_error_details_with(
                     serde_json::Value::String(source.to_string()),
                 );
             }
-            Some(serde_json::Value::Object(out))
+            serde_json::Value::Object(out)
         }
         safe_fs_tools::Error::InvalidPolicy(message) => {
             let mut out = details_map("invalid_policy");
@@ -177,7 +177,7 @@ pub(crate) fn tool_error_details_with(
                     message.clone()
                 }),
             );
-            Some(serde_json::Value::Object(out))
+            serde_json::Value::Object(out)
         }
         safe_fs_tools::Error::InvalidPath(message) => {
             let mut out = details_map("invalid_path");
@@ -189,55 +189,63 @@ pub(crate) fn tool_error_details_with(
                     message.clone()
                 }),
             );
-            Some(serde_json::Value::Object(out))
+            serde_json::Value::Object(out)
         }
-        safe_fs_tools::Error::RootNotFound(root_id) => Some(serde_json::json!({
+        safe_fs_tools::Error::RootNotFound(root_id) => serde_json::json!({
             "kind": "root_not_found",
             "root_id": root_id,
-        })),
-        safe_fs_tools::Error::OutsideRoot { root_id, path } => Some(serde_json::json!({
+        }),
+        safe_fs_tools::Error::OutsideRoot { root_id, path } => serde_json::json!({
             "kind": "outside_root",
             "root_id": root_id,
             "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
-        })),
-        safe_fs_tools::Error::NotPermitted(message) => Some(serde_json::json!({
+        }),
+        safe_fs_tools::Error::NotPermitted(message) => serde_json::json!({
             "kind": "not_permitted",
             "message": message,
-        })),
-        safe_fs_tools::Error::SecretPathDenied(path) => Some(serde_json::json!({
+        }),
+        safe_fs_tools::Error::SecretPathDenied(path) => serde_json::json!({
             "kind": "secret_path_denied",
             "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
-        })),
+        }),
         safe_fs_tools::Error::FileTooLarge {
             path,
             size_bytes,
             max_bytes,
-        } => Some(serde_json::json!({
+        } => serde_json::json!({
             "kind": "file_too_large",
             "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
             "size_bytes": size_bytes,
             "max_bytes": max_bytes,
-        })),
-        safe_fs_tools::Error::InvalidUtf8(path) => Some(serde_json::json!({
+        }),
+        safe_fs_tools::Error::InvalidUtf8(path) => serde_json::json!({
             "kind": "invalid_utf8",
             "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
-        })),
-        safe_fs_tools::Error::Patch(message) => Some(serde_json::json!({
-            "kind": "patch",
-            "message": message,
-        })),
-        safe_fs_tools::Error::InvalidRegex(message) => Some(serde_json::json!({
+        }),
+        safe_fs_tools::Error::Patch(message) => {
+            if redact_paths {
+                serde_json::json!({
+                    "kind": "patch",
+                })
+            } else {
+                serde_json::json!({
+                    "kind": "patch",
+                    "message": message,
+                })
+            }
+        }
+        safe_fs_tools::Error::InvalidRegex(message) => serde_json::json!({
             "kind": "invalid_regex",
             "message": message,
-        })),
+        }),
         safe_fs_tools::Error::InputTooLarge {
             size_bytes,
             max_bytes,
-        } => Some(serde_json::json!({
+        } => serde_json::json!({
             "kind": "input_too_large",
             "size_bytes": size_bytes,
             "max_bytes": max_bytes,
-        })),
+        }),
         safe_fs_tools::Error::WalkDirRoot { path, source } => {
             let mut out = details_map("walkdir");
             out.insert(
@@ -262,7 +270,7 @@ pub(crate) fn tool_error_details_with(
                     serde_json::Value::String(source.to_string()),
                 );
             }
-            Some(serde_json::Value::Object(out))
+            serde_json::Value::Object(out)
         }
         safe_fs_tools::Error::WalkDir(err) => {
             if redact_paths {
@@ -287,24 +295,24 @@ pub(crate) fn tool_error_details_with(
                         out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
                     }
                 }
-                Some(serde_json::Value::Object(out))
+                serde_json::Value::Object(out)
             } else {
-                Some(serde_json::json!({
+                serde_json::json!({
                     "kind": "walkdir",
                     "message": err.to_string(),
-                }))
+                })
             }
         }
         _ => {
             if redact_paths {
-                Some(serde_json::json!({
+                serde_json::json!({
                     "kind": tool.code(),
-                }))
+                })
             } else {
-                Some(serde_json::json!({
+                serde_json::json!({
                     "kind": tool.code(),
                     "message": tool.to_string(),
-                }))
+                })
             }
         }
     }
@@ -349,7 +357,7 @@ pub(crate) fn tool_public_message(
             let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
             format!("invalid utf-8 in file: {path}")
         }
-        safe_fs_tools::Error::Patch(_) => tool.to_string(),
+        safe_fs_tools::Error::Patch(_) => "failed to apply patch".to_string(),
         safe_fs_tools::Error::InvalidRegex(_) => tool.to_string(),
         safe_fs_tools::Error::InputTooLarge { .. } => tool.to_string(),
         safe_fs_tools::Error::WalkDirRoot { .. } | safe_fs_tools::Error::WalkDir(_) => {

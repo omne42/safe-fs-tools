@@ -127,13 +127,6 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
     if !source_meta.is_file() {
         return Err(Error::InvalidPath("path is not a file".to_string()));
     }
-    if source_meta.len() > ctx.policy.limits.max_write_bytes {
-        return Err(Error::FileTooLarge {
-            path: from_relative.clone(),
-            size_bytes: source_meta.len(),
-            max_bytes: ctx.policy.limits.max_write_bytes,
-        });
-    }
 
     if source == destination {
         return Ok(CopyFileResponse {
@@ -143,6 +136,14 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
             requested_to: Some(requested_to),
             copied: false,
             bytes: 0,
+        });
+    }
+
+    if source_meta.len() > ctx.policy.limits.max_write_bytes {
+        return Err(Error::FileTooLarge {
+            path: from_relative.clone(),
+            size_bytes: source_meta.len(),
+            max_bytes: ctx.policy.limits.max_write_bytes,
         });
     }
 

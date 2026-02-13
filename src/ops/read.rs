@@ -46,10 +46,9 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
         (None, None) => {
             let bytes =
                 super::io::read_bytes_limited(&path, &relative, ctx.policy.limits.max_read_bytes)?;
-            let bytes_read = bytes.len() as u64;
-            let content = std::str::from_utf8(&bytes)
-                .map_err(|_| Error::InvalidUtf8(relative.clone()))?
-                .to_string();
+            let bytes_read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            let content =
+                String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8(relative.clone()))?;
             (bytes_read, content)
         }
         (Some(start_line), Some(end_line)) => {
@@ -110,10 +109,9 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
                 )));
             }
 
-            let bytes_read = out.len() as u64;
-            let content = std::str::from_utf8(&out)
-                .map_err(|_| Error::InvalidUtf8(relative.clone()))?
-                .to_string();
+            let bytes_read = u64::try_from(out.len()).unwrap_or(u64::MAX);
+            let content =
+                String::from_utf8(out).map_err(|_| Error::InvalidUtf8(relative.clone()))?;
             (bytes_read, content)
         }
         _ => {

@@ -108,17 +108,12 @@ fn normalize_relative_path(path: &Path) -> Cow<'_, Path> {
 }
 
 #[cfg(windows)]
-fn has_lossy_utf8(path: &Path) -> bool {
-    path.to_string_lossy().contains('\u{FFFD}')
-}
-
-#[cfg(windows)]
 fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
     let path = normalize_relative_path(path);
-    if has_lossy_utf8(path.as_ref()) {
+    let raw = path.to_string_lossy();
+    if matches!(raw, Cow::Owned(_)) {
         return None;
     }
-    let raw = path.to_string_lossy();
     if !raw.contains('\\') {
         return Some(path);
     }

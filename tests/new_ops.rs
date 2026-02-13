@@ -48,7 +48,7 @@ fn stat_reports_file_metadata() {
     )
     .expect("stat");
 
-    assert_eq!(resp.kind, "file");
+    assert!(matches!(resp.kind, safe_fs_tools::ops::StatKind::File));
     assert_eq!(resp.size_bytes, 2);
     assert!(resp.modified_ms.is_some());
 }

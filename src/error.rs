@@ -21,7 +21,7 @@ pub enum Error {
     WalkDir(#[from] walkdir::Error),
 
     #[cfg(any(feature = "glob", feature = "grep"))]
-    #[error("walkdir error ({path}): {source}")]
+    #[error("io error while preparing walk root ({path}): {source}")]
     WalkDirRoot {
         path: PathBuf,
         #[source]
@@ -110,15 +110,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn code_distinguishes_io_and_io_path() {
-        let io = Error::Io(std::io::Error::from_raw_os_error(2));
-        assert_eq!(io.code(), "io");
+    fn code_covers_variants() {
+        let cases = vec![
+            (Error::Io(std::io::Error::from_raw_os_error(2)), "io"),
+            (
+                Error::IoPath {
+                    op: "open",
+                    path: PathBuf::from("file.txt"),
+                    source: std::io::Error::from_raw_os_error(2),
+                },
+                "io_path",
+            ),
+            (Error::InvalidPolicy("x".to_string()), "invalid_policy"),
+            (Error::InvalidPath("x".to_string()), "invalid_path"),
+            (Error::RootNotFound("root".to_string()), "root_not_found"),
+            (
+                Error::OutsideRoot {
+                    root_id: "root".to_string(),
+                    path: PathBuf::from("x"),
+                },
+                "outside_root",
+            ),
+            (Error::NotPermitted("x".to_string()), "not_permitted"),
+            (
+                Error::SecretPathDenied(PathBuf::from("secret")),
+                "secret_path_denied",
+            ),
+            (
+                Error::FileTooLarge {
+                    path: PathBuf::from("x"),
+                    size_bytes: 2,
+                    max_bytes: 1,
+                },
+                "file_too_large",
+            ),
+            (Error::InvalidUtf8(PathBuf::from("x")), "invalid_utf8"),
+            (Error::Patch("x".to_string()), "patch"),
+            (Error::InvalidRegex("x".to_string()), "invalid_regex"),
+            (
+                Error::InputTooLarge {
+                    size_bytes: 2,
+                    max_bytes: 1,
+                },
+                "input_too_large",
+            ),
+        ];
+        for (error, code) in cases {
+            assert_eq!(error.code(), code);
+        }
 
-        let io_path = Error::IoPath {
-            op: "open",
-            path: PathBuf::from("file.txt"),
-            source: std::io::Error::from_raw_os_error(2),
-        };
-        assert_eq!(io_path.code(), "io_path");
+        #[cfg(any(feature = "glob", feature = "grep"))]
+        {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let missing = dir.path().join("missing");
+            let walk_err = walkdir::WalkDir::new(&missing)
+                .into_iter()
+                .find_map(|entry| entry.err())
+                .expect("walk error");
+            let walk = Error::WalkDir(walk_err);
+            assert_eq!(walk.code(), "walkdir");
+
+            let walk_root = Error::WalkDirRoot {
+                path: PathBuf::from("x"),
+                source: std::io::Error::from_raw_os_error(2),
+            };
+            assert_eq!(walk_root.code(), "walkdir");
+        }
     }
 }

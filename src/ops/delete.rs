@@ -130,10 +130,27 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
             ));
         }
 
-        fs::remove_dir_all(&target)
-            .map_err(|err| Error::io_path("remove_dir_all", &relative, err))?;
-    } else {
-        fs::remove_file(&target).map_err(|err| Error::io_path("remove_file", &relative, err))?;
+        if let Err(err) = fs::remove_dir_all(&target) {
+            if err.kind() == std::io::ErrorKind::NotFound && request.ignore_missing {
+                return Ok(DeleteResponse {
+                    path: requested_path.clone(),
+                    requested_path: Some(requested_path),
+                    deleted: false,
+                    kind: "missing".to_string(),
+                });
+            }
+            return Err(Error::io_path("remove_dir_all", &relative, err));
+        }
+    } else if let Err(err) = fs::remove_file(&target) {
+        if err.kind() == std::io::ErrorKind::NotFound && request.ignore_missing {
+            return Ok(DeleteResponse {
+                path: requested_path.clone(),
+                requested_path: Some(requested_path),
+                deleted: false,
+                kind: "missing".to_string(),
+            });
+        }
+        return Err(Error::io_path("remove_file", &relative, err));
     }
 
     Ok(DeleteResponse {

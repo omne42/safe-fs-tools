@@ -69,7 +69,7 @@ pub(super) fn resolve_path_in_root_lexically(
 ) -> Result<ResolvedPath> {
     let resolved = ctx.policy.resolve_path(root_id, path)?;
     let root = ctx.policy.root(root_id)?;
-    let canonical_root = ctx.canonical_root(root_id)?.clone();
+    let canonical_root = ctx.canonical_root(root_id)?.to_path_buf();
 
     let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
     let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
@@ -171,7 +171,12 @@ impl super::Context {
         }
         let relative =
             crate::path_utils::strip_prefix_case_insensitive(&canonical, &canonical_root)
-                .unwrap_or(canonical.clone());
+                .ok_or_else(|| {
+                    Error::InvalidPath(format!(
+                        "failed to derive root-relative path from canonical target {}",
+                        canonical.display()
+                    ))
+                })?;
         let relative = if relative.as_os_str().is_empty() {
             PathBuf::from(".")
         } else {
@@ -187,7 +192,7 @@ impl super::Context {
         relative: &Path,
         create_missing: bool,
     ) -> Result<PathBuf> {
-        let canonical_root = self.canonical_root(root_id)?.clone();
+        let canonical_root = self.canonical_root(root_id)?.to_path_buf();
 
         let mut current = canonical_root.clone();
         let mut current_relative = PathBuf::new();

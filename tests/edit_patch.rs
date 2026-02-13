@@ -126,7 +126,7 @@ fn edit_patch_delete_roundtrip() {
     assert_eq!(edit.requested_path, Some(PathBuf::from("file.txt")));
 
     let after_edit = std::fs::read_to_string(&path).expect("read");
-    assert!(after_edit.contains("TWO"));
+    assert_eq!(after_edit, "one\nTWO\nthree\n");
 
     let updated = "one\nTWO\nTHREE\n";
     let patch = diffy::create_patch(&after_edit, updated);

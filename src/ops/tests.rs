@@ -61,7 +61,7 @@ fn walk_traversal_files_rejects_walk_root_outside_root() {
     let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
     let ctx = Context::new(policy).expect("ctx");
 
-    let root_path = ctx.canonical_root("root").expect("root").clone();
+    let root_path = ctx.canonical_root("root").expect("root").to_path_buf();
     let walk_root = root_path.parent().expect("parent").to_path_buf();
 
     let err = traversal::walk_traversal_files(
@@ -108,7 +108,7 @@ fn traversal_skip_globs_apply_to_directories_via_probe() {
         "expected the skip glob to match the probe path"
     );
 
-    let root_path = ctx.canonical_root("root").expect("root").clone();
+    let root_path = ctx.canonical_root("root").expect("root").to_path_buf();
     let seen = traversal::walkdir_traversal_iter(&ctx, &root_path, &root_path)
         .map(|entry| entry.expect("walkdir entry"))
         .filter(|entry| entry.depth() > 0)
@@ -116,7 +116,7 @@ fn traversal_skip_globs_apply_to_directories_via_probe() {
             entry
                 .path()
                 .strip_prefix(&root_path)
-                .unwrap_or(entry.path())
+                .expect("walkdir entry escaped root")
                 .to_path_buf()
         })
         .collect::<Vec<_>>();

@@ -61,6 +61,24 @@ use super::traversal::{
     globset_is_match, walk_traversal_files,
 };
 
+#[cfg(feature = "grep")]
+fn empty_grep_response(started: &Instant) -> GrepResponse {
+    GrepResponse {
+        matches: Vec::new(),
+        truncated: false,
+        skipped_too_large_files: 0,
+        skipped_non_utf8_files: 0,
+        scanned_files: 0,
+        scan_limit_reached: false,
+        scan_limit_reason: None,
+        elapsed_ms: elapsed_ms(started),
+        scanned_entries: 0,
+        skipped_walk_errors: 0,
+        skipped_io_errors: 0,
+        skipped_dangling_symlink_targets: 0,
+    }
+}
+
 #[cfg(not(feature = "grep"))]
 pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let _ = ctx;
@@ -79,7 +97,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     }
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
-    let root_path = ctx.canonical_root(&request.root_id)?.clone();
+    let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
     let walk_root = match request
         .glob
         .as_deref()
@@ -92,20 +110,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 || ctx.is_traversal_path_skipped(&prefix)
                 || ctx.is_traversal_path_skipped(&probe)
             {
-                return Ok(GrepResponse {
-                    matches: Vec::new(),
-                    truncated: false,
-                    skipped_too_large_files: 0,
-                    skipped_non_utf8_files: 0,
-                    scanned_files: 0,
-                    scan_limit_reached: false,
-                    scan_limit_reason: None,
-                    elapsed_ms: elapsed_ms(&started),
-                    scanned_entries: 0,
-                    skipped_walk_errors: 0,
-                    skipped_io_errors: 0,
-                    skipped_dangling_symlink_targets: 0,
-                });
+                return Ok(empty_grep_response(&started));
             }
             root_path.join(prefix)
         }
@@ -172,6 +177,12 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 if !ok {
                     continue;
                 }
+                if matches.len() >= ctx.policy.limits.max_results {
+                    diag.truncated = true;
+                    diag.scan_limit_reached = true;
+                    diag.scan_limit_reason = Some(ScanLimitReason::Results);
+                    return Ok(std::ops::ControlFlow::Break(()));
+                }
                 let line_truncated = line.len() > ctx.policy.limits.max_line_bytes;
                 let mut end = line.len().min(ctx.policy.limits.max_line_bytes);
                 while end > 0 && !line.is_char_boundary(end) {
@@ -179,12 +190,6 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
                 let text = line[..end].to_string();
                 let text = ctx.redactor.redact_text(&text);
-                if matches.len() >= ctx.policy.limits.max_results {
-                    diag.truncated = true;
-                    diag.scan_limit_reached = true;
-                    diag.scan_limit_reason = Some(ScanLimitReason::Results);
-                    return Ok(std::ops::ControlFlow::Break(()));
-                }
                 matches.push(GrepMatch {
                     path: file.relative_path.clone(),
                     line: idx.saturating_add(1) as u64,
@@ -198,20 +203,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     ) {
         Ok(diag) => diag,
         Err(Error::WalkDirRoot { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(GrepResponse {
-                matches: Vec::new(),
-                truncated: false,
-                skipped_too_large_files: 0,
-                skipped_non_utf8_files: 0,
-                scanned_files: 0,
-                scan_limit_reached: false,
-                scan_limit_reason: None,
-                elapsed_ms: elapsed_ms(&started),
-                scanned_entries: 0,
-                skipped_walk_errors: 0,
-                skipped_io_errors: 0,
-                skipped_dangling_symlink_targets: 0,
-            });
+            return Ok(empty_grep_response(&started));
         }
         Err(err) => return Err(err),
     };

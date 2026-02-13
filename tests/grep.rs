@@ -20,6 +20,35 @@ fn is_root_user() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
+#[cfg(unix)]
+struct PermissionRestoreGuard {
+    path: PathBuf,
+    mode: u32,
+}
+
+#[cfg(unix)]
+impl PermissionRestoreGuard {
+    fn set(path: &std::path::Path, mode: u32) -> Self {
+        let prev = std::fs::symlink_metadata(path)
+            .expect("stat before chmod")
+            .permissions()
+            .mode()
+            & 0o777;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+        Self {
+            path: path.to_path_buf(),
+            mode: prev,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PermissionRestoreGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode));
+    }
+}
+
 #[test]
 fn grep_globs_support_leading_dot_slash() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -134,7 +163,7 @@ fn grep_skips_walkdir_errors() {
     let blocked = dir.path().join("blocked");
     std::fs::create_dir(&blocked).expect("mkdir");
     std::fs::write(blocked.join("b.txt"), "needle\n").expect("write");
-    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    let _chmod_guard = PermissionRestoreGuard::set(&blocked, 0o000);
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = grep(
@@ -154,8 +183,6 @@ fn grep_skips_walkdir_errors() {
         resp.skipped_walk_errors > 0,
         "expected at least one walk error"
     );
-
-    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).expect("chmod back");
 }
 
 #[test]
@@ -171,7 +198,7 @@ fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
     let blocked = dir.path().join("blocked");
     std::fs::create_dir(&blocked).expect("mkdir");
     std::fs::write(blocked.join("b.txt"), "needle\n").expect("write");
-    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    let _chmod_guard = PermissionRestoreGuard::set(&blocked, 0o000);
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let err = grep(
@@ -198,8 +225,6 @@ fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
         !rendered.contains(&dir.path().display().to_string()),
         "expected error to not contain absolute root path: {rendered}"
     );
-
-    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).expect("chmod back");
 }
 
 #[test]
@@ -214,7 +239,7 @@ fn grep_skips_unreadable_files() {
     std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
     let unreadable = dir.path().join("b.txt");
     std::fs::write(&unreadable, "needle\n").expect("write");
-    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    let _chmod_guard = PermissionRestoreGuard::set(&unreadable, 0o000);
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = grep(

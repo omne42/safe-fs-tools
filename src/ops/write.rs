@@ -41,7 +41,11 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
     let canonical_root = resolved.canonical_root;
     let requested_path = resolved.requested_path;
 
-    let bytes_written = request.content.len() as u64;
+    let bytes_written = u64::try_from(request.content.len()).map_err(|_| Error::FileTooLarge {
+        path: requested_path.clone(),
+        size_bytes: u64::MAX,
+        max_bytes: ctx.policy.limits.max_write_bytes,
+    })?;
     if bytes_written > ctx.policy.limits.max_write_bytes {
         return Err(Error::FileTooLarge {
             path: requested_path.clone(),
@@ -106,6 +110,9 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
     if existing.is_some() {
         let (canonical, relative, requested_path) =
             ctx.canonical_path_in_root(&request.root_id, &request.path)?;
+        if ctx.redactor.is_path_denied(&relative) {
+            return Err(Error::SecretPathDenied(relative));
+        }
         super::io::write_bytes_atomic(&canonical, &relative, request.content.as_bytes())?;
         return Ok(WriteFileResponse {
             path: relative,
