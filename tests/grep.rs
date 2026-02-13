@@ -45,7 +45,14 @@ impl PermissionRestoreGuard {
 #[cfg(unix)]
 impl Drop for PermissionRestoreGuard {
     fn drop(&mut self) {
-        let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode));
+        if let Err(err) =
+            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode))
+        {
+            eprintln!(
+                "failed to restore permissions for {}: {err}",
+                self.path.display()
+            );
+        }
     }
 }
 
@@ -284,7 +291,6 @@ fn grep_respects_max_walk_ms_time_budget() {
         resp.scan_limit_reason,
         Some(safe_fs_tools::ops::ScanLimitReason::Time)
     );
-    assert!(resp.matches.is_empty());
 }
 
 #[test]

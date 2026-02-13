@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Hooks/tests hardening from full-file review: tightened `commit-msg` subject validation, strengthened `pre-commit` staged-diff failure handling, and added regression assertions for failure-side-effect invariants.
 - Error/CLI contract: `tool_error_details*` now always returns a JSON object, and `patch` error details/messages are path-redaction aware.
 - API typing: `stat` response `type` is now modeled by `StatKind` enum in Rust while preserving lowercase JSON serialization.
 - Internal API cleanup: `Context::canonical_root` now returns `&Path` instead of `&PathBuf` to avoid leaking storage details.

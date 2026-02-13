@@ -35,7 +35,7 @@ case "$first_line" in
 esac
 
 types="feat|fix|docs|refactor|perf|test|chore|build|ci|revert"
-regex="^(${types})(\\([a-z0-9._-]+\\))?(!)?: .+"
+regex="^(${types})(\\([a-z0-9._-]+\\))?(!)?: [^[:space:]].*"
 
 if [[ ! "$first_line" =~ $regex ]]; then
   cat >&2 <<'EOF'

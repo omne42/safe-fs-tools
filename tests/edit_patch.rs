@@ -217,6 +217,10 @@ fn edit_respects_max_write_bytes() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after reject"),
+        "one\n"
+    );
 }
 
 #[test]
@@ -270,6 +274,10 @@ fn edit_respects_max_read_bytes() {
         safe_fs_tools::Error::FileTooLarge { .. } => {}
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after reject"),
+        "line\n".repeat(50)
+    );
 }
 
 #[test]
@@ -539,6 +547,10 @@ fn patch_rejects_invalid_patch_text() {
         safe_fs_tools::Error::Patch(message) => assert!(message.contains("file.txt")),
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after reject"),
+        "one\n"
+    );
 }
 
 #[test]
@@ -565,6 +577,10 @@ fn patch_rejects_patches_that_do_not_apply() {
         safe_fs_tools::Error::Patch(message) => assert!(message.contains("file.txt")),
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after reject"),
+        "one\n"
+    );
 }
 
 #[test]
@@ -601,4 +617,8 @@ fn patch_respects_max_write_bytes() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after reject"),
+        "one\n"
+    );
 }

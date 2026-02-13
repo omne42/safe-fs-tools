@@ -415,12 +415,17 @@ fn tool_error_details_includes_io_path_details_when_not_redacting() {
 
 #[test]
 fn tool_error_details_redacts_patch_message() {
-    let err = safe_fs_tools::Error::Patch("/abs/path/file.txt: bad patch".to_string());
+    let raw = "/abs/path/file.txt: bad patch";
+    let err = safe_fs_tools::Error::Patch(raw.to_string());
     let details = tool_error_details_with(&err, None, true, false);
     assert_eq!(details.get("kind").and_then(|v| v.as_str()), Some("patch"));
     assert!(
         details.get("message").is_none(),
         "expected patch message omitted in redacted mode"
+    );
+    assert!(
+        !json_contains_string(&details, raw),
+        "expected redacted patch details to not contain raw path: {details}"
     );
 }
 

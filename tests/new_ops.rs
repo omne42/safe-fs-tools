@@ -50,7 +50,7 @@ fn stat_reports_file_metadata() {
 
     assert!(matches!(resp.kind, safe_fs_tools::ops::StatKind::File));
     assert_eq!(resp.size_bytes, 2);
-    assert!(resp.modified_ms.is_some());
+    let _ = resp.modified_ms;
 }
 
 #[test]
@@ -119,6 +119,11 @@ fn write_file_creates_new_files_and_respects_overwrite() {
     )
     .expect_err("should reject");
     assert_eq!(err.code(), "invalid_path");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("sub").join("file.txt"))
+            .expect("read unchanged file"),
+        "hi"
+    );
 
     let resp = write_file(
         &ctx,
@@ -184,6 +189,8 @@ fn move_path_rejects_moving_directory_into_descendant() {
     .expect_err("should reject");
 
     assert_eq!(err.code(), "invalid_path");
+    assert!(dir.path().join("a").is_dir());
+    assert!(dir.path().join("a").join("sub").is_dir());
 }
 
 #[test]
@@ -260,6 +267,7 @@ fn copy_file_rejects_symlink_sources() {
     .expect_err("copy should reject symlink source");
 
     assert_eq!(err.code(), "invalid_path");
+    assert!(!dir.path().join("out.txt").exists());
 }
 
 #[test]

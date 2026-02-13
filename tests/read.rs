@@ -214,6 +214,29 @@ fn read_supports_line_ranges() {
 }
 
 #[test]
+fn read_supports_line_ranges_without_trailing_newline() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("lines.txt");
+    std::fs::write(&path, "one\ntwo\nthree").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let response = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("lines.txt"),
+            start_line: Some(3),
+            end_line: Some(3),
+        },
+    )
+    .expect("read");
+
+    assert_eq!(response.content, "three");
+    assert_eq!(response.start_line, Some(3));
+    assert_eq!(response.end_line, Some(3));
+}
+
+#[test]
 fn read_line_ranges_respects_max_read_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("bigline.txt");

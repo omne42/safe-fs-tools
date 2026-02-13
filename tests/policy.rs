@@ -19,6 +19,14 @@ fn assert_invalid_policy_contains(err: safe_fs_tools::Error, expected: &str) {
 }
 
 #[test]
+fn policy_accepts_valid_configuration() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = test_policy(dir.path(), RootMode::ReadOnly);
+    let ctx = Context::new(policy).expect("valid policy should be accepted");
+    assert_eq!(ctx.policy().roots.len(), 1);
+}
+
+#[test]
 fn policy_rejects_duplicate_root_ids() {
     let dir = tempfile::tempdir().expect("tempdir");
     let policy = SandboxPolicy {
