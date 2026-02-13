@@ -143,6 +143,21 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         });
     }
 
+    if source_meta.is_dir() {
+        let normalized_source = crate::path_utils::normalize_path_lexical(&source);
+        let normalized_destination = crate::path_utils::normalize_path_lexical(&destination);
+        if normalized_destination != normalized_source
+            && crate::path_utils::starts_with_case_insensitive(
+                &normalized_destination,
+                &normalized_source,
+            )
+        {
+            return Err(Error::InvalidPath(
+                "refusing to move a directory into its own subdirectory".to_string(),
+            ));
+        }
+    }
+
     let destination_meta = match fs::symlink_metadata(&destination) {
         Ok(meta) => Some(meta),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
@@ -165,8 +180,12 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         }
     }
 
-    super::io::rename_replace(&source, &destination, request.overwrite)
-        .map_err(|err| Error::io_path("rename", &to_relative, err))?;
+    super::io::rename_replace(&source, &destination, request.overwrite).map_err(|err| {
+        if !request.overwrite && err.kind() == std::io::ErrorKind::AlreadyExists {
+            return Error::InvalidPath("destination exists".to_string());
+        }
+        Error::io_path("rename", &to_relative, err)
+    })?;
 
     Ok(MovePathResponse {
         from: from_relative,

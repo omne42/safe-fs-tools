@@ -101,7 +101,7 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound && request.ignore_missing => {
             return Ok(DeleteResponse {
-                path: relative,
+                path: requested_path.clone(),
                 requested_path: Some(requested_path),
                 deleted: false,
                 kind: "missing".to_string(),

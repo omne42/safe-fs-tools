@@ -115,21 +115,34 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         });
     }
 
-    let mut open_options = fs::OpenOptions::new();
-    open_options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        open_options.mode(0o600);
-    }
+    let parent = target.parent().ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "invalid write path {}: missing parent directory",
+            relative.display()
+        ))
+    })?;
 
-    let mut file = open_options
-        .open(&target)
-        .map_err(|err| Error::io_path("open", &relative, err))?;
-    file.write_all(request.content.as_bytes())
+    let mut tmp_file = tempfile::Builder::new()
+        .prefix(".safe-fs-tools.")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .map_err(|err| Error::io_path("create_temp", &relative, err))?;
+    tmp_file
+        .as_file_mut()
+        .write_all(request.content.as_bytes())
         .map_err(|err| Error::io_path("write", &relative, err))?;
-    file.sync_all()
+    tmp_file
+        .as_file_mut()
+        .sync_all()
         .map_err(|err| Error::io_path("sync", &relative, err))?;
+    let tmp_path = tmp_file.into_temp_path();
+
+    super::io::rename_replace(tmp_path.as_ref(), &target, false).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::AlreadyExists {
+            return Error::InvalidPath("file exists".to_string());
+        }
+        Error::io_path("rename", &relative, err)
+    })?;
 
     Ok(WriteFileResponse {
         path: relative,

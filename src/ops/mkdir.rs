@@ -76,7 +76,12 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
 
     let relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, &canonical_root)
-            .unwrap_or_else(|| canonical_parent.clone());
+            .ok_or_else(|| {
+                Error::InvalidPath(format!(
+                    "failed to derive root-relative parent for {}",
+                    requested_path.display()
+                ))
+            })?;
     let relative = relative_parent.join(dir_name);
 
     if ctx.redactor.is_path_denied(&relative) {
@@ -113,7 +118,23 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
             ))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(&target).map_err(|err| Error::io_path("create_dir", &relative, err))?;
+            if let Err(err) = fs::create_dir(&target) {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    let existing = fs::symlink_metadata(&target)
+                        .map_err(|meta_err| Error::io_path("metadata", &relative, meta_err))?;
+                    if existing.is_dir() && request.ignore_existing {
+                        return Ok(MkdirResponse {
+                            path: relative,
+                            requested_path: Some(requested_path),
+                            created: false,
+                        });
+                    }
+                    if existing.is_dir() {
+                        return Err(Error::InvalidPath("directory exists".to_string()));
+                    }
+                }
+                return Err(Error::io_path("create_dir", &relative, err));
+            }
             Ok(MkdirResponse {
                 path: relative,
                 requested_path: Some(requested_path),

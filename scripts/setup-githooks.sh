@@ -7,7 +7,6 @@ if [[ -z "$repo_root" ]]; then
   exit 1
 fi
 
-git -C "$repo_root" config core.hooksPath githooks
 for hook in pre-commit commit-msg; do
   hook_path="$repo_root/githooks/$hook"
   if [[ ! -f "$hook_path" ]]; then
@@ -16,6 +15,8 @@ for hook in pre-commit commit-msg; do
   fi
   chmod +x "$hook_path"
 done
+
+git -C "$repo_root" config --local core.hooksPath githooks
 
 echo "Configured git hooks: core.hooksPath=githooks" >&2
 echo "Hooks enabled: pre-commit, commit-msg" >&2

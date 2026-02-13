@@ -8,6 +8,16 @@ use safe_fs_tools::policy::{
     Limits, PathRules, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules,
 };
 
+fn assert_invalid_policy_contains(err: safe_fs_tools::Error, expected: &str) {
+    match err {
+        safe_fs_tools::Error::InvalidPolicy(msg) => assert!(
+            msg.contains(expected),
+            "expected invalid policy message containing {expected:?}, got: {msg}"
+        ),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
 #[test]
 fn policy_rejects_duplicate_root_ids() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -32,10 +42,7 @@ fn policy_rejects_duplicate_root_ids() {
     };
 
     let err = Context::new(policy).expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::InvalidPolicy(msg) => assert!(msg.contains("duplicate root.id")),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_invalid_policy_contains(err, "duplicate root.id");
 }
 
 #[test]
@@ -54,12 +61,7 @@ fn policy_rejects_relative_root_paths() {
     };
 
     let err = Context::new(policy).expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::InvalidPolicy(msg) => {
-            assert!(msg.contains("root.path must be absolute"))
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_invalid_policy_contains(err, "root.path must be absolute");
 }
 
 #[test]
@@ -69,10 +71,7 @@ fn policy_rejects_invalid_redact_regexes() {
     policy.secrets.redact_regexes = vec!["[".to_string()];
 
     let err = Context::new(policy).expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::InvalidPolicy(msg) => assert!(msg.contains("secrets.redact_regexes")),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_invalid_policy_contains(err, "secrets.redact_regexes");
 }
 
 #[test]
@@ -82,12 +81,7 @@ fn policy_rejects_zero_max_patch_bytes() {
     policy.limits.max_patch_bytes = Some(0);
 
     let err = Context::new(policy).expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::InvalidPolicy(msg) => {
-            assert!(msg.contains("limits.max_patch_bytes must be > 0"))
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_invalid_policy_contains(err, "limits.max_patch_bytes must be > 0");
 }
 
 #[test]
@@ -110,10 +104,7 @@ fn context_rejects_file_roots() {
     };
 
     let err = Context::new(policy).expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::InvalidPolicy(msg) => assert!(msg.contains("is not a directory")),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_invalid_policy_contains(err, "is not a directory");
 }
 
 #[test]

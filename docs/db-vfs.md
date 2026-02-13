@@ -73,7 +73,7 @@ Minimal operations (library or service):
 - `read(workspace_id, path, {start_line,end_line}, limits)`
 - `write(workspace_id, path, content, expected_version?)` (CAS / optimistic concurrency)
 - `patch(workspace_id, path, unified_diff, expected_version)` (atomic apply + CAS)
-- `delete(workspace_id, path, expected_version?)`
+- `delete(workspace_id, path, { expected_version, force? })`
 - `glob(workspace_id, glob, path_prefix?, max_results)`
 - `grep(workspace_id, pattern, {glob?, path_prefix?}, budgets)` (streaming)
 
@@ -81,15 +81,17 @@ Notes:
 
 - DB-VFS “roots” are modeled as namespaces: `(workspace_id, path_prefix)` rather than OS paths.
 - `expected_version` avoids silent lost updates and makes concurrent edits explicit.
-- `path_prefix` is required for `grep` and for broad `glob` patterns (e.g. `"**/*.md"`). If a safe
-  literal prefix can be derived from the `glob` (e.g. `"docs/**/*.md"` → `"docs/"`), it can be used
-  as an implicit `path_prefix`.
+- `path_prefix` is optional in the API shape, but request validation should require a bounded scope:
+  - `grep`: require explicit `path_prefix` (or an exact-path query that is already bounded).
+  - `glob`: require `path_prefix` when the pattern is broad (for example `"**/*.md"`).
+  - If a safe literal prefix can be derived from the glob (for example `"docs/**/*.md"` ->
+    `"docs/"`), the service may use that derived prefix and accept omitted `path_prefix`.
 - Concurrency (CAS) semantics in the MVP implementation:
   - `patch` requires `expected_version`.
   - `write(expected_version = None)` is **create-only** (conflicts if the file exists); updates
     require `expected_version`.
-  - `delete(expected_version = Some(v))` enforces CAS; `delete(expected_version = None)` is an
-    unconditional delete.
+  - `delete(expected_version = Some(v))` enforces CAS.
+  - `delete(expected_version = None)` should be rejected unless `force = true` is explicitly set.
 
 ## Minimal schema (Postgres-ish)
 
@@ -156,8 +158,9 @@ Run the HTTP service (Postgres; requires `--features postgres`):
 
 ```bash
 cd ../db-vfs
+export DB_VFS_DSN="postgres://user:pass@localhost:5432/db_vfs"
 cargo run -p db-vfs-service --features postgres -- \
-  --postgres "postgres://user:pass@localhost:5432/db_vfs" \
+  --postgres "$DB_VFS_DSN" \
   --policy ./policy.example.toml \
   --listen 127.0.0.1:8080
 ```

@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{BufRead, Read};
 use std::path::PathBuf;
 
@@ -61,17 +60,8 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
                 )));
             }
 
-            let meta =
-                fs::metadata(&path).map_err(|err| Error::io_path("metadata", &relative, err))?;
-            if !meta.is_file() {
-                return Err(Error::InvalidPath(format!(
-                    "path {} is not a regular file",
-                    relative.display()
-                )));
-            }
+            let (file, meta) = super::io::open_regular_file_for_read(&path, &relative)?;
             let file_size_bytes = meta.len();
-            let file =
-                fs::File::open(&path).map_err(|err| Error::io_path("open", &relative, err))?;
             let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
             let mut reader = std::io::BufReader::new(file.take(limit));
             let mut buf = Vec::<u8>::new();

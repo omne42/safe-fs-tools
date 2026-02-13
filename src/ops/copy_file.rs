@@ -131,21 +131,17 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         });
     }
 
-    let meta = fs::symlink_metadata(&source)
-        .map_err(|err| Error::io_path("metadata", &from_relative, err))?;
-    if meta.file_type().is_symlink() {
-        return Err(Error::InvalidPath("refusing to copy symlinks".to_string()));
-    }
-    if meta.is_dir() {
+    let (input, source_meta) = super::io::open_regular_file_for_read(&source, &from_relative)?;
+    if source_meta.is_dir() {
         return Err(Error::InvalidPath("path is a directory".to_string()));
     }
-    if !meta.is_file() {
+    if !source_meta.is_file() {
         return Err(Error::InvalidPath("path is not a file".to_string()));
     }
-    if meta.len() > ctx.policy.limits.max_write_bytes {
+    if source_meta.len() > ctx.policy.limits.max_write_bytes {
         return Err(Error::FileTooLarge {
             path: from_relative.clone(),
-            size_bytes: meta.len(),
+            size_bytes: source_meta.len(),
             max_bytes: ctx.policy.limits.max_write_bytes,
         });
     }
@@ -164,9 +160,6 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(Error::io_path("metadata", &to_relative, err)),
     }
-
-    let input =
-        fs::File::open(&source).map_err(|err| Error::io_path("open", &from_relative, err))?;
 
     let parent = destination.parent().ok_or_else(|| {
         Error::InvalidPath(format!(
@@ -197,13 +190,19 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         .sync_all()
         .map_err(|err| Error::io_path("sync", &to_relative, err))?;
 
-    let perms = meta.permissions();
+    let perms = source_meta.permissions();
     let tmp_path = tmp_file.into_temp_path();
     fs::set_permissions(&tmp_path, perms)
         .map_err(|err| Error::io_path("set_permissions", &to_relative, err))?;
 
-    super::io::rename_replace(tmp_path.as_ref(), &destination, request.overwrite)
-        .map_err(|err| Error::io_path("rename", &to_relative, err))?;
+    super::io::rename_replace(tmp_path.as_ref(), &destination, request.overwrite).map_err(
+        |err| {
+            if !request.overwrite && err.kind() == std::io::ErrorKind::AlreadyExists {
+                return Error::InvalidPath("destination exists".to_string());
+            }
+            Error::io_path("rename", &to_relative, err)
+        },
+    )?;
 
     Ok(CopyFileResponse {
         from: from_relative,

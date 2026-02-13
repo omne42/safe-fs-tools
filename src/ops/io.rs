@@ -4,6 +4,114 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FileIdentity {
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+}
+
+impl FileIdentity {
+    fn from_metadata(meta: &fs::Metadata) -> Option<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+
+            Some(Self {
+                dev: meta.dev(),
+                ino: meta.ino(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
+fn is_symlink_open_error(err: &std::io::Error) -> bool {
+    err.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(not(unix))]
+fn is_symlink_open_error(_err: &std::io::Error) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn open_readonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    options.open(path)
+}
+
+#[cfg(not(unix))]
+fn open_readonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+#[cfg(unix)]
+fn open_writeonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = fs::OpenOptions::new();
+    options.write(true).custom_flags(libc::O_NOFOLLOW);
+    options.open(path)
+}
+
+#[cfg(not(unix))]
+fn open_writeonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new().write(true).open(path)
+}
+
+pub(super) fn open_regular_file_for_read(
+    path: &Path,
+    relative: &Path,
+) -> Result<(fs::File, fs::Metadata)> {
+    let file = open_readonly_nofollow(path).map_err(|err| {
+        if is_symlink_open_error(&err) {
+            return Error::InvalidPath(format!("path {} is a symlink", relative.display()));
+        }
+        Error::io_path("open", relative, err)
+    })?;
+    let meta = file
+        .metadata()
+        .map_err(|err| Error::io_path("metadata", relative, err))?;
+    if !meta.is_file() {
+        return Err(Error::InvalidPath(format!(
+            "path {} is not a regular file",
+            relative.display()
+        )));
+    }
+    Ok((file, meta))
+}
+
+fn open_regular_file_for_write(path: &Path, relative: &Path) -> Result<(fs::File, fs::Metadata)> {
+    let file = open_writeonly_nofollow(path).map_err(|err| {
+        if is_symlink_open_error(&err) {
+            return Error::InvalidPath(format!("path {} is a symlink", relative.display()));
+        }
+        Error::io_path("open_for_write", relative, err)
+    })?;
+    let meta = file
+        .metadata()
+        .map_err(|err| Error::io_path("metadata", relative, err))?;
+    if !meta.is_file() {
+        return Err(Error::InvalidPath(format!(
+            "path {} is not a regular file",
+            relative.display()
+        )));
+    }
+    Ok((file, meta))
+}
+
 #[cfg(all(test, unix))]
 pub(super) fn open_private_temp_file(path: &Path) -> std::io::Result<fs::File> {
     let mut open_options = fs::OpenOptions::new();
@@ -17,15 +125,7 @@ pub(super) fn open_private_temp_file(path: &Path) -> std::io::Result<fs::File> {
 }
 
 pub(super) fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<Vec<u8>> {
-    // NOTE: Always check metadata before opening the file to avoid blocking on special files
-    // (e.g. FIFOs) in `File::open` on Unix.
-    let meta = fs::metadata(path).map_err(|err| Error::io_path("metadata", relative, err))?;
-    if !meta.is_file() {
-        return Err(Error::InvalidPath(format!(
-            "path {} is not a regular file",
-            relative.display()
-        )));
-    }
+    let (file, meta) = open_regular_file_for_read(path, relative)?;
     if meta.len() > max_bytes {
         return Err(Error::FileTooLarge {
             path: relative.to_path_buf(),
@@ -34,7 +134,6 @@ pub(super) fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -
         });
     }
 
-    let file = fs::File::open(path).map_err(|err| Error::io_path("open", relative, err))?;
     let limit = max_bytes.saturating_add(1);
     let mut bytes = Vec::<u8>::new();
     file.take(limit)
@@ -51,26 +150,62 @@ pub(super) fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -
 }
 
 pub(super) fn read_string_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<String> {
-    let bytes = read_bytes_limited(path, relative, max_bytes)?;
+    let (text, _identity) = read_string_limited_with_identity(path, relative, max_bytes)?;
+    Ok(text)
+}
+
+pub(super) fn read_string_limited_with_identity(
+    path: &Path,
+    relative: &Path,
+    max_bytes: u64,
+) -> Result<(String, Option<FileIdentity>)> {
+    let (file, meta) = open_regular_file_for_read(path, relative)?;
+    if meta.len() > max_bytes {
+        return Err(Error::FileTooLarge {
+            path: relative.to_path_buf(),
+            size_bytes: meta.len(),
+            max_bytes,
+        });
+    }
+    let identity = FileIdentity::from_metadata(&meta);
+    let limit = max_bytes.saturating_add(1);
+    let mut bytes = Vec::<u8>::new();
+    file.take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|err| Error::io_path("read", relative, err))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(Error::FileTooLarge {
+            path: relative.to_path_buf(),
+            size_bytes: bytes.len() as u64,
+            max_bytes,
+        });
+    }
     std::str::from_utf8(&bytes)
         .map_err(|_| Error::InvalidUtf8(relative.to_path_buf()))
         .map(str::to_string)
+        .map(|text| (text, identity))
 }
 
 pub(super) fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
-    let meta = fs::metadata(path).map_err(|err| Error::io_path("metadata", relative, err))?;
-    if !meta.is_file() {
+    write_bytes_atomic_checked(path, relative, bytes, None)
+}
+
+pub(super) fn write_bytes_atomic_checked(
+    path: &Path,
+    relative: &Path,
+    bytes: &[u8],
+    expected_identity: Option<FileIdentity>,
+) -> Result<()> {
+    // Preserve prior behavior: fail if the original file isn't writable.
+    let (_existing_file, meta) = open_regular_file_for_write(path, relative)?;
+    if let (Some(expected), Some(actual)) = (expected_identity, FileIdentity::from_metadata(&meta))
+        && expected != actual
+    {
         return Err(Error::InvalidPath(format!(
-            "path {} is not a regular file",
+            "path {} changed during operation",
             relative.display()
         )));
     }
-
-    // Preserve prior behavior: fail if the original file isn't writable.
-    let _ = fs::OpenOptions::new()
-        .write(true)
-        .open(path)
-        .map_err(|err| Error::io_path("open_for_write", relative, err))?;
 
     let perms = meta.permissions();
 
@@ -110,6 +245,39 @@ pub(super) fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> 
     rename_replace(tmp_path.as_ref(), path, true)
         .map_err(|err| Error::io_path("replace_file", relative, err))?;
 
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    let parent_dir = fs::File::open(parent)?;
+    parent_dir.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_rename_parents(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+    sync_parent_directory(dest_path)?;
+    let src_parent = src_path.parent();
+    let dest_parent = dest_path.parent();
+    if src_parent != dest_parent {
+        sync_parent_directory(src_path)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_rename_parents(_src_path: &Path, _dest_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -169,7 +337,61 @@ pub(super) fn rename_replace(
 pub(super) fn rename_replace(
     src_path: &Path,
     dest_path: &Path,
-    _replace_existing: bool,
+    replace_existing: bool,
 ) -> std::io::Result<()> {
+    if replace_existing {
+        fs::rename(src_path, dest_path)?;
+    } else {
+        rename_no_replace(src_path, dest_path)?;
+    }
+    sync_rename_parents(src_path, dest_path)
+}
+
+#[cfg(all(unix, not(windows), any(target_os = "linux", target_os = "android")))]
+fn rename_no_replace(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let src = CString::new(src_path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "source path contains interior NUL byte",
+        )
+    })?;
+    let dest = CString::new(dest_path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination path contains interior NUL byte",
+        )
+    })?;
+
+    // Safety: both C strings are NUL-terminated and valid for the duration of this call.
+    let rc = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            src.as_ptr(),
+            libc::AT_FDCWD,
+            dest.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if rc == 0 {
+        return Ok(());
+    }
+    Err(std::io::Error::last_os_error())
+}
+
+#[cfg(all(
+    unix,
+    not(windows),
+    not(any(target_os = "linux", target_os = "android"))
+))]
+fn rename_no_replace(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+    if dest_path.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "destination exists",
+        ));
+    }
     fs::rename(src_path, dest_path)
 }

@@ -71,27 +71,7 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         ""
     };
 
-    let mut replacement = if newline == "\r\n" {
-        let mut out = String::with_capacity(request.replacement.len());
-        let mut prev_was_cr = false;
-        for ch in request.replacement.chars() {
-            if ch == '\n' {
-                if prev_was_cr {
-                    out.push('\n');
-                } else {
-                    out.push('\r');
-                    out.push('\n');
-                }
-                prev_was_cr = false;
-                continue;
-            }
-            out.push(ch);
-            prev_was_cr = ch == '\r';
-        }
-        out
-    } else {
-        request.replacement.clone()
-    };
+    let mut replacement = normalize_replacement_line_endings(&request.replacement, newline);
 
     if !newline.is_empty() && !replacement.ends_with(newline) {
         replacement.push_str(newline);
@@ -124,4 +104,44 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         requested_path: Some(requested_path),
         bytes_written: out.len() as u64,
     })
+}
+
+fn normalize_replacement_line_endings(replacement: &str, newline: &str) -> String {
+    if newline == "\r\n" {
+        let mut out = String::with_capacity(replacement.len());
+        let mut prev_was_cr = false;
+        for ch in replacement.chars() {
+            if ch == '\n' {
+                if prev_was_cr {
+                    out.push('\n');
+                } else {
+                    out.push('\r');
+                    out.push('\n');
+                }
+                prev_was_cr = false;
+                continue;
+            }
+            out.push(ch);
+            prev_was_cr = ch == '\r';
+        }
+        return out;
+    }
+
+    if newline == "\n" {
+        let mut out = String::with_capacity(replacement.len());
+        let mut chars = replacement.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\r' {
+                if chars.peek() == Some(&'\n') {
+                    let _ = chars.next();
+                }
+                out.push('\n');
+                continue;
+            }
+            out.push(ch);
+        }
+        return out;
+    }
+
+    replacement.to_string()
 }

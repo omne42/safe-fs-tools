@@ -11,7 +11,55 @@ pub enum PolicyFormat {
     Json,
 }
 
+#[cfg(unix)]
+fn is_symlink_open_error(err: &std::io::Error) -> bool {
+    err.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(not(unix))]
+fn is_symlink_open_error(_err: &std::io::Error) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn open_policy_file(path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    options.open(path).map_err(|err| {
+        if is_symlink_open_error(&err) {
+            return Error::InvalidPath(format!(
+                "path {} is a symlink; refusing to load policy from symlink paths",
+                path.display()
+            ));
+        }
+        Error::io_path("open", path, err)
+    })
+}
+
+#[cfg(not(unix))]
+fn open_policy_file(path: &Path) -> Result<std::fs::File> {
+    let meta =
+        std::fs::symlink_metadata(path).map_err(|err| Error::io_path("metadata", path, err))?;
+    if meta.file_type().is_symlink() {
+        return Err(Error::InvalidPath(format!(
+            "path {} is a symlink; refusing to load policy from symlink paths",
+            path.display()
+        )));
+    }
+    std::fs::File::open(path).map_err(|err| Error::io_path("open", path, err))
+}
+
 pub fn parse_policy(raw: &str, format: PolicyFormat) -> Result<SandboxPolicy> {
+    let policy = parse_policy_unvalidated(raw, format)?;
+    policy.validate()?;
+    Ok(policy)
+}
+
+pub fn parse_policy_unvalidated(raw: &str, format: PolicyFormat) -> Result<SandboxPolicy> {
     match format {
         PolicyFormat::Json => serde_json::from_str(raw)
             .map_err(|err| Error::InvalidPolicy(format!("invalid json policy: {err}"))),
@@ -40,14 +88,10 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
     }
 
     let path = path.as_ref();
-    let meta =
-        std::fs::symlink_metadata(path).map_err(|err| Error::io_path("metadata", path, err))?;
-    if meta.file_type().is_symlink() {
-        return Err(Error::InvalidPath(format!(
-            "path {} is a symlink; refusing to load policy from symlink paths",
-            path.display()
-        )));
-    }
+    let file = open_policy_file(path)?;
+    let meta = file
+        .metadata()
+        .map_err(|err| Error::io_path("metadata", path, err))?;
     if !meta.is_file() {
         return Err(Error::InvalidPath(format!(
             "path {} is not a regular file",
@@ -57,9 +101,7 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
 
     let limit = max_bytes.saturating_add(1);
     let mut bytes = Vec::<u8>::new();
-    std::fs::File::open(path)
-        .map_err(|err| Error::io_path("open", path, err))?
-        .take(limit)
+    file.take(limit)
         .read_to_end(&mut bytes)
         .map_err(|err| Error::io_path("read", path, err))?;
 
@@ -80,7 +122,5 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
             )));
         }
     };
-    let policy = parse_policy(raw, format)?;
-    policy.validate()?;
-    Ok(policy)
+    parse_policy(raw, format)
 }

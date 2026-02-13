@@ -164,6 +164,27 @@ fn move_path_renames_entries() {
 }
 
 #[test]
+fn move_path_rejects_moving_directory_into_descendant() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("a").join("sub")).expect("mkdir");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = move_path(
+        &ctx,
+        MovePathRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("a"),
+            to: PathBuf::from("a/sub/new"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("should reject");
+
+    assert_eq!(err.code(), "invalid_path");
+}
+
+#[test]
 fn copy_file_copies_regular_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "hi").expect("write");
@@ -187,6 +208,31 @@ fn copy_file_copies_regular_files() {
         std::fs::read_to_string(dir.path().join("b.txt")).unwrap(),
         "hi"
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn copy_file_rejects_symlink_sources() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("real.txt"), "hi").expect("write");
+    symlink(dir.path().join("real.txt"), dir.path().join("link.txt")).expect("symlink");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = copy_file(
+        &ctx,
+        CopyFileRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("link.txt"),
+            to: PathBuf::from("out.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("copy should reject symlink source");
+
+    assert_eq!(err.code(), "invalid_path");
 }
 
 #[test]

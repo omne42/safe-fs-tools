@@ -204,7 +204,7 @@ fn normalize_path_lexical_preserves_verbatim_prefix_root() {
 
 #[test]
 #[cfg(windows)]
-fn rename_replace_honors_replace_existing_flag() {
+fn rename_replace_honors_replace_existing_flag_windows() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("src.txt");
     let dest = dir.path().join("dest.txt");
@@ -217,6 +217,29 @@ fn rename_replace_honors_replace_existing_flag() {
         err.kind() == std::io::ErrorKind::AlreadyExists
             || err.raw_os_error() == Some(80)
             || err.raw_os_error() == Some(183),
+        "unexpected error: {err:?}"
+    );
+
+    io::rename_replace(&src, &dest, true).expect("overwrite");
+    let out = fs::read_to_string(&dest).expect("read dest");
+    assert_eq!(out, "new");
+    assert!(!src.exists());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn rename_replace_honors_replace_existing_flag_non_windows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("src.txt");
+    let dest = dir.path().join("dest.txt");
+
+    fs::write(&src, "new").expect("write src");
+    fs::write(&dest, "old").expect("write dest");
+
+    let err = io::rename_replace(&src, &dest, false).expect_err("should not overwrite");
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::AlreadyExists,
         "unexpected error: {err:?}"
     );
 

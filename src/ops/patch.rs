@@ -57,10 +57,15 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         });
     }
 
-    let content =
-        super::io::read_string_limited(&path, &relative, ctx.policy.limits.max_read_bytes)?;
-    let parsed = Patch::from_str(&request.patch).map_err(|err| Error::Patch(err.to_string()))?;
-    let updated = apply(&content, &parsed).map_err(|err| Error::Patch(err.to_string()))?;
+    let (content, identity) = super::io::read_string_limited_with_identity(
+        &path,
+        &relative,
+        ctx.policy.limits.max_read_bytes,
+    )?;
+    let parsed = Patch::from_str(&request.patch)
+        .map_err(|err| Error::Patch(format!("{}: {err}", relative.display())))?;
+    let updated = apply(&content, &parsed)
+        .map_err(|err| Error::Patch(format!("{}: {err}", relative.display())))?;
 
     if updated.len() as u64 > ctx.policy.limits.max_write_bytes {
         return Err(Error::FileTooLarge {
@@ -70,7 +75,9 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         });
     }
 
-    super::io::write_bytes_atomic(&path, &relative, updated.as_bytes())?;
+    if updated != content {
+        super::io::write_bytes_atomic_checked(&path, &relative, updated.as_bytes(), identity)?;
+    }
     Ok(PatchResponse {
         path: relative,
         requested_path: Some(requested_path),

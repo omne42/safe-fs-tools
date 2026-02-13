@@ -18,9 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Breaking: consolidate delete APIs as `delete` (remove `delete_file`/`delete_path`); `DeleteRequest` adds `recursive`/`ignore_missing` and the response adds `{deleted, type}`.
+- `policy-io`: `parse_policy` now validates by default; use `parse_policy_unvalidated` when raw parse-without-validate is explicitly required.
 - Windows: keep atomic overwrite replacement semantics by using `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` behind a single, documented `unsafe` boundary in `rename_replace` (explicitly reject delete+rename fallback for overwrite paths).
 - Dev: pre-commit rejects oversized Rust files (default 1000 lines; configurable via `SAFE_FS_MAX_RS_LINES`).
 - Docs: expand README and policy example to include new operations and permissions.
+- Docs: split MSRV and toolchain-pin wording, pin the dependency example version, and keep troubleshooting terminology consistent in English.
+- Docs: `docs/example-survey.md` is now explicitly non-normative and references authority docs (`README.md`/`SECURITY.md`) instead of stale workspace-local paths.
+- Docs: `docs/db-vfs.md` now aligns `path_prefix` and delete/CAS contract wording, and uses env-var DSN examples instead of inline Postgres credentials.
+- Docs/Security: add an explicit local-first scope statement and detailed rationale for not adopting a full `openat`/`cap-std` descriptor-chain confinement model at this stage.
 - Docs: mark DB-VFS decision implemented, reference the `db-vfs` project, clarify `path_prefix`/CAS semantics, and add a Postgres run example for `db-vfs-service`.
 - Docs: update the example upstream integration name to `omne-agent`.
 - CI: `release` workflow now runs `cargo test --workspace` before publishing artifacts.
@@ -28,11 +33,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unix: file reads and policy/CLI text inputs now open with `O_NOFOLLOW` and validate type on the opened handle, reducing symlink/FIFO TOCTOU windows.
+- Non-Windows: `rename_replace(..., replace_existing = false)` now enforces no-replace semantics (Linux/Android uses `renameat2(RENAME_NOREPLACE)`; other Unix uses a best-effort already-exists check).
+- Unix: atomic rename paths now fsync parent directories after rename for better crash consistency.
+- `write_file`: create-new writes now use temp-file + no-replace rename, preventing readers from observing partially written new files.
+- `copy_file`/`move_path`/`write_file`: race-time `AlreadyExists` on no-overwrite paths now maps to stable `invalid_path` errors.
+- `resolve`: absolute-input requested-path derivation no longer falls back to absolute paths when root-relative derivation fails.
+- `secrets.deny_globs`: non-root-relative paths are now denied defensively instead of being implicitly treated as non-matching.
 - CI: fix Windows build by using `MoveFileExW` for atomic replacement (avoid missing `ReplaceFileW` bindings).
 - CI: fix Windows-only test compilation (`PathBuf` comparison).
 - CI: fix Windows `policy_io` TOML tests (avoid backslash escape issues in `path`).
 - Docs: add a GitHub Pages root `index.html` redirect so the docs site doesn’t 404.
 - CLI: reject symlink paths for patch/content input files loaded by `load_text_limited`.
+- CLI: JSON error output now honors `--pretty` and success stdout writes handle `BrokenPipe` without panic.
+- CLI: stdin-backed text input errors are now emitted as contextual `io_path` details (`op=read_stdin`, `path=-`).
+- `read` line-range mode now validates regular-file type via the opened file handle (instead of split metadata/open checks).
+- `patch` errors now include the target relative path for easier diagnostics, and no-op patches avoid unnecessary writes.
+- `patch` now performs best-effort same-file identity verification between read and write on Unix (detects inode replacement races).
+- `mkdir` now fails closed if root-relative parent derivation fails and handles `create_dir` `AlreadyExists` races more predictably with `ignore_existing`.
+- `edit` now normalizes replacement line endings for LF files (converts `\r\n`/`\r` to `\n`) to prevent mixed-EOL output.
+- `delete` now returns a consistent missing-path payload (`path=requested_path`) across missing-parent and missing-target branches.
+- Hooks/scripts: tighten commit-message bypass rules (`MERGE_HEAD`/`REVERT_HEAD` checks, guarded `fixup!/squash!`), make pre-commit filename-safe with NUL-delimited git plumbing, validate `SAFE_FS_MAX_RS_LINES`, and scope Rust line checks to staged `.rs` files.
+- `scripts/gate.sh` now supports configurable core crate name, enforces stricter behavior under CI when workspace metadata is missing, and validates `--no-default-features` with `check+clippy+test` on the core crate.
+- `scripts/setup-githooks.sh` now validates/chmods hook files before writing `core.hooksPath` and writes config with `--local`.
 
 ## [0.1.0] - 2026-01-31
 

@@ -3,7 +3,8 @@
 `safe-fs-tools` is a small Rust library + CLI that provides filesystem tools:
 `read`, `list_dir`, `glob`, `grep`, `stat`, `edit`, `patch`, `mkdir`, `write`, `move`, `copy_file`, `delete`.
 
-MSRV / toolchain: this project is pinned via `rust-toolchain.toml` (currently Rust 1.92.0).
+MSRV: Rust 1.92.
+Toolchain pin (for development/CI): `rust-toolchain.toml` (currently Rust 1.92.0).
 
 The point is **not** the commands — it is the **explicit safety model**:
 
@@ -19,7 +20,18 @@ Important boundaries:
 - Text ops (`read`/`edit`/`patch`) only operate on regular files; special files (FIFOs, sockets, device nodes) are rejected to prevent blocking/DoS.
 - See `SECURITY.md` for the threat model.
 
-## 目录
+Local-first scope note:
+
+- `safe-fs-tools` is primarily aimed at local usage (developer tooling and local automation) with
+  explicit policy boundaries.
+- We are aware that a full descriptor-chain confinement model (`openat`/`cap-std`-style) can
+  reduce TOCTOU risk further.
+- We intentionally do not fully enforce that model today due cross-platform complexity, codebase
+  complexity, and maintenance tradeoffs relative to the project scope.
+- If your threat model includes adversarial concurrent local processes, run this inside an OS
+  sandbox/container and treat this crate as policy enforcement, not as a complete confinement layer.
+
+## Table of Contents
 
 - [Semantics](#semantics)
 - [CLI](#cli)
@@ -28,7 +40,7 @@ Important boundaries:
 - [Optional: policy-io](#optional-policy-io)
 - [Cargo features](#cargo-features)
 - [Dev](#dev)
-- [常见失败](#常见失败)
+- [Troubleshooting](#troubleshooting)
 
 ## Semantics
 
@@ -55,7 +67,7 @@ Important boundaries:
 - `limits.max_patch_bytes` optionally caps unified-diff patch *input* size (defaults to `limits.max_read_bytes` if unset).
 - For `read` with `start_line/end_line`, the byte cap applies to scanned bytes up to `end_line` (not just returned bytes).
 - `read`/`edit`/`patch`/`delete` responses include `requested_path` (normalized input path) and `path` (resolved path relative to the root; canonicalized when possible). For symlinked files these can differ. For absolute inputs, `requested_path` is best-effort and may be returned as root-relative when possible. For `delete` with `ignore_missing=true`, `path` may equal `requested_path` when the target (or its parent directory) does not exist.
-- `edit`/`patch` update existing files in-place (the target must already exist). Writes use atomic replacement semantics (temp file + fsync + replace/rename). On Windows this uses `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` (via a narrow, documented `unsafe` call) to avoid non-atomic delete+rename fallback windows. Durability is best-effort on all platforms: parent directories are not fsynced.
+- `edit`/`patch` update existing files in-place (the target must already exist). Writes use atomic replacement semantics (temp file + fsync + replace/rename). On Windows this uses `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` (via a narrow, documented `unsafe` call) to avoid non-atomic delete+rename fallback windows. On Unix, rename paths also fsync parent directories for better crash consistency.
 - `delete` removes files and, with `recursive=true`, directories recursively (does not follow symlinks). Set `ignore_missing=true` to succeed when the target does not exist.
 - `secrets.deny_globs` hides paths from `glob`/`grep` and denies direct access (`read`/`edit`/`patch`/`delete`). Deny checks apply to the requested path (after `.`/`..` normalization) and to the resolved relative path used by the operation (`read`/`edit`/`patch`: canonicalized file path; `delete`: canonicalized parent dir + file name).
 - `traversal.skip_globs` skips paths during traversal (`glob`/`grep`) for performance, but does **not** deny direct access.
@@ -124,7 +136,7 @@ See `policy.example.toml`.
 If you want the library to load `.toml` / `.json` policies directly, enable the `policy-io` feature:
 
 ```toml
-safe-fs-tools = { version = "*", features = ["policy-io"] }
+safe-fs-tools = { version = "0.1.0", features = ["policy-io"] }
 ```
 
 Then use:
@@ -176,10 +188,10 @@ Enable hooks:
 git config core.hooksPath githooks
 ```
 
-## 常见失败
+## Troubleshooting
 
-- `invalid path` / `outside_root`：请求路径超出 root，或 `paths.allow_absolute=false` 时使用了绝对路径。
-- `secret_path_denied`：命中 `secrets.deny_globs`，先检查策略是否过宽。
-- `file_too_large` / `input_too_large`：超出 `limits.*` 配置，按场景调大或分片处理输入。
-- `invalid utf-8`：`read`/`edit`/`patch` 仅支持 UTF-8 文本文件。
-- `not_permitted`：对应 `permissions.*` 被关闭，或 root 为 `read_only`。
+- `invalid_path` / `outside_root`: the request path escaped the selected root, or `paths.allow_absolute=false` rejected an absolute path.
+- `secret_path_denied`: path matched `secrets.deny_globs`; check whether deny rules are too broad.
+- `file_too_large` / `input_too_large`: content exceeded `limits.*`; increase limits or split the input.
+- `invalid_utf8`: `read`/`edit`/`patch` only support UTF-8 text files.
+- `not_permitted`: the relevant `permissions.*` flag is disabled, or root mode is `read_only`.

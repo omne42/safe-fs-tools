@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(any(feature = "glob", feature = "grep"))]
-use std::fs;
-#[cfg(any(feature = "glob", feature = "grep"))]
 use std::time::{Duration, Instant};
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -144,7 +142,7 @@ pub(super) fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
                 // Windows drive/prefix components in later segments can cause `PathBuf::push/join`
                 // to discard prior components, allowing traversal outside the selected root.
                 return None;
-            }
+            };
         }
         if segment == ".." {
             return None;
@@ -178,6 +176,17 @@ pub(super) struct TraversalDiagnostics {
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
+impl TraversalDiagnostics {
+    fn mark_limit_reached(&mut self, reason: ScanLimitReason) {
+        self.truncated = true;
+        self.scan_limit_reached = true;
+        if self.scan_limit_reason.is_none() {
+            self.scan_limit_reason = Some(reason);
+        }
+    }
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
 pub(super) struct TraversalFile {
     pub(super) path: PathBuf,
     pub(super) relative_path: PathBuf,
@@ -197,7 +206,7 @@ pub(super) fn walkdir_traversal_iter<'a>(
         .filter_entry(move |entry| {
             if entry.depth() == 0 {
                 return true;
-            }
+            };
             let is_dir = entry.file_type().is_dir();
             let relative = match entry.path().strip_prefix(root_path) {
                 Ok(relative) => std::borrow::Cow::Borrowed(relative),
@@ -254,11 +263,7 @@ pub(super) fn walk_traversal_files(
 
     for entry in walkdir_traversal_iter(ctx, root_path, walk_root) {
         if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
-            diag.truncated = true;
-            diag.scan_limit_reached = true;
-            if diag.scan_limit_reason.is_none() {
-                diag.scan_limit_reason = Some(ScanLimitReason::Time);
-            }
+            diag.mark_limit_reached(ScanLimitReason::Time);
             break;
         }
 
@@ -269,11 +274,7 @@ pub(super) fn walk_traversal_files(
                     return Err(walkdir_root_error(root_path, walk_root, err));
                 }
                 if diag.scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
-                    diag.truncated = true;
-                    diag.scan_limit_reached = true;
-                    if diag.scan_limit_reason.is_none() {
-                        diag.scan_limit_reason = Some(ScanLimitReason::Entries);
-                    }
+                    diag.mark_limit_reached(ScanLimitReason::Entries);
                     break;
                 }
                 diag.scanned_entries = diag.scanned_entries.saturating_add(1);
@@ -284,11 +285,7 @@ pub(super) fn walk_traversal_files(
 
         if entry.depth() > 0 {
             if diag.scanned_entries as usize >= ctx.policy.limits.max_walk_entries {
-                diag.truncated = true;
-                diag.scan_limit_reached = true;
-                if diag.scan_limit_reason.is_none() {
-                    diag.scan_limit_reason = Some(ScanLimitReason::Entries);
-                }
+                diag.mark_limit_reached(ScanLimitReason::Entries);
                 break;
             }
             diag.scanned_entries = diag.scanned_entries.saturating_add(1);
@@ -299,11 +296,7 @@ pub(super) fn walk_traversal_files(
             continue;
         }
         if diag.scanned_files as usize >= ctx.policy.limits.max_walk_files {
-            diag.truncated = true;
-            diag.scan_limit_reached = true;
-            if diag.scan_limit_reason.is_none() {
-                diag.scan_limit_reason = Some(ScanLimitReason::Files);
-            }
+            diag.mark_limit_reached(ScanLimitReason::Files);
             break;
         }
         diag.scanned_files = diag.scanned_files.saturating_add(1);
@@ -338,21 +331,23 @@ pub(super) fn walk_traversal_files(
                     }
                     Err(err) => return Err(err),
                 };
-            let meta = match fs::metadata(&canonical) {
-                Ok(meta) => meta,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let opened = match super::io::open_regular_file_for_read(&canonical, &relative) {
+                Ok(ok) => ok,
+                Err(Error::IoPath {
+                    source, op: "open", ..
+                }) if source.kind() == std::io::ErrorKind::NotFound => {
                     diag.skipped_dangling_symlink_targets =
                         diag.skipped_dangling_symlink_targets.saturating_add(1);
                     continue;
                 }
-                Err(_) => {
+                Err(Error::InvalidPath(_)) => continue,
+                Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
                     diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
                     continue;
                 }
+                Err(err) => return Err(err),
             };
-            if !meta.is_file() {
-                continue;
-            }
+            let _ = opened;
             TraversalFile {
                 path: canonical,
                 relative_path: relative,

@@ -14,6 +14,35 @@ If you need strong isolation, run your process inside an OS sandbox / container 
 
 Root-boundary checks are best-effort and are **not** hardened against a concurrent filesystem adversary (TOCTOU). If you need race-resistant confinement, use capability-based filesystem APIs and/or OS sandboxing.
 
+### Local-first design scope (and why there is no full `openat` chain yet)
+
+This project is intentionally optimized for **local developer and local automation workflows**:
+
+- single-machine usage where the caller controls both policy and workspace layout,
+- moderate directory sizes,
+- predictable operational simplicity over kernel-specific hardening.
+
+We explicitly evaluated a full descriptor-chain design (`openat`/`openat2` style path walking,
+or a capability-wrapper approach such as `cap-std`) and chose not to make it a hard requirement in
+this repository at the current stage.
+
+Reasoning:
+
+- Full descriptor-chain confinement is significantly more complex to implement and audit across
+  Linux/macOS/Windows behavior differences.
+- It would increase maintenance burden and code complexity for all operations, while many current
+  consumers run in trusted local contexts.
+- Shipping partial, platform-specific confinement semantics as if they were universal can create a
+  false sense of security.
+
+Current position:
+
+- We do targeted TOCTOU reductions where practical (for example, open-handle validation in several
+  file operations).
+- We do **not** claim complete race-resistant confinement at the filesystem boundary.
+- For hostile multi-tenant or adversarial-local-process scenarios, run `safe-fs-tools` inside an
+  OS sandbox/container and treat this crate's policy layer as one defense-in-depth component.
+
 ### Resource limits
 
 Policy limits (e.g. `limits.max_read_bytes`, `limits.max_results`, `limits.max_walk_entries`, `limits.max_walk_files`) are enforced to bound work, but they are **not** a substitute for OS-level resource controls. Pathological inputs (e.g. extremely long lines or huge directory trees) can still cause high CPU/memory usage.

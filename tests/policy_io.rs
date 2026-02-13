@@ -175,4 +175,53 @@ mode = "read_only"
             other => panic!("unexpected error: {other:?}"),
         }
     }
+
+    #[test]
+    fn parse_policy_validates_by_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+
+        let raw = serde_json::json!({
+            "roots": [
+                {"id": "dup", "path": root_path, "mode": "read_only"},
+                {"id": "dup", "path": dir.path().join("other"), "mode": "read_only"}
+            ],
+            "permissions": {"read": true}
+        })
+        .to_string();
+
+        let err = safe_fs_tools::policy_io::parse_policy(
+            &raw,
+            safe_fs_tools::policy_io::PolicyFormat::Json,
+        )
+        .expect_err("should validate");
+        match err {
+            safe_fs_tools::Error::InvalidPolicy(msg) => assert!(msg.contains("duplicate root.id")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_policy_unvalidated_preserves_raw_parse_behavior() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+
+        let raw = serde_json::json!({
+            "roots": [
+                {"id": "dup", "path": root_path, "mode": "read_only"},
+                {"id": "dup", "path": dir.path().join("other"), "mode": "read_only"}
+            ],
+            "permissions": {"read": true}
+        })
+        .to_string();
+
+        let parsed = safe_fs_tools::policy_io::parse_policy_unvalidated(
+            &raw,
+            safe_fs_tools::policy_io::PolicyFormat::Json,
+        )
+        .expect("raw parse");
+        assert_eq!(parsed.roots.len(), 2);
+    }
 }

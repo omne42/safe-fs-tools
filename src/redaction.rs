@@ -51,9 +51,11 @@ impl SecretRedactor {
 
     /// Returns `true` if a **root-relative** path is denied by `secrets.deny_globs`.
     ///
-    /// The deny glob patterns are defined relative to the selected root (e.g. `.git/**`), so
-    /// callers should pass paths relative to the root. Absolute paths will typically not match.
+    /// Non-root-relative paths are denied defensively to avoid silent allow-on-mismatch behavior.
     pub fn is_path_denied(&self, relative: &Path) -> bool {
+        if !is_root_relative(relative) {
+            return true;
+        }
         self.deny.is_match(normalize_path_for_glob(relative))
     }
 
@@ -68,6 +70,19 @@ impl SecretRedactor {
         }
         current.into_owned()
     }
+}
+
+fn is_root_relative(path: &Path) -> bool {
+    for component in path.components() {
+        if matches!(component, Component::RootDir) {
+            return false;
+        }
+        #[cfg(windows)]
+        if matches!(component, Component::Prefix(_)) {
+            return false;
+        }
+    }
+    true
 }
 
 fn normalize_relative_path(path: &Path) -> Cow<'_, Path> {
@@ -107,6 +122,7 @@ fn normalize_path_for_glob(path: &Path) -> Cow<'_, Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::SecretRules;
 
     #[test]
     fn normalize_relative_path_preserves_leading_parent_dirs() {
@@ -122,5 +138,22 @@ mod tests {
             normalize_relative_path(Path::new("a/../../b")).as_ref(),
             Path::new("../b")
         );
+    }
+
+    #[test]
+    fn absolute_paths_are_denied_defensively() {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: Vec::new(),
+            replacement: "***".to_string(),
+        })
+        .expect("redactor");
+
+        #[cfg(unix)]
+        let absolute = Path::new("/tmp/.git/config");
+        #[cfg(windows)]
+        let absolute = Path::new(r"C:\tmp\.git\config");
+
+        assert!(redactor.is_path_denied(absolute));
     }
 }

@@ -8,7 +8,7 @@ pub(super) fn derive_requested_path(
     canonical_root: &Path,
     input: &Path,
     resolved: &Path,
-) -> PathBuf {
+) -> Result<PathBuf> {
     let relative_requested = if input.is_absolute() {
         let normalized_resolved = crate::path_utils::normalize_path_lexical(resolved);
         let normalized_root_path = crate::path_utils::normalize_path_lexical(root_path);
@@ -24,16 +24,21 @@ pub(super) fn derive_requested_path(
                 &normalized_canonical_root,
             )
         })
-        .unwrap_or_else(|| resolved.to_path_buf())
+        .ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "failed to derive root-relative path from absolute input {}",
+                input.display()
+            ))
+        })?
     } else {
         input.to_path_buf()
     };
 
     let normalized = crate::path_utils::normalize_path_lexical(&relative_requested);
     if normalized.as_os_str().is_empty() {
-        PathBuf::from(".")
+        Ok(PathBuf::from("."))
     } else {
-        normalized
+        Ok(normalized)
     }
 }
 
@@ -43,6 +48,20 @@ pub(super) struct ResolvedPath {
     pub(super) canonical_root: PathBuf,
 }
 
+// IMPORTANT DESIGN NOTE:
+//
+// This module uses lexical + canonical-path checks over path strings and canonicalization, not a
+// full directory-fd descriptor chain (`openat`/capability walk).
+//
+// We intentionally keep this local-first model because `safe-fs-tools` targets local usage and
+// policy-layer enforcement with manageable cross-platform complexity. A full descriptor-chain
+// confinement model is stronger against TOCTOU but is currently outside this crate's hard
+// guarantees and maintenance envelope.
+//
+// Therefore:
+// - treat these checks as best-effort root-bounded validation,
+// - do not interpret them as OS-sandbox-equivalent confinement,
+// - use OS sandboxing/containerization for adversarial local-process threat models.
 pub(super) fn resolve_path_in_root_lexically(
     ctx: &super::Context,
     root_id: &str,
@@ -68,8 +87,14 @@ pub(super) fn resolve_path_in_root_lexically(
         let requested_path = if path.is_absolute() {
             normalized_resolved
         } else {
-            derive_requested_path(&root.path, &canonical_root, path, &resolved)
+            derive_requested_path(&root.path, &canonical_root, path, &resolved)?
         };
+        if requested_path.is_absolute() {
+            return Err(Error::OutsideRoot {
+                root_id: root_id.to_string(),
+                path: requested_path,
+            });
+        }
         let requested_path = ctx.reject_secret_path(requested_path)?;
         return Err(Error::OutsideRoot {
             root_id: root_id.to_string(),
@@ -82,7 +107,7 @@ pub(super) fn resolve_path_in_root_lexically(
         &canonical_root,
         path,
         &resolved,
-    ))?;
+    )?)?;
 
     Ok(ResolvedPath {
         resolved,
@@ -92,6 +117,8 @@ pub(super) fn resolve_path_in_root_lexically(
 }
 
 impl super::Context {
+    // NOTE: Same design constraints as above apply. This function is intentionally path-based for
+    // local-first ergonomics; it is not a full descriptor-chain confinement primitive.
     pub(super) fn canonical_path_in_root(
         &self,
         root_id: &str,

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -169,6 +170,14 @@ enum Command {
 }
 
 fn main() {
+    std::process::exit(match run() {
+        ExitCode::SUCCESS => 0,
+        ExitCode::FAILURE => 1,
+        _ => 1,
+    });
+}
+
+fn run() -> ExitCode {
     let cli = Cli::parse();
     let error_format = cli.error_format;
     let redact_paths = cli.redact_paths || cli.redact_paths_strict;
@@ -219,14 +228,16 @@ fn main() {
                 }
 
                 let out = serde_json::json!({ "error": error });
-                match serde_json::to_string(&out) {
+                match serialize_json(&out, cli.pretty) {
                     Ok(text) => eprintln!("{text}"),
                     Err(_) => eprintln!("{err}"),
                 }
             }
         }
-        std::process::exit(1);
+        return ExitCode::FAILURE;
     }
+
+    ExitCode::SUCCESS
 }
 
 fn run_with_policy(cli: &Cli, policy: safe_fs_tools::SandboxPolicy) -> Result<(), CliError> {
@@ -402,12 +413,41 @@ fn run_with_policy(cli: &Cli, policy: safe_fs_tools::SandboxPolicy) -> Result<()
         )?)?,
     };
 
-    let out = if cli.pretty {
-        serde_json::to_string_pretty(&value)?
+    let out = serialize_json(&value, cli.pretty)?;
+    write_stdout_line(&out)?;
+    Ok(())
+}
+
+fn serialize_json(value: &serde_json::Value, pretty: bool) -> Result<String, CliError> {
+    if pretty {
+        Ok(serde_json::to_string_pretty(value)?)
     } else {
-        serde_json::to_string(&value)?
-    };
-    println!("{out}");
+        Ok(serde_json::to_string(value)?)
+    }
+}
+
+fn write_stdout_line(line: &str) -> Result<(), CliError> {
+    use std::io::Write;
+
+    let mut stdout = std::io::stdout().lock();
+    if let Err(err) = stdout.write_all(line.as_bytes()) {
+        if err.kind() == std::io::ErrorKind::BrokenPipe {
+            return Ok(());
+        }
+        return Err(CliError::Tool(safe_fs_tools::Error::Io(err)));
+    }
+    if let Err(err) = stdout.write_all(b"\n") {
+        if err.kind() == std::io::ErrorKind::BrokenPipe {
+            return Ok(());
+        }
+        return Err(CliError::Tool(safe_fs_tools::Error::Io(err)));
+    }
+    if let Err(err) = stdout.flush() {
+        if err.kind() == std::io::ErrorKind::BrokenPipe {
+            return Ok(());
+        }
+        return Err(CliError::Tool(safe_fs_tools::Error::Io(err)));
+    }
     Ok(())
 }
 

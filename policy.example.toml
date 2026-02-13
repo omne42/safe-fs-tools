@@ -50,6 +50,9 @@ deny_globs = [
   ".env.*",
   "**/.env",
   "**/.env.*",
+  "**/*.pem",
+  "**/id_rsa*",
+  "**/*.p12",
 ]
 redact_regexes = [
   "OPENAI_API_KEY=[A-Za-z0-9_\\-]+",

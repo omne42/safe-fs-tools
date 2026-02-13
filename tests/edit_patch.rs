@@ -495,6 +495,29 @@ fn edit_preserves_crlf_when_replacement_contains_crlf() {
 }
 
 #[test]
+fn edit_normalizes_crlf_replacement_for_lf_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("lf.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("lf.txt"),
+            start_line: 2,
+            end_line: 2,
+            replacement: "TWO\r\n".to_string(),
+        },
+    )
+    .expect("edit");
+
+    let out = std::fs::read_to_string(&path).expect("read");
+    assert_eq!(out, "one\nTWO\nthree\n");
+}
+
+#[test]
 #[cfg(feature = "patch")]
 fn patch_rejects_invalid_patch_text() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -513,7 +536,7 @@ fn patch_rejects_invalid_patch_text() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::Patch(_) => {}
+        safe_fs_tools::Error::Patch(message) => assert!(message.contains("file.txt")),
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -539,7 +562,7 @@ fn patch_rejects_patches_that_do_not_apply() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::Patch(_) => {}
+        safe_fs_tools::Error::Patch(message) => assert!(message.contains("file.txt")),
         other => panic!("unexpected error: {other:?}"),
     }
 }
