@@ -186,6 +186,13 @@ fn format_path_for_error_strict_redaction_hides_file_names_outside_roots() {
 }
 
 #[test]
+fn format_path_for_error_redacts_relative_paths_to_file_name() {
+    let path = PathBuf::from("nested/secret/file.txt");
+    let formatted = super::format_path_for_error(&path, None, true, false);
+    assert_eq!(formatted, "file.txt");
+}
+
+#[test]
 fn tool_error_details_redacts_walkdir_message() {
     let dir = tempfile::tempdir().expect("tempdir");
     let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
@@ -441,8 +448,39 @@ fn tool_error_details_keeps_patch_message_when_not_redacting() {
 }
 
 #[test]
+fn tool_error_details_redacts_not_permitted_message() {
+    let err = safe_fs_tools::Error::NotPermitted("/abs/path is blocked".to_string());
+    let details = tool_error_details_with(&err, None, true, false);
+    assert_eq!(
+        details.get("kind").and_then(|v| v.as_str()),
+        Some("not_permitted")
+    );
+    assert_eq!(
+        details.get("message").and_then(|v| v.as_str()),
+        Some("not permitted")
+    );
+}
+
+#[test]
 fn tool_public_message_redacts_patch_message() {
     let err = safe_fs_tools::Error::Patch("/abs/path/file.txt: bad patch".to_string());
     let message = tool_public_message(&err, None, true, false);
     assert_eq!(message, "failed to apply patch");
+}
+
+#[test]
+fn tool_public_message_redacts_io_message() {
+    let err = safe_fs_tools::Error::Io(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "/abs/path denied",
+    ));
+    let message = tool_public_message(&err, None, true, false);
+    assert_eq!(message, "io error");
+}
+
+#[test]
+fn tool_public_message_redacts_not_permitted_message() {
+    let err = safe_fs_tools::Error::NotPermitted("/abs/path denied".to_string());
+    let message = tool_public_message(&err, None, true, false);
+    assert_eq!(message, "not permitted");
 }

@@ -78,7 +78,10 @@ pub(crate) fn format_path_for_error(
     }
 
     if !path.is_absolute() {
-        return path.display().to_string();
+        return path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<redacted>".to_string());
     }
 
     if let Some(redaction) = redaction {
@@ -202,7 +205,11 @@ pub(crate) fn tool_error_details_with(
         }),
         safe_fs_tools::Error::NotPermitted(message) => serde_json::json!({
             "kind": "not_permitted",
-            "message": message,
+            "message": if redact_paths {
+                "not permitted".to_string()
+            } else {
+                message.clone()
+            },
         }),
         safe_fs_tools::Error::SecretPathDenied(path) => serde_json::json!({
             "kind": "secret_path_denied",
@@ -329,7 +336,7 @@ pub(crate) fn tool_public_message(
     }
 
     match tool {
-        safe_fs_tools::Error::Io(_) => tool.to_string(),
+        safe_fs_tools::Error::Io(_) => "io error".to_string(),
         safe_fs_tools::Error::IoPath { op, path, .. } => {
             let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
             format!("io error during {op} ({path})")
@@ -340,7 +347,7 @@ pub(crate) fn tool_public_message(
         safe_fs_tools::Error::OutsideRoot { root_id, .. } => {
             format!("path resolves outside root '{root_id}'")
         }
-        safe_fs_tools::Error::NotPermitted(_) => tool.to_string(),
+        safe_fs_tools::Error::NotPermitted(_) => "not permitted".to_string(),
         safe_fs_tools::Error::SecretPathDenied(path) => {
             let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
             format!("path is denied by secret rules: {path}")

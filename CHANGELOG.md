@@ -82,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks/scripts: tighten commit-message bypass rules (`MERGE_HEAD`/`REVERT_HEAD` checks, guarded `fixup!/squash!`), make pre-commit filename-safe with NUL-delimited git plumbing, validate `SAFE_FS_MAX_RS_LINES`, and scope Rust line checks to staged `.rs` files.
 - `scripts/gate.sh` now supports configurable core crate name, enforces stricter behavior under CI when workspace metadata is missing, and validates `--no-default-features` with `check+clippy+test` on the core crate.
 - `scripts/setup-githooks.sh` now validates/chmods hook files before writing `core.hooksPath` and writes config with `--local`.
+- CLI redaction now masks relative-path error inputs to file names, redacts `not_permitted` detail messages, and avoids leaking raw `io`/`not_permitted` text in public redacted messages.
 
 ## [0.1.0] - 2026-01-31
 
