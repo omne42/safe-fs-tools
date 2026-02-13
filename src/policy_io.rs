@@ -92,23 +92,45 @@ pub fn load_policy(path: impl AsRef<Path>) -> Result<SandboxPolicy> {
     load_policy_limited(path, DEFAULT_MAX_POLICY_BYTES)
 }
 
+fn detect_policy_format(path: &Path) -> Result<PolicyFormat> {
+    match path.extension() {
+        None => Ok(PolicyFormat::Toml),
+        Some(ext) => match ext.to_str() {
+            Some(ext) if ext.eq_ignore_ascii_case("json") => Ok(PolicyFormat::Json),
+            Some(ext) if ext.eq_ignore_ascii_case("toml") => Ok(PolicyFormat::Toml),
+            Some(other) => Err(Error::InvalidPolicy(format!(
+                "unsupported policy format {other:?}; expected .toml or .json"
+            ))),
+            None => Err(Error::InvalidPolicy(
+                "unsupported policy format with non-UTF-8 extension; expected .toml or .json"
+                    .to_string(),
+            )),
+        },
+    }
+}
+
 /// Load and validate a policy file from disk with a byte limit.
 ///
 /// Format detection is by file extension:
 /// - `.json` => JSON
 /// - `.toml` or no extension => TOML
 ///
-/// This rejects symlink/reparse-point policy file targets (for the final path component) and
-/// non-regular files (FIFOs, sockets, device nodes) to avoid blocking behavior and related DoS
-/// risks.
+/// This rejects symlink targets for the final path component and non-regular files
+/// (FIFOs, sockets, device nodes) to avoid blocking behavior and related DoS risks.
 pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<SandboxPolicy> {
     if max_bytes == 0 {
         return Err(Error::InvalidPolicy(
             "max policy bytes must be > 0".to_string(),
         ));
     }
+    if max_bytes > usize::MAX as u64 {
+        return Err(Error::InvalidPolicy(
+            "max policy bytes exceeds platform limits".to_string(),
+        ));
+    }
 
     let path = path.as_ref();
+    let format = detect_policy_format(path)?;
     let file = open_policy_file(path)?;
     let meta = file
         .metadata()
@@ -126,31 +148,14 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
         .read_to_end(&mut bytes)
         .map_err(|err| Error::io_path("read", path, err))?;
 
-    if bytes.len() as u64 > max_bytes {
+    let read_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if read_size > max_bytes {
         return Err(Error::InputTooLarge {
-            size_bytes: bytes.len() as u64,
+            size_bytes: read_size,
             max_bytes,
         });
     }
 
     let raw = std::str::from_utf8(&bytes).map_err(|_| Error::InvalidUtf8(path.to_path_buf()))?;
-    let format = match path.extension() {
-        None => PolicyFormat::Toml,
-        Some(ext) => match ext.to_str() {
-            Some(ext) if ext.eq_ignore_ascii_case("json") => PolicyFormat::Json,
-            Some(ext) if ext.eq_ignore_ascii_case("toml") => PolicyFormat::Toml,
-            Some(other) => {
-                return Err(Error::InvalidPolicy(format!(
-                    "unsupported policy format {other:?}; expected .toml or .json"
-                )));
-            }
-            None => {
-                return Err(Error::InvalidPolicy(
-                    "unsupported policy format with non-UTF-8 extension; expected .toml or .json"
-                        .to_string(),
-                ));
-            }
-        },
-    };
     parse_policy(raw, format)
 }

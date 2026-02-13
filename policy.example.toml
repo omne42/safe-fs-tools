@@ -32,7 +32,7 @@ max_results = 2000
 max_walk_entries = 500000
 max_walk_files = 200000
 # Optional wall-clock traversal budget for `glob`/`grep` (ms). Omit for no budget.
-# max_walk_ms = 1000 # recommended starting point for untrusted inputs
+max_walk_ms = 1000 # recommended starting point for untrusted inputs
 max_line_bytes = 4096
 
 # Suggested tighter budgets for server / untrusted workloads (example only):
@@ -57,7 +57,7 @@ deny_globs = [
   "**/*.p12",
 ]
 redact_regexes = [
-  "OPENAI_API_KEY=[A-Za-z0-9_\\-]+",
+  "(?i)\\bOPENAI_API_KEY\\s*[:=]\\s*['\"]?[A-Za-z0-9_\\-]{16,}",
   # More generic example (tune to your environment; avoid overly-broad patterns):
   # "(?i)\\b(token|api[_-]?key)=[A-Za-z0-9_\\-]{16,}\\b",
 ]
@@ -67,6 +67,8 @@ replacement = "***REDACTED***"
 # For traversal performance only: skipped in `glob`/`grep` but still readable directly.
 # Glob patterns are root-relative (relative to the selected root). Do not start with '/' and do not include '..' segments.
 skip_globs = [
+  ".git/**",
+  "**/.git/**",
   "node_modules/**",
   "target/**",
   "dist/**",

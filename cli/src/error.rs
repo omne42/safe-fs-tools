@@ -15,7 +15,14 @@ impl std::fmt::Display for CliError {
     }
 }
 
-impl std::error::Error for CliError {}
+impl std::error::Error for CliError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            CliError::Tool(err) => Some(err),
+            CliError::Json(err) => Some(err),
+        }
+    }
+}
 
 impl From<safe_fs_tools::Error> for CliError {
     fn from(err: safe_fs_tools::Error) -> Self {

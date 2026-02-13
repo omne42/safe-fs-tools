@@ -71,9 +71,9 @@ enum Command {
         #[arg(long)]
         root: String,
         path: PathBuf,
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         start_line: Option<u64>,
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         end_line: Option<u64>,
     },
     ListDir {
@@ -107,9 +107,9 @@ enum Command {
         #[arg(long)]
         root: String,
         path: PathBuf,
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         start_line: u64,
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         end_line: u64,
         replacement: String,
     },
@@ -228,7 +228,19 @@ fn run() -> ExitCode {
                 let out = serde_json::json!({ "error": error });
                 match serialize_json(&out, cli.pretty) {
                     Ok(text) => eprintln!("{text}"),
-                    Err(_) => eprintln!("{err}"),
+                    Err(_) => {
+                        const FALLBACK: &str = r#"{"error":{"code":"json","message":"failed to serialize json error output"}}"#;
+                        let fallback = serde_json::json!({
+                            "error": {
+                                "code": "json",
+                                "message": "failed to serialize json error output",
+                            }
+                        });
+                        match serde_json::to_string(&fallback) {
+                            Ok(text) => eprintln!("{text}"),
+                            Err(_) => eprintln!("{FALLBACK}"),
+                        }
+                    }
                 }
             }
         }
@@ -239,6 +251,20 @@ fn run() -> ExitCode {
 }
 
 fn run_with_policy(cli: &Cli, policy: safe_fs_tools::SandboxPolicy) -> Result<(), CliError> {
+    match &cli.command {
+        Command::Read {
+            start_line,
+            end_line,
+            ..
+        } => validate_optional_line_range(*start_line, *end_line)?,
+        Command::Edit {
+            start_line,
+            end_line,
+            ..
+        } => validate_required_line_range(*start_line, *end_line)?,
+        _ => {}
+    }
+
     let policy_patch_limit = policy
         .limits
         .max_patch_bytes
@@ -439,6 +465,32 @@ fn write_stdout_line(line: &str) -> Result<(), CliError> {
     map_broken_pipe(stdout.write_all(line.as_bytes()))?;
     map_broken_pipe(stdout.write_all(b"\n"))?;
     map_broken_pipe(stdout.flush())
+}
+
+fn validate_optional_line_range(
+    start_line: Option<u64>,
+    end_line: Option<u64>,
+) -> Result<(), CliError> {
+    match (start_line, end_line) {
+        (Some(start), Some(end)) if start > end => Err(CliError::Tool(
+            safe_fs_tools::Error::InvalidPath("start_line must be <= end_line".to_string()),
+        )),
+        (Some(_), None) | (None, Some(_)) => {
+            Err(CliError::Tool(safe_fs_tools::Error::InvalidPath(
+                "start_line and end_line must be provided together".to_string(),
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_required_line_range(start_line: u64, end_line: u64) -> Result<(), CliError> {
+    if start_line > end_line {
+        return Err(CliError::Tool(safe_fs_tools::Error::InvalidPath(
+            "start_line must be <= end_line".to_string(),
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

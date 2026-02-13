@@ -85,18 +85,9 @@ read = true
     #[test]
     #[cfg(unix)]
     fn load_policy_rejects_fifo_special_files() {
-        use std::io::Write;
-
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("policy.toml");
         crate::unix_helpers::create_fifo(&path);
-
-        let mut fifo_writer = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .expect("open fifo");
-        fifo_writer.write_all(b"123456789").expect("write");
 
         let err = safe_fs_tools::policy_io::load_policy_limited(&path, 8).expect_err("reject");
         match err {

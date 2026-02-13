@@ -266,6 +266,11 @@ impl SandboxPolicy {
                 "limits.max_walk_entries must be > 0".to_string(),
             ));
         }
+        if self.limits.max_walk_files > self.limits.max_walk_entries {
+            return Err(Error::InvalidPolicy(
+                "limits.max_walk_files must be <= limits.max_walk_entries".to_string(),
+            ));
+        }
         if self.limits.max_line_bytes == 0 {
             return Err(Error::InvalidPolicy(
                 "limits.max_line_bytes must be > 0".to_string(),

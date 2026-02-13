@@ -115,6 +115,20 @@ fn policy_rejects_zero_max_patch_bytes() {
 }
 
 #[test]
+fn policy_rejects_max_walk_files_greater_than_entries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_walk_entries = 10;
+    policy.limits.max_walk_files = 11;
+
+    let err = Context::new(policy).expect_err("should reject");
+    assert_invalid_policy_contains(
+        err,
+        "limits.max_walk_files must be <= limits.max_walk_entries",
+    );
+}
+
+#[test]
 fn context_rejects_file_roots() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root_file = dir.path().join("root.txt");

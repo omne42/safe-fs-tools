@@ -83,6 +83,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/gate.sh` now supports configurable core crate name, enforces stricter behavior under CI when workspace metadata is missing, and validates `--no-default-features` with `check+clippy+test` on the core crate.
 - `scripts/setup-githooks.sh` now validates/chmods hook files before writing `core.hooksPath` and writes config with `--local`.
 - CLI redaction now masks relative-path error inputs to file names, redacts `not_permitted` detail messages, and avoids leaking raw `io`/`not_permitted` text in public redacted messages.
+- Hooks/dev scripts: `scripts/gate.sh` now recognizes CI truthy values case-insensitively, fails by default when no workspace is found (with explicit local skip override), and runs cargo gates with `--locked`; `scripts/setup-githooks.sh` now preserves existing non-default `core.hooksPath` and emits success messages on stdout.
+- CLI/path guardrails: CLI line-range arguments now enforce `>=1` with early `start_line <= end_line` checks, JSON error fallback remains valid JSON, and text-input `ELOOP` diagnostics now use safer wording.
+- Policy/path consistency: `walkdir_root` now has a distinct programmatic error code, policy validation rejects `max_walk_files > max_walk_entries`, policy loading detects unsupported extensions before file reads, and write/copy/delete path checks fail closed more consistently.
 
 ## [0.1.0] - 2026-01-31
 

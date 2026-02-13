@@ -63,6 +63,11 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
     }
 
     let requested_parent = requested_path.parent().unwrap_or_else(|| Path::new(""));
+    let requested_relative = requested_parent.join(file_name);
+    if ctx.redactor.is_path_denied(&requested_relative) {
+        return Err(Error::SecretPathDenied(requested_relative));
+    }
+
     let canonical_parent =
         match ctx.ensure_dir_under_root(&request.root_id, requested_parent, false) {
             Ok(path) => path,

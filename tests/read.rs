@@ -127,7 +127,7 @@ fn read_rejects_outside_root() {
     match err {
         safe_fs_tools::Error::OutsideRoot { path, .. } => {
             assert!(path.is_absolute());
-            assert_eq!(path.file_name(), outside.path().file_name());
+            assert_eq!(path, outside.path());
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -154,7 +154,7 @@ fn read_rejects_missing_absolute_paths_outside_root_as_outside_root() {
     match err {
         safe_fs_tools::Error::OutsideRoot { path, .. } => {
             assert!(path.is_absolute());
-            assert_eq!(path.file_name(), Some(std::ffi::OsStr::new("missing.txt")));
+            assert_eq!(path, outside.path().join("missing.txt"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

@@ -22,7 +22,7 @@ fn open_input_file(path: &Path) -> Result<std::fs::File, safe_fs_tools::Error> {
     options.open(path).map_err(|err| {
         if is_symlink_open_error(&err) {
             return safe_fs_tools::Error::InvalidPath(format!(
-                "path {} is a symlink; refusing to read text inputs from symlink paths",
+                "path resolution for {} encountered a symlink (or symlink loop); refusing to read text inputs from symlink paths",
                 path.display()
             ));
         }
@@ -117,9 +117,10 @@ pub(crate) fn load_text_limited(
             })?;
     }
 
-    if bytes.len() as u64 > max_bytes {
+    let read_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if read_size > max_bytes {
         return Err(safe_fs_tools::Error::InputTooLarge {
-            size_bytes: bytes.len() as u64,
+            size_bytes: read_size,
             max_bytes,
         });
     }

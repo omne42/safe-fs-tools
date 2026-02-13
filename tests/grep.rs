@@ -357,7 +357,7 @@ fn grep_honors_max_walk_entries() {
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
     policy.limits.max_walk_entries = 1;
-    policy.limits.max_walk_files = 10;
+    policy.limits.max_walk_files = 1;
     let ctx = Context::new(policy).expect("ctx");
 
     let resp = grep(

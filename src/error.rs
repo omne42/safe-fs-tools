@@ -89,7 +89,7 @@ impl Error {
             #[cfg(any(feature = "glob", feature = "grep"))]
             Error::WalkDir(_) => "walkdir",
             #[cfg(any(feature = "glob", feature = "grep"))]
-            Error::WalkDirRoot { .. } => "walkdir",
+            Error::WalkDirRoot { .. } => "walkdir_root",
             Error::InvalidPolicy(_) => "invalid_policy",
             Error::InvalidPath(_) => "invalid_path",
             Error::RootNotFound(_) => "root_not_found",
@@ -174,7 +174,7 @@ mod tests {
                 path: PathBuf::from("x"),
                 source: std::io::Error::from_raw_os_error(2),
             };
-            assert_eq!(walk_root.code(), "walkdir");
+            assert_eq!(walk_root.code(), "walkdir_root");
         }
     }
 }

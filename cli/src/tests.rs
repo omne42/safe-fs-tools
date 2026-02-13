@@ -25,7 +25,7 @@ fn json_contains_string(value: &serde_json::Value, needle: &str) -> bool {
 
 #[test]
 fn cli_rejects_zero_max_patch_bytes() {
-    let parsed = Cli::try_parse_from([
+    let err = Cli::try_parse_from([
         "safe-fs-tools",
         "--policy",
         "policy.toml",
@@ -35,8 +35,13 @@ fn cli_rejects_zero_max_patch_bytes() {
         "--root",
         "root",
         "README.md",
-    ]);
-    assert!(parsed.is_err());
+    ])
+    .expect_err("expected clap to reject --max-patch-bytes=0");
+    let message = err.to_string();
+    assert!(
+        message.contains("max-patch-bytes"),
+        "unexpected clap error: {message}"
+    );
 }
 
 #[test]
@@ -75,18 +80,9 @@ fn load_text_limited_rejects_symlink_paths() {
 #[test]
 #[cfg(unix)]
 fn load_text_limited_rejects_fifo_special_files() {
-    use std::io::Write;
-
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("pipe.diff");
     create_fifo(&path);
-
-    let mut fifo_writer = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
-        .expect("open fifo");
-    fifo_writer.write_all(b"123456789").expect("write");
 
     let err = super::input::load_text_limited(&path, 8).expect_err("should reject");
     match err {

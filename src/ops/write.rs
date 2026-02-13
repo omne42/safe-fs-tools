@@ -82,7 +82,10 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
 
     let relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, &canonical_root)
-            .unwrap_or_else(|| canonical_parent.clone());
+            .ok_or_else(|| Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_path.clone(),
+            })?;
     let relative = relative_parent.join(file_name);
 
     if ctx.redactor.is_path_denied(&relative) {
@@ -108,12 +111,10 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
     }
 
     if existing.is_some() {
-        let (canonical, relative, requested_path) =
-            ctx.canonical_path_in_root(&request.root_id, &request.path)?;
         if ctx.redactor.is_path_denied(&relative) {
-            return Err(Error::SecretPathDenied(relative));
+            return Err(Error::SecretPathDenied(relative.clone()));
         }
-        super::io::write_bytes_atomic(&canonical, &relative, request.content.as_bytes())?;
+        super::io::write_bytes_atomic(&target, &relative, request.content.as_bytes())?;
         return Ok(WriteFileResponse {
             path: relative,
             requested_path: Some(requested_path),

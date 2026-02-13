@@ -89,10 +89,17 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
 
     let from_relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&from_parent, &canonical_root)
-            .unwrap_or_else(|| from_parent.clone());
+            .ok_or_else(|| Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_from.clone(),
+            })?;
     let to_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root)
-            .unwrap_or_else(|| to_parent.clone());
+        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root).ok_or_else(
+            || Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_to.clone(),
+            },
+        )?;
 
     let from_relative = from_relative_parent.join(from_name);
     let to_relative = to_relative_parent.join(to_name);
@@ -152,6 +159,11 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
             if meta.is_dir() {
                 return Err(Error::InvalidPath(
                     "destination exists and is a directory".to_string(),
+                ));
+            }
+            if !meta.is_file() {
+                return Err(Error::InvalidPath(
+                    "destination exists and is not a regular file".to_string(),
                 ));
             }
             if !request.overwrite {
