@@ -4,6 +4,10 @@ use globset::{GlobSet, GlobSetBuilder};
 
 use crate::error::{Error, Result};
 
+const MAX_GLOB_PATTERN_BYTES: usize = 4 * 1024;
+const MAX_TRAVERSAL_SKIP_GLOBS: usize = 512;
+const MAX_TRAVERSAL_SKIP_GLOBS_TOTAL_BYTES: usize = 64 * 1024;
+
 fn compile_validated_glob(
     pattern: &str,
     invalid_err: impl Fn(String) -> Error,
@@ -29,9 +33,23 @@ pub(super) fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option
     if patterns.is_empty() {
         return Ok(None);
     }
+    if patterns.len() > MAX_TRAVERSAL_SKIP_GLOBS {
+        return Err(Error::InvalidPolicy(format!(
+            "invalid traversal.skip_globs: too many patterns ({} > {MAX_TRAVERSAL_SKIP_GLOBS})",
+            patterns.len()
+        )));
+    }
 
     let mut builder = GlobSetBuilder::new();
+    let mut total_bytes = 0_usize;
     for pattern in patterns {
+        total_bytes = total_bytes.saturating_add(pattern.len());
+        if total_bytes > MAX_TRAVERSAL_SKIP_GLOBS_TOTAL_BYTES {
+            return Err(Error::InvalidPolicy(format!(
+                "invalid traversal.skip_globs: total pattern bytes too large ({} > {MAX_TRAVERSAL_SKIP_GLOBS_TOTAL_BYTES})",
+                total_bytes
+            )));
+        }
         let glob = compile_validated_glob(pattern, |msg| {
             Error::InvalidPolicy(format!(
                 "invalid traversal.skip_globs glob {pattern:?}: {msg}"
@@ -54,6 +72,13 @@ pub(super) fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
 fn normalize_and_validate_root_relative_glob_pattern(
     pattern: &str,
 ) -> std::result::Result<String, String> {
+    if pattern.len() > MAX_GLOB_PATTERN_BYTES {
+        return Err(format!(
+            "glob pattern too long ({} bytes > {MAX_GLOB_PATTERN_BYTES} bytes)",
+            pattern.len()
+        ));
+    }
+
     if pattern.trim().is_empty() {
         return Err("glob pattern must not be empty".to_string());
     }
@@ -89,18 +114,14 @@ fn collect_literal_traversal_prefix(pattern: &str) -> Option<PathBuf> {
 }
 
 fn segment_is_strict_literal(segment: &str) -> bool {
-    // Be intentionally conservative: only treat segments as literal when every byte
-    // is known to be non-special in glob syntax. This avoids syntax drift turning a
-    // meta segment into an accidentally narrowed traversal prefix.
-    !segment.is_empty() && segment.bytes().all(is_always_literal_glob_byte)
+    // Keep this conservative but not overly narrow: only reject bytes that can
+    // change glob semantics for the segment itself.
+    !segment.is_empty() && !segment.bytes().any(is_segment_glob_meta_byte)
 }
 
 #[inline]
-const fn is_always_literal_glob_byte(byte: u8) -> bool {
-    matches!(
-        byte,
-        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'_' | b'-'
-    )
+const fn is_segment_glob_meta_byte(byte: u8) -> bool {
+    matches!(byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}' | b'\\')
 }
 
 #[cfg(windows)]

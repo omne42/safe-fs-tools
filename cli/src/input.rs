@@ -5,8 +5,23 @@ use std::path::Path;
 const HARD_MAX_TEXT_INPUT_BYTES: u64 = 64 * 1024 * 1024;
 
 #[cfg(unix)]
+fn unix_is_symlink_open_errno(code: i32) -> bool {
+    match code {
+        libc::ELOOP => true,
+        #[cfg(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        ))]
+        libc::EMLINK => true,
+        _ => false,
+    }
+}
+
+#[cfg(unix)]
 fn is_symlink_open_error(err: &io::Error) -> bool {
-    err.raw_os_error() == Some(libc::ELOOP)
+    err.raw_os_error().is_some_and(unix_is_symlink_open_errno)
 }
 
 #[cfg(windows)]
@@ -64,10 +79,29 @@ fn open_readonly_nofollow(path: &Path) -> io::Result<File> {
 }
 
 fn open_input_file(path: &Path) -> Result<std::fs::File, safe_fs_tools::Error> {
+    let preflight =
+        std::fs::symlink_metadata(path).map_err(|err| safe_fs_tools::Error::IoPath {
+            op: "symlink_metadata",
+            path: path.to_path_buf(),
+            source: err,
+        })?;
+    if preflight.file_type().is_symlink() {
+        return Err(safe_fs_tools::Error::InvalidPath(format!(
+            "path resolution for {} detected a symlink; refusing to read text inputs from symlink paths",
+            path.display()
+        )));
+    }
+    if !preflight.file_type().is_file() {
+        return Err(safe_fs_tools::Error::InvalidPath(format!(
+            "path {} is not a regular file",
+            path.display()
+        )));
+    }
+
     let file = open_readonly_nofollow(path).map_err(|err| {
         if is_symlink_open_error(&err) {
             return safe_fs_tools::Error::InvalidPath(format!(
-                "path resolution for {} encountered a symlink (or symlink loop) at the final path component; refusing to read text inputs from symlink final components",
+                "path resolution for {} detected a symlink or symlink loop; refusing to read text inputs from symlink paths",
                 path.display()
             ));
         }
@@ -94,10 +128,23 @@ fn open_input_file(path: &Path) -> Result<std::fs::File, safe_fs_tools::Error> {
             })?;
         if meta.file_type().is_symlink() {
             return Err(safe_fs_tools::Error::InvalidPath(format!(
-                "path {} has a symlink final component; refusing to read text inputs from symlink final components",
+                "path resolution for {} detected a symlink; refusing to read text inputs from symlink paths",
                 path.display()
             )));
         }
+    }
+    let post_open_meta = file
+        .metadata()
+        .map_err(|err| safe_fs_tools::Error::IoPath {
+            op: "metadata",
+            path: path.to_path_buf(),
+            source: err,
+        })?;
+    if !post_open_meta.is_file() {
+        return Err(safe_fs_tools::Error::InvalidPath(format!(
+            "path {} is not a regular file",
+            path.display()
+        )));
     }
     Ok(file)
 }
@@ -116,11 +163,6 @@ pub(crate) fn load_text_limited(
             "max input bytes exceeds hard limit ({HARD_MAX_TEXT_INPUT_BYTES} bytes)"
         )));
     }
-    if max_bytes >= usize::MAX as u64 {
-        return Err(safe_fs_tools::Error::InvalidPolicy(
-            "max input bytes exceeds platform limits".to_string(),
-        ));
-    }
 
     let limit = max_bytes.saturating_add(1);
     let mut bytes = Vec::<u8>::new();
@@ -137,20 +179,14 @@ pub(crate) fn load_text_limited(
             })?;
     } else {
         let file = open_input_file(path)?;
-        let meta = file
+        let file_size = file
             .metadata()
             .map_err(|err| safe_fs_tools::Error::IoPath {
                 op: "metadata",
                 path: path.to_path_buf(),
                 source: err,
-            })?;
-        if !meta.is_file() {
-            return Err(safe_fs_tools::Error::InvalidPath(format!(
-                "path {} is not a regular file",
-                path.display()
-            )));
-        }
-        let file_size = meta.len();
+            })?
+            .len();
         if file_size > max_bytes {
             return Err(safe_fs_tools::Error::InputTooLarge {
                 size_bytes: file_size,

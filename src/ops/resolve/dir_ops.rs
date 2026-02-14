@@ -12,12 +12,35 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 #[cfg(windows)]
 fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
-    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+    match (
+        a.volume_serial_number(),
+        a.file_index(),
+        b.volume_serial_number(),
+        b.file_index(),
+    ) {
+        (Some(a_volume), Some(a_index), Some(b_volume), Some(b_index)) => {
+            a_volume == b_volume && a_index == b_index
+        }
+        _ => false,
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
 fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
     false
+}
+
+#[cfg(any(unix, windows))]
+fn ensure_create_missing_identity_verification_supported() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn ensure_create_missing_identity_verification_supported() -> Result<()> {
+    Err(Error::InvalidPath(
+        "create_parents is unsupported on this platform: cannot verify parent directory identity"
+            .to_string(),
+    ))
 }
 
 fn outside_root_error(root_id: &str, relative: &Path) -> Error {
@@ -80,20 +103,25 @@ fn reject_secret_canonical_path(
 }
 
 fn cleanup_created_dir(
+    parent: &Path,
+    parent_relative: &Path,
+    expected_parent_meta: &fs::Metadata,
     next: &Path,
     relative: &Path,
     created_meta: &fs::Metadata,
     validation_err: &Error,
 ) -> Result<()> {
+    verify_parent_identity(parent, parent_relative, expected_parent_meta)?;
     let current_meta = fs::symlink_metadata(next)
         .map_err(|err| Error::io_path("symlink_metadata", relative, err))?;
     if current_meta.file_type().is_symlink()
         || !current_meta.is_dir()
         || !metadata_same_file(created_meta, &current_meta)
     {
-        return Err(Error::InvalidPath(
-            "path changed before cleanup".to_string(),
-        ));
+        return Err(Error::InvalidPath(format!(
+            "path {} changed before cleanup after validation failure: {validation_err}",
+            relative.display()
+        )));
     }
     fs::remove_dir(next).map_err(|cleanup_err| {
         let cleanup_context = std::io::Error::new(
@@ -104,6 +132,50 @@ fn cleanup_created_dir(
         );
         Error::io_path("remove_dir", relative, cleanup_context)
     })
+}
+
+fn capture_parent_identity(parent: &Path, parent_relative: &Path) -> Result<fs::Metadata> {
+    let meta = fs::symlink_metadata(parent)
+        .map_err(|err| Error::io_path("symlink_metadata", parent_relative, err))?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(Error::InvalidPath(format!(
+            "parent path {} changed during operation",
+            parent_relative.display()
+        )));
+    }
+    Ok(meta)
+}
+
+#[cfg(any(unix, windows))]
+fn verify_parent_identity(
+    parent: &Path,
+    parent_relative: &Path,
+    expected_parent_meta: &fs::Metadata,
+) -> Result<()> {
+    let current_parent_meta = fs::symlink_metadata(parent)
+        .map_err(|err| Error::io_path("symlink_metadata", parent_relative, err))?;
+    if current_parent_meta.file_type().is_symlink()
+        || !current_parent_meta.is_dir()
+        || !metadata_same_file(expected_parent_meta, &current_parent_meta)
+    {
+        return Err(Error::InvalidPath(format!(
+            "parent path {} changed during operation",
+            parent_relative.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn verify_parent_identity(
+    _parent: &Path,
+    _parent_relative: &Path,
+    _expected_parent_meta: &fs::Metadata,
+) -> Result<()> {
+    Err(Error::InvalidPath(
+        "create_parents is unsupported on this platform: cannot verify parent directory identity"
+            .to_string(),
+    ))
 }
 
 fn handle_existing_component(
@@ -161,6 +233,9 @@ pub(super) fn ensure_dir_under_root(
     create_missing: bool,
 ) -> Result<PathBuf> {
     let canonical_root = ctx.canonical_root(root_id)?.to_path_buf();
+    if create_missing {
+        ensure_create_missing_identity_verification_supported()?;
+    }
     let mut current = canonical_root.clone();
     let mut current_relative = PathBuf::new();
 
@@ -168,8 +243,15 @@ pub(super) fn ensure_dir_under_root(
         let Some(segment) = validate_relative_component(relative, component)? else {
             continue;
         };
+        let parent_relative = current_relative.clone();
+        let parent_meta_snapshot = if create_missing {
+            Some(capture_parent_identity(&current, &parent_relative)?)
+        } else {
+            None
+        };
         current_relative.push(&segment);
         let next = current.join(&segment);
+        let mut created_meta: Option<fs::Metadata> = None;
 
         let resolved_current = match fs::symlink_metadata(&next) {
             Ok(meta) => handle_existing_component(
@@ -183,6 +265,15 @@ pub(super) fn ensure_dir_under_root(
                 if !create_missing {
                     return Err(Error::io_path("symlink_metadata", &current_relative, err));
                 }
+                let expected_parent_meta = match parent_meta_snapshot.as_ref() {
+                    Some(meta) => meta,
+                    None => {
+                        return Err(Error::InvalidPath(
+                            "internal error: missing parent identity snapshot".to_string(),
+                        ));
+                    }
+                };
+                verify_parent_identity(&current, &parent_relative, expected_parent_meta)?;
                 reject_secret_canonical_path(
                     ctx,
                     &next,
@@ -199,31 +290,50 @@ pub(super) fn ensure_dir_under_root(
                         return Err(Error::io_path("create_dir", &current_relative, create_err));
                     }
                 };
-                let created_meta = if created_now {
-                    Some(fs::symlink_metadata(&next).map_err(|meta_err| {
-                        Error::io_path("symlink_metadata", &current_relative, meta_err)
-                    })?)
-                } else {
-                    None
-                };
-
-                match fs::symlink_metadata(&next)
-                    .map_err(|meta_err| {
-                        Error::io_path("symlink_metadata", &current_relative, meta_err)
-                    })
-                    .and_then(|meta| {
-                        handle_existing_component(
+                let post_create_meta = fs::symlink_metadata(&next).map_err(|meta_err| {
+                    Error::io_path("symlink_metadata", &current_relative, meta_err)
+                })?;
+                if created_now {
+                    created_meta = Some(post_create_meta.clone());
+                }
+                if let Err(err) =
+                    verify_parent_identity(&current, &parent_relative, expected_parent_meta)
+                {
+                    if let Some(created_meta) = created_meta.as_ref() {
+                        cleanup_created_dir(
+                            &current,
+                            &parent_relative,
+                            expected_parent_meta,
                             &next,
-                            &meta,
                             &current_relative,
-                            &canonical_root,
-                            root_id,
-                        )
-                    }) {
+                            created_meta,
+                            &err,
+                        )?;
+                    }
+                    return Err(err);
+                }
+
+                match handle_existing_component(
+                    &next,
+                    &post_create_meta,
+                    &current_relative,
+                    &canonical_root,
+                    root_id,
+                ) {
                     Ok(canonical) => canonical,
                     Err(err) => {
-                        if let Some(created_meta) = created_meta.as_ref() {
-                            cleanup_created_dir(&next, &current_relative, created_meta, &err)?;
+                        if let (Some(created_meta), Some(expected_parent_meta)) =
+                            (created_meta.as_ref(), parent_meta_snapshot.as_ref())
+                        {
+                            cleanup_created_dir(
+                                &current,
+                                &parent_relative,
+                                expected_parent_meta,
+                                &next,
+                                &current_relative,
+                                created_meta,
+                                &err,
+                            )?;
                         }
                         return Err(err);
                     }
@@ -231,13 +341,28 @@ pub(super) fn ensure_dir_under_root(
             }
             Err(err) => return Err(Error::io_path("symlink_metadata", &current_relative, err)),
         };
-        reject_secret_canonical_path(
+        if let Err(err) = reject_secret_canonical_path(
             ctx,
             &resolved_current,
             &canonical_root,
             root_id,
             &current_relative,
-        )?;
+        ) {
+            if let (Some(created_meta), Some(expected_parent_meta)) =
+                (created_meta.as_ref(), parent_meta_snapshot.as_ref())
+            {
+                cleanup_created_dir(
+                    &current,
+                    &parent_relative,
+                    expected_parent_meta,
+                    &next,
+                    &current_relative,
+                    created_meta,
+                    &err,
+                )?;
+            }
+            return Err(err);
+        }
         current = resolved_current;
     }
 

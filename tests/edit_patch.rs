@@ -5,7 +5,7 @@ mod unix_helpers;
 
 use std::path::PathBuf;
 
-use common::test_policy;
+use common::permissive_test_policy;
 use safe_fs_tools::ops::{Context, EditRequest, edit_range};
 use safe_fs_tools::policy::RootMode;
 
@@ -14,6 +14,63 @@ use safe_fs_tools::ops::{DeleteRequest, PatchRequest, apply_unified_patch, delet
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+
+fn assert_patch_error_prefix(err: safe_fs_tools::Error, expected_prefix: &str) {
+    assert_eq!(err.code(), safe_fs_tools::Error::CODE_PATCH);
+    match err {
+        safe_fs_tools::Error::Patch(message) => {
+            assert!(
+                message.starts_with(expected_prefix),
+                "expected patch message prefix '{expected_prefix}', got '{message}'"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[cfg(windows)]
+fn create_file_symlink_or_skip(target: &std::path::Path, link: &std::path::Path) -> bool {
+    match std::os::windows::fs::symlink_file(target, link) {
+        Ok(()) => true,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            let allow_skip = std::env::var("SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP")
+                .map(|value| value == "1")
+                .unwrap_or(false);
+            if allow_skip {
+                eprintln!("skipping symlink test (permission denied): {err}");
+                return false;
+            }
+            panic!(
+                "symlink test requires Windows symlink privileges (set Developer Mode or grant \
+                 SeCreateSymbolicLinkPrivilege). Set SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP=1 to \
+                 explicitly allow skipping: {err}"
+            );
+        }
+        Err(err) => panic!("symlink_file failed: {err}"),
+    }
+}
+
+#[cfg(windows)]
+fn create_dir_symlink_or_skip(target: &std::path::Path, link: &std::path::Path) -> bool {
+    match std::os::windows::fs::symlink_dir(target, link) {
+        Ok(()) => true,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            let allow_skip = std::env::var("SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP")
+                .map(|value| value == "1")
+                .unwrap_or(false);
+            if allow_skip {
+                eprintln!("skipping symlink test (permission denied): {err}");
+                return false;
+            }
+            panic!(
+                "symlink test requires Windows symlink privileges (set Developer Mode or grant \
+                 SeCreateSymbolicLinkPrivilege). Set SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP=1 to \
+                 explicitly allow skipping: {err}"
+            );
+        }
+        Err(err) => panic!("symlink_dir failed: {err}"),
+    }
+}
 
 #[test]
 #[cfg(unix)]
@@ -26,7 +83,7 @@ fn edit_rejects_symlink_escape() {
 
     symlink(outside.path(), dir.path().join("link.txt")).expect("symlink");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let err = edit_range(
         &ctx,
         EditRequest {
@@ -60,7 +117,7 @@ fn patch_rejects_symlink_escape() {
 
     symlink(outside.path(), dir.path().join("link.txt")).expect("symlink");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let err = apply_unified_patch(
         &ctx,
         PatchRequest {
@@ -88,11 +145,12 @@ fn edit_rejects_symlink_escape_via_ancestor_dir() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let outside = tempfile::tempdir().expect("outside");
-    std::fs::write(outside.path().join("file.txt"), "one\n").expect("write");
+    let outside_file = outside.path().join("file.txt");
+    std::fs::write(&outside_file, "one\n").expect("write");
 
     symlink(outside.path(), dir.path().join("sub")).expect("symlink dir");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let err = edit_range(
         &ctx,
         EditRequest {
@@ -109,6 +167,10 @@ fn edit_rejects_symlink_escape_via_ancestor_dir() {
         safe_fs_tools::Error::OutsideRoot { .. } => {}
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(&outside_file).expect("read outside"),
+        "one\n"
+    );
 }
 
 #[test]
@@ -118,11 +180,12 @@ fn patch_rejects_symlink_escape_via_ancestor_dir() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let outside = tempfile::tempdir().expect("outside");
-    std::fs::write(outside.path().join("file.txt"), "one\n").expect("write");
+    let outside_file = outside.path().join("file.txt");
+    std::fs::write(&outside_file, "one\n").expect("write");
 
     symlink(outside.path(), dir.path().join("sub")).expect("symlink dir");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let err = apply_unified_patch(
         &ctx,
         PatchRequest {
@@ -137,6 +200,144 @@ fn patch_rejects_symlink_escape_via_ancestor_dir() {
         safe_fs_tools::Error::OutsideRoot { .. } => {}
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(&outside_file).expect("read outside"),
+        "one\n"
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn edit_rejects_symlink_escape_windows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::NamedTempFile::new().expect("tmp");
+    std::fs::write(outside.path(), "one\n").expect("write");
+
+    if !create_file_symlink_or_skip(outside.path(), &dir.path().join("link.txt")) {
+        return;
+    }
+
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("link.txt"),
+            start_line: 1,
+            end_line: 1,
+            replacement: "ONE".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(outside.path()).expect("read outside"),
+        "one\n"
+    );
+}
+
+#[test]
+#[cfg(all(windows, feature = "patch"))]
+fn patch_rejects_symlink_escape_windows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::NamedTempFile::new().expect("tmp");
+    std::fs::write(outside.path(), "one\n").expect("write");
+
+    if !create_file_symlink_or_skip(outside.path(), &dir.path().join("link.txt")) {
+        return;
+    }
+
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("link.txt"),
+            patch: diffy::create_patch("one\n", "ONE\n").to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(outside.path()).expect("read outside"),
+        "one\n"
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn edit_rejects_symlink_escape_via_ancestor_dir_windows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    let outside_file = outside.path().join("file.txt");
+    std::fs::write(&outside_file, "one\n").expect("write");
+
+    if !create_dir_symlink_or_skip(outside.path(), &dir.path().join("sub")) {
+        return;
+    }
+
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("sub/file.txt"),
+            start_line: 1,
+            end_line: 1,
+            replacement: "ONE".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(&outside_file).expect("read outside"),
+        "one\n"
+    );
+}
+
+#[test]
+#[cfg(all(windows, feature = "patch"))]
+fn patch_rejects_symlink_escape_via_ancestor_dir_windows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    let outside_file = outside.path().join("file.txt");
+    std::fs::write(&outside_file, "one\n").expect("write");
+
+    if !create_dir_symlink_or_skip(outside.path(), &dir.path().join("sub")) {
+        return;
+    }
+
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("sub/file.txt"),
+            patch: diffy::create_patch("one\n", "ONE\n").to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(&outside_file).expect("read outside"),
+        "one\n"
+    );
 }
 
 #[test]
@@ -145,7 +346,7 @@ fn edit_happy_path() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let edit = edit_range(
         &ctx,
@@ -171,7 +372,7 @@ fn patch_happy_path() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let updated = "one\nTWO\nTHREE\n";
     let patch = diffy::create_patch("one\ntwo\nthree\n", updated);
 
@@ -197,7 +398,7 @@ fn delete_happy_path() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let delete = delete(
         &ctx,
@@ -221,7 +422,7 @@ fn edit_patch_delete_roundtrip_smoke() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     edit_range(
         &ctx,
         EditRequest {
@@ -233,6 +434,10 @@ fn edit_patch_delete_roundtrip_smoke() {
         },
     )
     .expect("edit");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after edit"),
+        "one\nTWO\nthree\n"
+    );
 
     apply_unified_patch(
         &ctx,
@@ -243,6 +448,10 @@ fn edit_patch_delete_roundtrip_smoke() {
         },
     )
     .expect("patch");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after patch"),
+        "one\nTWO\nTHREE\n"
+    );
 
     delete(
         &ctx,
@@ -264,7 +473,7 @@ fn edit_preserves_crlf() {
     let path = dir.path().join("crlf.txt");
     std::fs::write(&path, "one\r\ntwo\r\nthree\r\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     edit_range(
         &ctx,
         EditRequest {
@@ -287,7 +496,7 @@ fn edit_with_empty_replacement_deletes_line_without_inserting_blank_line() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     edit_range(
         &ctx,
         EditRequest {
@@ -310,7 +519,7 @@ fn edit_respects_max_write_bytes() {
     let path = dir.path().join("small.txt");
     std::fs::write(&path, "one\n").expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.limits.max_write_bytes = 1;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -352,7 +561,7 @@ fn edit_preserves_unix_permissions() {
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     edit_range(
         &ctx,
         EditRequest {
@@ -375,7 +584,7 @@ fn edit_respects_max_read_bytes() {
     let path = dir.path().join("big.txt");
     std::fs::write(&path, "line\n".repeat(50)).expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.limits.max_read_bytes = 8;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -408,7 +617,7 @@ fn patch_respects_max_read_bytes() {
     let path = dir.path().join("big.txt");
     std::fs::write(&path, "line\n".repeat(50)).expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.limits.max_read_bytes = 8;
     policy.limits.max_patch_bytes = Some(1024);
     let ctx = Context::new(policy).expect("ctx");
@@ -440,7 +649,7 @@ fn patch_rejects_too_large_patch_input() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\n").expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.limits.max_patch_bytes = Some(10);
     let ctx = Context::new(policy).expect("ctx");
 
@@ -471,7 +680,7 @@ fn edit_rejects_fifo_special_files() {
     let fifo = dir.path().join("pipe");
     unix_helpers::create_fifo(&fifo);
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.limits.max_read_bytes = 8;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -500,7 +709,7 @@ fn patch_rejects_fifo_special_files() {
     let fifo = dir.path().join("pipe");
     unix_helpers::create_fifo(&fifo);
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.limits.max_read_bytes = 8;
     policy.limits.max_patch_bytes = Some(1024);
     let ctx = Context::new(policy).expect("ctx");
@@ -527,7 +736,7 @@ fn edit_rejects_invalid_line_ranges() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\ntwo\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let err = edit_range(
         &ctx,
@@ -540,10 +749,7 @@ fn edit_rejects_invalid_line_ranges() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::Patch(message) => assert!(message.contains("invalid edit range")),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_patch_error_prefix(err, "invalid edit range: invalid line range: 0..1");
 
     let err = edit_range(
         &ctx,
@@ -556,10 +762,11 @@ fn edit_rejects_invalid_line_ranges() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::Patch(message) => assert!(message.contains("invalid edit range")),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_patch_error_prefix(err, "invalid edit range: invalid line range: 2..1");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after reject"),
+        "one\ntwo\n"
+    );
 }
 
 #[test]
@@ -568,7 +775,7 @@ fn edit_rejects_out_of_bounds_line_ranges() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let err = edit_range(
         &ctx,
@@ -582,10 +789,14 @@ fn edit_rejects_out_of_bounds_line_ranges() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::Patch(message) => assert!(message.contains("out of bounds")),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_patch_error_prefix(
+        err,
+        "invalid edit range: invalid line range: 2..2 out of bounds",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after reject"),
+        "one\n"
+    );
 
     let empty_path = dir.path().join("empty.txt");
     std::fs::write(&empty_path, "").expect("write");
@@ -602,10 +813,14 @@ fn edit_rejects_out_of_bounds_line_ranges() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::Patch(message) => assert!(message.contains("out of bounds")),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_patch_error_prefix(
+        err,
+        "invalid edit range: invalid line range: 1..1 out of bounds",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&empty_path).expect("read after reject"),
+        ""
+    );
 }
 
 #[test]
@@ -614,7 +829,7 @@ fn edit_preserves_crlf_when_replacement_contains_crlf() {
     let path = dir.path().join("crlf.txt");
     std::fs::write(&path, "one\r\ntwo\r\nthree\r\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     edit_range(
         &ctx,
         EditRequest {
@@ -637,7 +852,7 @@ fn edit_normalizes_crlf_replacement_for_lf_files() {
     let path = dir.path().join("lf.txt");
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     edit_range(
         &ctx,
         EditRequest {
@@ -661,7 +876,7 @@ fn patch_rejects_invalid_patch_text() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let err = apply_unified_patch(
         &ctx,
         PatchRequest {
@@ -672,12 +887,7 @@ fn patch_rejects_invalid_patch_text() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::Patch(message) => {
-            assert!(message.contains("file.txt"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_patch_error_prefix(err, "file.txt: ");
     assert_eq!(
         std::fs::read_to_string(&path).expect("read after reject"),
         "one\n"
@@ -691,7 +901,7 @@ fn patch_rejects_patches_that_do_not_apply() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let patch = diffy::create_patch("two\n", "TWO\n").to_string();
 
     let err = apply_unified_patch(
@@ -704,12 +914,7 @@ fn patch_rejects_patches_that_do_not_apply() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::Patch(message) => {
-            assert!(message.contains("file.txt"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_patch_error_prefix(err, "file.txt: ");
     assert_eq!(
         std::fs::read_to_string(&path).expect("read after reject"),
         "one\n"
@@ -723,7 +928,7 @@ fn patch_respects_max_write_bytes() {
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\n").expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.limits.max_write_bytes = 4;
     let ctx = Context::new(policy).expect("ctx");
 

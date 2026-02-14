@@ -7,12 +7,15 @@ use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 
 pub fn create_fifo(path: &Path) {
-    create_fifo_result(path).unwrap_or_else(|err| {
+    try_create_fifo(path).unwrap_or_else(|err| {
         panic!("mkfifo failed for {}: {}", path.display(), err);
     });
 }
 
-fn create_fifo_result(path: &Path) -> io::Result<()> {
+pub fn try_create_fifo(path: &Path) -> io::Result<()> {
+    const MAX_MKFIFO_ATTEMPTS: usize = 64;
+    const MAX_METADATA_NOT_FOUND_RETRIES: usize = 2;
+
     let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
         io::Error::new(
             ErrorKind::InvalidInput,
@@ -20,7 +23,7 @@ fn create_fifo_result(path: &Path) -> io::Result<()> {
         )
     })?;
 
-    'mkfifo: loop {
+    'mkfifo: for _ in 0..MAX_MKFIFO_ATTEMPTS {
         // Safety: `CString::new` guarantees a NUL-terminated C string with no interior NUL bytes,
         // and the pointer remains valid for the duration of each call.
         let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
@@ -49,7 +52,7 @@ fn create_fifo_result(path: &Path) -> io::Result<()> {
                         }
                         Err(meta_err)
                             if meta_err.kind() == ErrorKind::NotFound
-                                && metadata_not_found_retries < 2 =>
+                                && metadata_not_found_retries < MAX_METADATA_NOT_FOUND_RETRIES =>
                         {
                             metadata_not_found_retries += 1;
                             continue;
@@ -57,11 +60,40 @@ fn create_fifo_result(path: &Path) -> io::Result<()> {
                         Err(meta_err) if meta_err.kind() == ErrorKind::NotFound => {
                             continue 'mkfifo;
                         }
-                        Err(meta_err) => return Err(meta_err),
+                        Err(meta_err) => {
+                            let raw_os_error = meta_err.raw_os_error();
+                            return Err(io::Error::new(
+                                meta_err.kind(),
+                                format!(
+                                    "symlink_metadata failed for {}: {} (raw_os_error={raw_os_error:?})",
+                                    path.display(),
+                                    meta_err
+                                ),
+                            ));
+                        }
                     }
                 }
             }
-            _ => return Err(err),
+            _ => {
+                let raw_os_error = err.raw_os_error();
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!(
+                        "mkfifo failed for {}: {} (raw_os_error={raw_os_error:?})",
+                        path.display(),
+                        err
+                    ),
+                ));
+            }
         }
     }
+
+    Err(io::Error::new(
+        ErrorKind::WouldBlock,
+        format!(
+            "mkfifo retry budget exhausted due to repeated race/EINTR after {} attempts for {}",
+            MAX_MKFIFO_ATTEMPTS,
+            path.display()
+        ),
+    ))
 }

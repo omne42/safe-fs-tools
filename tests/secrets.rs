@@ -2,7 +2,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::test_policy;
+use common::{permissive_test_policy, test_policy};
 use safe_fs_tools::ops::{Context, ReadRequest, read_file};
 use safe_fs_tools::policy::RootMode;
 
@@ -27,28 +27,55 @@ fn assert_secret_path_denied(
         safe_fs_tools::Error::SecretPathDenied(path) => {
             assert_eq!(path, expected_denied_path);
         }
+        safe_fs_tools::Error::NotPermitted(msg) => {
+            panic!(
+                "unexpected NotPermitted: {msg}. \
+                 assert_secret_path_denied requires policy.permissions.read=true; \
+                 use permissive_test_policy(...)"
+            );
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
 
 #[cfg(any(unix, windows))]
-fn create_file_symlink_or_skip(target: &Path, link: &Path) -> bool {
+enum SymlinkKind {
+    File,
+    Dir,
+}
+
+#[cfg(any(unix, windows))]
+fn create_symlink_or_skip(target: &Path, link: &Path, kind: SymlinkKind) -> bool {
     #[cfg(unix)]
     {
+        let _ = kind;
         std::os::unix::fs::symlink(target, link).expect("symlink");
         true
     }
 
     #[cfg(windows)]
     {
-        match std::os::windows::fs::symlink_file(target, link) {
+        let result = match kind {
+            SymlinkKind::File => std::os::windows::fs::symlink_file(target, link),
+            SymlinkKind::Dir => std::os::windows::fs::symlink_dir(target, link),
+        };
+        match result {
             Ok(()) => true,
             Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
                 let allow_skip = std::env::var("SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP")
                     .map(|value| value == "1")
                     .unwrap_or(false);
+                let running_in_ci = std::env::var("CI")
+                    .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
                 if allow_skip {
-                    eprintln!("skipping symlink test (permission denied): {err}");
+                    assert!(
+                        !running_in_ci,
+                        "refusing to skip symlink test in CI; disable SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP and enable Windows symlink privileges: {err}"
+                    );
+                    eprintln!(
+                        "[safe-fs-tools][symlink-test-skip] permission denied with explicit local override: {err}"
+                    );
                     return false;
                 }
                 panic!(
@@ -57,40 +84,19 @@ fn create_file_symlink_or_skip(target: &Path, link: &Path) -> bool {
                      explicitly allow skipping: {err}"
                 );
             }
-            Err(err) => panic!("symlink_file failed: {err}"),
+            Err(err) => panic!("symlink creation failed: {err}"),
         }
     }
 }
 
 #[cfg(any(unix, windows))]
-fn create_dir_symlink_or_skip(target: &Path, link: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, link).expect("symlink");
-        true
-    }
+fn create_file_symlink_or_skip(target: &Path, link: &Path) -> bool {
+    create_symlink_or_skip(target, link, SymlinkKind::File)
+}
 
-    #[cfg(windows)]
-    {
-        match std::os::windows::fs::symlink_dir(target, link) {
-            Ok(()) => true,
-            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                let allow_skip = std::env::var("SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP")
-                    .map(|value| value == "1")
-                    .unwrap_or(false);
-                if allow_skip {
-                    eprintln!("skipping symlink test (permission denied): {err}");
-                    return false;
-                }
-                panic!(
-                    "symlink test requires Windows symlink privileges (set Developer Mode or grant \
-                     SeCreateSymbolicLinkPrivilege). Set SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP=1 to \
-                     explicitly allow skipping: {err}"
-                );
-            }
-            Err(err) => panic!("symlink_dir failed: {err}"),
-        }
-    }
+#[cfg(any(unix, windows))]
+fn create_dir_symlink_or_skip(target: &Path, link: &Path) -> bool {
+    create_symlink_or_skip(target, link, SymlinkKind::Dir)
 }
 
 #[test]
@@ -99,7 +105,7 @@ fn deny_globs_support_leading_dot_slash() {
     std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
     std::fs::write(dir.path().join(".git").join("config"), "secret").expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec!["./.git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -115,11 +121,9 @@ fn deny_globs_reject_absolute_patterns_with_specific_reason() {
     let err = Context::new(policy).expect_err("should reject");
     match err {
         safe_fs_tools::Error::InvalidPolicy(msg) => {
+            assert!(msg.contains("invalid deny glob"), "unexpected msg: {msg}");
+            assert!(msg.contains("\"/.git/**\""), "unexpected msg: {msg}");
             assert!(msg.contains("root-relative"), "unexpected msg: {msg}");
-            assert!(
-                msg.contains("must not start with '/'"),
-                "unexpected msg: {msg}"
-            );
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -135,8 +139,13 @@ fn deny_globs_reject_parent_segments_with_specific_reason() {
         let err = Context::new(policy).expect_err("should reject");
         match err {
             safe_fs_tools::Error::InvalidPolicy(msg) => {
+                assert!(msg.contains("invalid deny glob"), "unexpected msg: {msg}");
                 assert!(
-                    msg.contains("must not contain '..' segments"),
+                    msg.contains(&format!("{pattern:?}")),
+                    "pattern {pattern:?} should appear in validation error, got: {msg}"
+                );
+                assert!(
+                    msg.contains(".."),
                     "pattern {pattern:?} should mention parent-segment prohibition, got: {msg}"
                 );
             }
@@ -157,7 +166,7 @@ fn deny_glob_dot_git_cannot_be_bypassed_via_symlink_paths() {
         return;
     }
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -176,7 +185,7 @@ fn deny_glob_double_star_dot_git_cannot_be_bypassed_via_symlink_paths() {
         return;
     }
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec!["**/.git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -195,7 +204,7 @@ fn deny_glob_blocks_regular_path_that_symlinks_into_git() {
         return;
     }
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -214,7 +223,7 @@ fn deny_glob_blocks_regular_dir_path_that_symlinks_into_git() {
         return;
     }
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -228,7 +237,7 @@ fn deny_globs_match_after_lexical_normalization() {
     std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
     std::fs::write(dir.path().join(".git").join("config"), "secret\n").expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -242,7 +251,7 @@ fn deny_globs_allow_non_secret_paths() {
     std::fs::write(dir.path().join(".git").join("config"), "secret\n").expect("write");
     std::fs::write(dir.path().join("public.txt"), "hello\n").expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 

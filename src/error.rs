@@ -3,11 +3,14 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum Utf8Source {
-    #[error(transparent)]
-    Utf8(#[from] std::str::Utf8Error),
-    #[error(transparent)]
-    FromUtf8(#[from] std::string::FromUtf8Error),
+#[non_exhaustive]
+#[error(transparent)]
+pub struct Utf8Source(#[from] std::str::Utf8Error);
+
+impl From<std::string::FromUtf8Error> for Utf8Source {
+    fn from(source: std::string::FromUtf8Error) -> Self {
+        Self(source.utf8_error())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -187,29 +190,41 @@ mod tests {
     #[test]
     fn code_covers_variants() {
         let cases = vec![
-            (Error::Io(not_found_error()), "io"),
+            (Error::Io(not_found_error()), Error::CODE_IO),
             (
                 Error::IoPath {
                     op: "open",
                     path: PathBuf::from("file.txt"),
                     source: not_found_error(),
                 },
-                "io_path",
+                Error::CODE_IO_PATH,
             ),
-            (Error::InvalidPolicy("x".to_string()), "invalid_policy"),
-            (Error::InvalidPath("x".to_string()), "invalid_path"),
-            (Error::RootNotFound("root".to_string()), "root_not_found"),
+            (
+                Error::InvalidPolicy("x".to_string()),
+                Error::CODE_INVALID_POLICY,
+            ),
+            (
+                Error::InvalidPath("x".to_string()),
+                Error::CODE_INVALID_PATH,
+            ),
+            (
+                Error::RootNotFound("root".to_string()),
+                Error::CODE_ROOT_NOT_FOUND,
+            ),
             (
                 Error::OutsideRoot {
                     root_id: "root".to_string(),
                     path: PathBuf::from("x"),
                 },
-                "outside_root",
+                Error::CODE_OUTSIDE_ROOT,
             ),
-            (Error::NotPermitted("x".to_string()), "not_permitted"),
+            (
+                Error::NotPermitted("x".to_string()),
+                Error::CODE_NOT_PERMITTED,
+            ),
             (
                 Error::SecretPathDenied(PathBuf::from("secret")),
-                "secret_path_denied",
+                Error::CODE_SECRET_PATH_DENIED,
             ),
             (
                 Error::FileTooLarge {
@@ -217,33 +232,33 @@ mod tests {
                     size_bytes: 2,
                     max_bytes: 1,
                 },
-                "file_too_large",
+                Error::CODE_FILE_TOO_LARGE,
             ),
             (
                 Error::invalid_utf8(PathBuf::from("x"), sample_utf8_error()),
-                "invalid_utf8",
+                Error::CODE_INVALID_UTF8,
             ),
-            (Error::Patch("x".to_string()), "patch"),
+            (Error::Patch("x".to_string()), Error::CODE_PATCH),
             (
                 Error::invalid_regex("x".to_string(), sample_regex_error()),
-                "invalid_regex",
+                Error::CODE_INVALID_REGEX,
             ),
             (
                 Error::InputTooLarge {
                     size_bytes: 2,
                     max_bytes: 1,
                 },
-                "input_too_large",
+                Error::CODE_INPUT_TOO_LARGE,
             ),
             #[cfg(any(feature = "glob", feature = "grep"))]
-            (Error::WalkDir(sample_walkdir_error()), "walkdir"),
+            (Error::WalkDir(sample_walkdir_error()), Error::CODE_WALKDIR),
             #[cfg(any(feature = "glob", feature = "grep"))]
             (
                 Error::WalkDirRoot {
                     path: PathBuf::from("x"),
                     source: not_found_error(),
                 },
-                "walkdir_root",
+                Error::CODE_WALKDIR_ROOT,
             ),
         ];
         for (error, code) in cases {
@@ -263,6 +278,18 @@ mod tests {
         assert!(error.source().is_some());
         assert_eq!(error.code(), Error::CODE_INVALID_UTF8);
         assert!(error.to_string().contains("x.txt"));
+    }
+
+    #[test]
+    fn invalid_utf8_source_does_not_expose_from_utf8_error() {
+        let error = Error::invalid_utf8(PathBuf::from("x.txt"), sample_from_utf8_error());
+        let source = error.source().expect("utf8 source");
+        assert!(source.downcast_ref::<std::str::Utf8Error>().is_some());
+        assert!(
+            source
+                .downcast_ref::<std::string::FromUtf8Error>()
+                .is_none()
+        );
     }
 
     #[test]

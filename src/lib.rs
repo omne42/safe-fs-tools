@@ -1,20 +1,16 @@
 //! `safe-fs-tools` provides policy-bounded filesystem operations for local tooling.
 //!
 //! The crate enforces an explicit root/permission policy in-process and offers stable request/
-//! response types for operations like read/write/edit/delete/copy/move/mkdir/stat/patch.
-//! `glob` and `grep` operations are available only when the corresponding `glob`/`grep`
-//! features are enabled.
+//! response types for operations like read/write/edit/delete/list_dir/copy/move/mkdir/stat/patch.
+//! `glob` and `grep` APIs are always available; when the corresponding `glob`/`grep`
+//! feature is disabled, calls return `Error::NotPermitted`.
 
 mod error;
-pub mod ops;
-#[path = "path_utils.rs"]
-mod path_utils_impl;
-pub mod path_utils {
-    pub use super::path_utils_impl::{starts_with_case_insensitive, strip_prefix_case_insensitive};
-}
+mod ops;
+pub mod path_utils;
 
 pub(crate) mod path_utils_internal {
-    pub(crate) use super::path_utils_impl::{
+    pub(crate) use super::path_utils::{
         build_glob_from_normalized, normalize_glob_pattern_for_matching, normalize_path_lexical,
         validate_root_relative_glob_pattern,
     };
@@ -28,15 +24,12 @@ pub mod redaction;
 pub use error::{Error, Result};
 
 pub use ops::{
-    Context, CopyFileRequest, CopyFileResponse, DeleteRequest, DeleteResponse, EditRequest,
-    EditResponse, ListDirEntry, ListDirRequest, ListDirResponse, MkdirRequest, MkdirResponse,
-    MovePathRequest, MovePathResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse,
-    ScanLimitReason, StatKind, StatRequest, StatResponse, WriteFileRequest, WriteFileResponse,
+    Context, CopyFileRequest, CopyFileResponse, DeleteKind, DeleteRequest, DeleteResponse,
+    EditRequest, EditResponse, GlobRequest, GlobResponse, GrepMatch, GrepRequest, GrepResponse,
+    ListDirEntry, ListDirRequest, ListDirResponse, MkdirRequest, MkdirResponse, MovePathRequest,
+    MovePathResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse, ScanLimitReason,
+    StatKind, StatRequest, StatResponse, WriteFileRequest, WriteFileResponse, glob_paths, grep,
 };
-#[cfg(feature = "glob")]
-pub use ops::{GlobRequest, GlobResponse, glob_paths};
-#[cfg(feature = "grep")]
-pub use ops::{GrepMatch, GrepRequest, GrepResponse, grep};
 pub use ops::{
     apply_unified_patch, copy_file, delete, edit_range, list_dir, mkdir, move_path, read_file,
     stat, write_file,

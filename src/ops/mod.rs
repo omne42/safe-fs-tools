@@ -1,3 +1,12 @@
+//! Internal operation modules and request/response API surface.
+//!
+//! `glob` / `grep` request and response types, plus their entrypoints, are always
+//! exported from this internal `crate::ops` module so internal call sites can
+//! compile under any feature set.
+//! Crate-root public exports remain controlled by feature gates in `src/lib.rs`.
+//! When a corresponding crate feature is disabled, the function returns a
+//! deterministic `Error::NotPermitted` from its fallback implementation.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -5,16 +14,14 @@ use std::path::PathBuf;
 use globset::GlobSet;
 use serde::{Deserialize, Serialize};
 
-use crate::policy::{RootMode, SandboxPolicy};
+use crate::policy::{Permissions, RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
 
 mod context;
 mod copy_file;
 mod delete;
 mod edit;
-#[cfg(feature = "glob")]
 mod glob;
-#[cfg(feature = "grep")]
 mod grep;
 mod io;
 mod list_dir;
@@ -32,9 +39,7 @@ mod write;
 pub use copy_file::{CopyFileRequest, CopyFileResponse, copy_file};
 pub use delete::{DeleteKind, DeleteRequest, DeleteResponse, delete};
 pub use edit::{EditRequest, EditResponse, edit_range};
-#[cfg(feature = "glob")]
 pub use glob::{GlobRequest, GlobResponse, glob_paths};
-#[cfg(feature = "grep")]
 pub use grep::{GrepMatch, GrepRequest, GrepResponse, grep};
 pub use list_dir::{ListDirEntry, ListDirRequest, ListDirResponse, list_dir};
 pub use mkdir::{MkdirRequest, MkdirResponse, mkdir};
@@ -65,19 +70,48 @@ impl std::fmt::Debug for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut root_ids = self.roots.keys().collect::<Vec<_>>();
         root_ids.sort_unstable();
+        let enabled_permission_count = count_enabled_permissions(&self.policy.permissions);
         f.debug_struct("Context")
             .field("roots", &root_ids)
-            .field("permissions", &self.policy.permissions)
+            .field("permissions_enabled_count", &enabled_permission_count)
             .finish_non_exhaustive()
     }
+}
+
+fn count_enabled_permissions(permissions: &Permissions) -> usize {
+    [
+        permissions.read,
+        permissions.glob,
+        permissions.grep,
+        permissions.list_dir,
+        permissions.stat,
+        permissions.edit,
+        permissions.patch,
+        permissions.delete,
+        permissions.mkdir,
+        permissions.write,
+        permissions.move_path,
+        permissions.copy_file,
+    ]
+    .into_iter()
+    .filter(|enabled| *enabled)
+    .count()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum ScanLimitReason {
+    /// Traversal stopped after visiting too many filesystem entries
+    /// (files plus directories), as bounded by `limits.max_walk_entries`.
     Entries,
+    /// Traversal stopped after visiting too many files, as bounded by
+    /// `limits.max_walk_files`.
     Files,
+    /// Traversal stopped after exceeding wall-clock budget, as bounded by
+    /// `limits.max_walk_ms`.
     Time,
+    /// Traversal stopped after collecting too many matches, as bounded by
+    /// `limits.max_results`.
     Results,
 }

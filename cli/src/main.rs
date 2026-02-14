@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 mod command_exec;
 mod error;
@@ -227,11 +227,8 @@ fn handle_parse_error(err: clap::Error) -> ExitCode {
     }
 
     let cfg = parse_error_render_cfg_from_env();
-    let cli_err = match validate_error_render_mode(cfg.format, cfg.redact_paths) {
-        Ok(()) => clap_parse_error(err),
-        Err(render_mode_err) => render_mode_err,
-    };
-    emit_error(&cli_err, cfg);
+    let render_mode_err = validate_error_render_mode(cfg.format, cfg.redact_paths).err();
+    emit_parse_error(&err, cfg, render_mode_err.as_ref());
     ExitCode::FAILURE
 }
 
@@ -254,44 +251,37 @@ fn print_clap_message(err: clap::Error) -> ExitCode {
 }
 
 fn parse_error_render_cfg_from_env() -> ErrorRenderCfg<'static> {
-    let mut format = ErrorFormat::Text;
-    let mut pretty = false;
-    let mut redact_paths = false;
-    let mut strict_redact_paths = false;
+    parse_error_render_cfg_from_args(std::env::args_os())
+}
 
-    let args = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    let mut idx = 0;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--pretty" => {
-                pretty = true;
-            }
-            "--redact-paths" => {
-                redact_paths = true;
-            }
-            "--redact-paths-strict" => {
-                redact_paths = true;
-                strict_redact_paths = true;
-            }
-            "--error-format" => {
-                if let Some(value) = args.get(idx + 1).and_then(|arg| parse_error_format(arg)) {
-                    format = value;
-                }
-                idx += 1;
-            }
-            other => {
-                if let Some(value) = other.strip_prefix("--error-format=") {
-                    if let Some(parsed) = parse_error_format(value) {
-                        format = parsed;
-                    }
-                }
-            }
+fn parse_error_render_cfg_from_args<I, T>(args: I) -> ErrorRenderCfg<'static>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let matches = match Cli::command()
+        .ignore_errors(true)
+        .try_get_matches_from(args)
+    {
+        Ok(matches) => matches,
+        Err(_) => {
+            return ErrorRenderCfg {
+                format: ErrorFormat::Text,
+                pretty: false,
+                redact_paths: false,
+                strict_redact_paths: false,
+                redaction: None,
+            };
         }
-        idx += 1;
-    }
+    };
+
+    let format = matches
+        .get_one::<ErrorFormat>("error_format")
+        .copied()
+        .unwrap_or(ErrorFormat::Text);
+    let pretty = matches.get_flag("pretty");
+    let strict_redact_paths = matches.get_flag("redact_paths_strict");
+    let redact_paths = matches.get_flag("redact_paths") || strict_redact_paths;
 
     ErrorRenderCfg {
         format,
@@ -302,18 +292,78 @@ fn parse_error_render_cfg_from_env() -> ErrorRenderCfg<'static> {
     }
 }
 
-fn parse_error_format(raw: &str) -> Option<ErrorFormat> {
-    if raw.eq_ignore_ascii_case("text") {
-        Some(ErrorFormat::Text)
-    } else if raw.eq_ignore_ascii_case("json") {
-        Some(ErrorFormat::Json)
-    } else {
-        None
+const CODE_INVALID_CLI_ARGS: &str = "invalid_cli_args";
+
+fn emit_parse_error(
+    err: &clap::Error,
+    cfg: ErrorRenderCfg<'_>,
+    render_mode_err: Option<&CliError>,
+) {
+    let rendered = render_parse_error(err, cfg, render_mode_err);
+    if write_stderr_line(&rendered).is_err() {
+        write_stderr_fallback();
     }
 }
 
-fn clap_parse_error(err: clap::Error) -> CliError {
-    CliError::Tool(safe_fs_tools::Error::InvalidPath(err.to_string()))
+fn render_parse_error(
+    err: &clap::Error,
+    cfg: ErrorRenderCfg<'_>,
+    render_mode_err: Option<&CliError>,
+) -> String {
+    let message = err.to_string();
+    let message = message.trim_end_matches('\n');
+    let public_message = if cfg.redact_paths {
+        "invalid cli arguments".to_string()
+    } else {
+        message.to_string()
+    };
+    let render_mode_message = render_mode_err.map(|mode_err| match mode_err {
+        CliError::Tool(tool) => {
+            tool_public_message(tool, None, cfg.redact_paths, cfg.strict_redact_paths)
+        }
+        CliError::Json(_) => mode_err.to_string(),
+    });
+
+    match cfg.format {
+        ErrorFormat::Text => {
+            if let Some(render_mode_message) = render_mode_message {
+                format!("{public_message}\nnote: {render_mode_message}")
+            } else {
+                public_message
+            }
+        }
+        ErrorFormat::Json => {
+            let mut details = serde_json::Map::new();
+            details.insert(
+                "kind".to_string(),
+                serde_json::Value::String("clap_error".to_string()),
+            );
+            details.insert(
+                "clap_kind".to_string(),
+                serde_json::Value::String(format!("{:?}", err.kind())),
+            );
+            if let Some(render_mode_message) = render_mode_message {
+                details.insert(
+                    "render_mode".to_string(),
+                    serde_json::json!({
+                        "message": render_mode_message,
+                    }),
+                );
+            }
+
+            let out = serde_json::json!({
+                "error": {
+                    "code": CODE_INVALID_CLI_ARGS,
+                    "message": public_message,
+                    "details": details,
+                }
+            });
+            match serialize_json(&out, cfg.pretty) {
+                Ok(text) => text,
+                Err(_) => fallback_json_error(),
+            }
+        }
+    }
 }
 
 fn validate_error_render_mode(
@@ -456,3 +506,92 @@ fn write_stderr_fallback() {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod parse_error_tests {
+    use super::*;
+
+    fn parse_cfg(args: &[&str]) -> ErrorRenderCfg<'static> {
+        let args = std::iter::once("safe-fs-tools")
+            .chain(args.iter().copied())
+            .collect::<Vec<_>>();
+        parse_error_render_cfg_from_args(args)
+    }
+
+    #[test]
+    fn parse_error_cfg_does_not_swallow_flag_after_missing_error_format_value() {
+        let cfg = parse_cfg(&["--error-format", "--pretty", "--redact-paths"]);
+        assert!(matches!(cfg.format, ErrorFormat::Text));
+        assert!(cfg.pretty);
+        assert!(cfg.redact_paths);
+        assert!(!cfg.strict_redact_paths);
+    }
+
+    #[test]
+    fn parse_error_cfg_ignores_tokens_after_double_dash() {
+        let cfg = parse_cfg(&["--pretty", "--", "--error-format=json", "--redact-paths"]);
+        assert!(cfg.pretty);
+        assert!(matches!(cfg.format, ErrorFormat::Text));
+        assert!(!cfg.redact_paths);
+        assert!(!cfg.strict_redact_paths);
+    }
+
+    #[test]
+    fn parse_error_json_code_is_invalid_cli_args() {
+        let err = Cli::try_parse_from([
+            "safe-fs-tools",
+            "--policy",
+            "policy.toml",
+            "--definitely-unknown",
+        ])
+        .expect_err("expected clap parse error");
+
+        let rendered = render_parse_error(
+            &err,
+            ErrorRenderCfg {
+                format: ErrorFormat::Json,
+                pretty: false,
+                redact_paths: false,
+                strict_redact_paths: false,
+                redaction: None,
+            },
+            None,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("valid json");
+        assert_eq!(parsed["error"]["code"], CODE_INVALID_CLI_ARGS);
+    }
+
+    #[test]
+    fn parse_error_keeps_primary_error_when_render_mode_is_invalid() {
+        let err = Cli::try_parse_from([
+            "safe-fs-tools",
+            "--policy",
+            "policy.toml",
+            "--definitely-unknown",
+        ])
+        .expect_err("expected clap parse error");
+
+        let rendered = render_parse_error(
+            &err,
+            ErrorRenderCfg {
+                format: ErrorFormat::Json,
+                pretty: false,
+                redact_paths: true,
+                strict_redact_paths: false,
+                redaction: None,
+            },
+            Some(&CliError::Tool(safe_fs_tools::Error::InvalidPath(
+                "--redact-paths/--redact-paths-strict require --error-format json".to_string(),
+            ))),
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("valid json");
+        assert_eq!(parsed["error"]["code"], CODE_INVALID_CLI_ARGS);
+        assert_eq!(parsed["error"]["message"], "invalid cli arguments");
+        assert_eq!(
+            parsed["error"]["details"]["render_mode"]["message"],
+            "invalid path"
+        );
+    }
+}

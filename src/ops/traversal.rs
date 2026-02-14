@@ -88,14 +88,21 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
         const BACKSLASH: u16 = b'\\' as u16;
         const SLASH: u16 = b'/' as u16;
 
-        let mut normalized_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-        if !normalized_wide.contains(&BACKSLASH) {
+        let mut has_backslash = false;
+        let normalized_wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .map(|unit| {
+                if unit == BACKSLASH {
+                    has_backslash = true;
+                    SLASH
+                } else {
+                    unit
+                }
+            })
+            .collect();
+        if !has_backslash {
             return glob.is_match(path);
-        }
-        for unit in &mut normalized_wide {
-            if *unit == BACKSLASH {
-                *unit = SLASH;
-            }
         }
         let normalized = OsString::from_wide(&normalized_wide);
         return glob.is_match(Path::new(&normalized));
@@ -109,10 +116,8 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
 #[cfg(any(feature = "glob", feature = "grep"))]
 #[derive(Debug, Default, Clone)]
 pub(super) struct TraversalDiagnostics {
-    truncated: bool,
     scanned_files: u64,
     scanned_entries: u64,
-    scan_limit_reached: bool,
     scan_limit_reason: Option<ScanLimitReason>,
     skipped_walk_errors: u64,
     skipped_io_errors: u64,
@@ -121,8 +126,10 @@ pub(super) struct TraversalDiagnostics {
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 impl TraversalDiagnostics {
+    // Legacy alias kept for response compatibility; use `scan_limit_reached` as the
+    // canonical boolean source for limit truncation semantics.
     pub(super) fn truncated(&self) -> bool {
-        self.truncated
+        self.scan_limit_reached()
     }
 
     pub(super) fn scanned_files(&self) -> u64 {
@@ -134,7 +141,7 @@ impl TraversalDiagnostics {
     }
 
     pub(super) fn scan_limit_reached(&self) -> bool {
-        self.scan_limit_reached
+        self.scan_limit_reason.is_some()
     }
 
     pub(super) fn scan_limit_reason(&self) -> Option<ScanLimitReason> {
@@ -153,11 +160,11 @@ impl TraversalDiagnostics {
         self.skipped_dangling_symlink_targets
     }
 
+    // Records the first observed limit-hit reason; subsequent limit reasons are ignored.
     pub(super) fn mark_limit_reached(&mut self, reason: ScanLimitReason) {
         if self.scan_limit_reason.is_none() {
             self.scan_limit_reason = Some(reason);
         }
-        self.normalize_limit_state();
     }
 
     pub(super) fn inc_scanned_files(&mut self) {
@@ -180,17 +187,26 @@ impl TraversalDiagnostics {
         self.skipped_dangling_symlink_targets =
             self.skipped_dangling_symlink_targets.saturating_add(1);
     }
-
-    fn normalize_limit_state(&mut self) {
-        self.scan_limit_reached = self.scan_limit_reason.is_some();
-        if self.scan_limit_reached {
-            self.truncated = true;
-        }
-    }
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 pub(super) struct TraversalFile {
     pub(super) path: PathBuf,
     pub(super) relative_path: PathBuf,
+}
+
+#[cfg(all(any(feature = "glob", feature = "grep"), test))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mark_limit_reached_keeps_first_reason() {
+        let mut diag = TraversalDiagnostics::default();
+        diag.mark_limit_reached(ScanLimitReason::Entries);
+        diag.mark_limit_reached(ScanLimitReason::Time);
+
+        assert!(diag.scan_limit_reached());
+        assert!(diag.truncated());
+        assert_eq!(diag.scan_limit_reason(), Some(ScanLimitReason::Entries));
+    }
 }

@@ -22,6 +22,29 @@ fn assert_invalid_policy_contains_all(err: safe_fs_tools::Error, expected_parts:
     }
 }
 
+fn read_only_root(id: impl Into<String>, path: impl Into<PathBuf>) -> Root {
+    Root {
+        id: id.into(),
+        path: path.into(),
+        mode: RootMode::ReadOnly,
+    }
+}
+
+fn policy_with_roots(roots: Vec<Root>) -> SandboxPolicy {
+    SandboxPolicy {
+        roots,
+        permissions: Permissions::default(),
+        limits: Limits::default(),
+        secrets: SecretRules::default(),
+        traversal: TraversalRules::default(),
+        paths: PathRules::default(),
+    }
+}
+
+fn policy_with_single_root(id: impl Into<String>, path: impl Into<PathBuf>) -> SandboxPolicy {
+    policy_with_roots(vec![read_only_root(id, path)])
+}
+
 #[test]
 fn policy_accepts_valid_configuration() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -33,25 +56,11 @@ fn policy_accepts_valid_configuration() {
 #[test]
 fn policy_rejects_duplicate_root_ids() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let policy = SandboxPolicy {
-        roots: vec![
-            Root {
-                id: "dup".to_string(),
-                path: dir.path().to_path_buf(),
-                mode: RootMode::ReadOnly,
-            },
-            Root {
-                id: "dup".to_string(),
-                path: dir.path().to_path_buf(),
-                mode: RootMode::ReadOnly,
-            },
-        ],
-        permissions: Permissions::default(),
-        limits: Limits::default(),
-        secrets: SecretRules::default(),
-        traversal: TraversalRules::default(),
-        paths: PathRules::default(),
-    };
+    let root_path = dir.path().to_path_buf();
+    let policy = policy_with_roots(vec![
+        read_only_root("dup", root_path.clone()),
+        read_only_root("dup", root_path),
+    ]);
 
     let err = policy.validate().expect_err("should reject");
     assert_invalid_policy_contains_all(err, &["duplicate root.id", "dup"]);
@@ -60,18 +69,7 @@ fn policy_rejects_duplicate_root_ids() {
 #[test]
 fn policy_rejects_root_id_with_trailing_whitespace() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let policy = SandboxPolicy {
-        roots: vec![Root {
-            id: "root ".to_string(),
-            path: dir.path().to_path_buf(),
-            mode: RootMode::ReadOnly,
-        }],
-        permissions: Permissions::default(),
-        limits: Limits::default(),
-        secrets: SecretRules::default(),
-        traversal: TraversalRules::default(),
-        paths: PathRules::default(),
-    };
+    let policy = policy_with_single_root("root ", dir.path());
 
     let err = policy.validate().expect_err("should reject");
     assert_invalid_policy_contains_all(
@@ -86,18 +84,7 @@ fn policy_rejects_root_id_with_trailing_whitespace() {
 #[test]
 fn policy_rejects_root_id_with_leading_whitespace() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let policy = SandboxPolicy {
-        roots: vec![Root {
-            id: " root".to_string(),
-            path: dir.path().to_path_buf(),
-            mode: RootMode::ReadOnly,
-        }],
-        permissions: Permissions::default(),
-        limits: Limits::default(),
-        secrets: SecretRules::default(),
-        traversal: TraversalRules::default(),
-        paths: PathRules::default(),
-    };
+    let policy = policy_with_single_root(" root", dir.path());
 
     let err = policy.validate().expect_err("should reject");
     assert_invalid_policy_contains_all(
@@ -110,19 +97,65 @@ fn policy_rejects_root_id_with_leading_whitespace() {
 }
 
 #[test]
+fn policy_rejects_root_id_with_non_space_whitespace() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cases = [
+        ("leading tab", "\troot"),
+        ("trailing newline", "root\n"),
+        ("leading unicode em-space", "\u{2003}root"),
+    ];
+
+    for (case_name, root_id) in cases {
+        let policy = policy_with_single_root(root_id, dir.path());
+        match policy.validate().expect_err("should reject") {
+            safe_fs_tools::Error::InvalidPolicy(msg) => {
+                assert!(
+                    msg.contains("root.id must not contain leading/trailing whitespace"),
+                    "case: {case_name}, msg: {msg}"
+                );
+                assert!(msg.contains("root.id"), "case: {case_name}, msg: {msg}");
+            }
+            other => panic!("case: {case_name}, unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn policy_rejects_root_id_too_long() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = policy_with_single_root("a".repeat(65), dir.path());
+
+    let err = policy.validate().expect_err("should reject");
+    assert_invalid_policy_contains_all(err, &["root.id is too long", "max=64"]);
+}
+
+#[test]
+fn policy_rejects_root_id_with_invalid_characters() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cases = [
+        ("contains space", "root id"),
+        ("contains slash", "root/id"),
+        ("contains colon", "root:1"),
+    ];
+
+    for (case_name, root_id) in cases {
+        let policy = policy_with_single_root(root_id, dir.path());
+        match policy.validate().expect_err("should reject") {
+            safe_fs_tools::Error::InvalidPolicy(msg) => {
+                assert!(
+                    msg.contains("root.id contains invalid characters"),
+                    "case: {case_name}, msg: {msg}"
+                );
+                assert!(msg.contains(root_id), "case: {case_name}, msg: {msg}");
+            }
+            other => panic!("case: {case_name}, unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn policy_rejects_relative_root_paths() {
-    let policy = SandboxPolicy {
-        roots: vec![Root {
-            id: "root".to_string(),
-            path: PathBuf::from("relative-root"),
-            mode: RootMode::ReadOnly,
-        }],
-        permissions: Permissions::default(),
-        limits: Limits::default(),
-        secrets: SecretRules::default(),
-        traversal: TraversalRules::default(),
-        paths: PathRules::default(),
-    };
+    let policy = policy_with_single_root("root", PathBuf::from("relative-root"));
 
     let err = policy.validate().expect_err("should reject");
     assert_invalid_policy_contains_all(err, &["root.path must be absolute", "root.id=root"]);
@@ -177,18 +210,7 @@ fn policy_rejects_empty_roots() {
 #[test]
 fn policy_rejects_empty_root_id() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let policy = SandboxPolicy {
-        roots: vec![Root {
-            id: String::new(),
-            path: dir.path().to_path_buf(),
-            mode: RootMode::ReadOnly,
-        }],
-        permissions: Permissions::default(),
-        limits: Limits::default(),
-        secrets: SecretRules::default(),
-        traversal: TraversalRules::default(),
-        paths: PathRules::default(),
-    };
+    let policy = policy_with_single_root(String::new(), dir.path());
 
     let err = policy.validate().expect_err("should reject");
     assert_invalid_policy_contains_all(err, &["root.id", "empty"]);
@@ -196,18 +218,7 @@ fn policy_rejects_empty_root_id() {
 
 #[test]
 fn policy_rejects_empty_root_path() {
-    let policy = SandboxPolicy {
-        roots: vec![Root {
-            id: "root".to_string(),
-            path: PathBuf::new(),
-            mode: RootMode::ReadOnly,
-        }],
-        permissions: Permissions::default(),
-        limits: Limits::default(),
-        secrets: SecretRules::default(),
-        traversal: TraversalRules::default(),
-        paths: PathRules::default(),
-    };
+    let policy = policy_with_single_root("root", PathBuf::new());
 
     let err = policy.validate().expect_err("should reject");
     assert_invalid_policy_contains_all(err, &["root.path is empty", "root.id=root"]);
@@ -269,18 +280,7 @@ fn context_rejects_file_roots() {
     let root_file = dir.path().join("root.txt");
     std::fs::write(&root_file, "not a directory").expect("write");
 
-    let policy = SandboxPolicy {
-        roots: vec![Root {
-            id: "root".to_string(),
-            path: root_file,
-            mode: RootMode::ReadOnly,
-        }],
-        permissions: Permissions::default(),
-        limits: Limits::default(),
-        secrets: SecretRules::default(),
-        traversal: TraversalRules::default(),
-        paths: PathRules::default(),
-    };
+    let policy = policy_with_single_root("root", root_file);
 
     let err = Context::new(policy).expect_err("should reject");
     assert_invalid_policy_contains_all(err, &["root", "is not a directory"]);
@@ -291,18 +291,7 @@ fn validate_only_checks_policy_shape_not_filesystem_state() {
     let dir = tempfile::tempdir().expect("tempdir");
     let missing_root = dir.path().join("missing-root");
 
-    let policy = SandboxPolicy {
-        roots: vec![Root {
-            id: "root".to_string(),
-            path: missing_root,
-            mode: RootMode::ReadOnly,
-        }],
-        permissions: Permissions::default(),
-        limits: Limits::default(),
-        secrets: SecretRules::default(),
-        traversal: TraversalRules::default(),
-        paths: PathRules::default(),
-    };
+    let policy = policy_with_single_root("root", missing_root);
 
     policy
         .validate()
@@ -374,6 +363,112 @@ fn policy_deserialization_rejects_unknown_fields() {
 
     for (case_name, raw, unknown_field) in cases {
         let err = serde_json::from_str::<SandboxPolicy>(raw).expect_err("should reject");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown field"),
+            "case: {case_name}, msg: {msg}"
+        );
+        assert!(msg.contains(unknown_field), "case: {case_name}, msg: {msg}");
+    }
+}
+
+#[cfg(feature = "policy-io")]
+#[test]
+fn policy_deserialization_rejects_unknown_fields_in_toml() {
+    let cases = [
+        (
+            "unknown root field",
+            r#"
+[[roots]]
+id = "root"
+path = "/"
+mode = "read_only"
+unknown_root = true
+"#,
+            "unknown_root",
+        ),
+        (
+            "unknown top-level field",
+            r#"
+[[roots]]
+id = "root"
+path = "/"
+mode = "read_only"
+
+unknown_top = true
+"#,
+            "unknown_top",
+        ),
+        (
+            "unknown permissions field",
+            r#"
+[[roots]]
+id = "root"
+path = "/"
+mode = "read_only"
+
+[permissions]
+read = true
+unknown_permissions = true
+"#,
+            "unknown_permissions",
+        ),
+        (
+            "unknown limits field",
+            r#"
+[[roots]]
+id = "root"
+path = "/"
+mode = "read_only"
+
+[limits]
+unknown_limits = 1
+"#,
+            "unknown_limits",
+        ),
+        (
+            "unknown secrets field",
+            r#"
+[[roots]]
+id = "root"
+path = "/"
+mode = "read_only"
+
+[secrets]
+unknown_secrets = true
+"#,
+            "unknown_secrets",
+        ),
+        (
+            "unknown traversal field",
+            r#"
+[[roots]]
+id = "root"
+path = "/"
+mode = "read_only"
+
+[traversal]
+unknown_traversal = true
+"#,
+            "unknown_traversal",
+        ),
+        (
+            "unknown paths field",
+            r#"
+[[roots]]
+id = "root"
+path = "/"
+mode = "read_only"
+
+[paths]
+unknown_paths = true
+"#,
+            "unknown_paths",
+        ),
+    ];
+
+    for (case_name, raw, unknown_field) in cases {
+        let err = toml::from_str::<SandboxPolicy>(raw).expect_err("should reject");
         let msg = err.to_string();
         assert!(
             msg.contains("unknown field"),

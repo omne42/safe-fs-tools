@@ -46,7 +46,17 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 #[cfg(windows)]
 fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
-    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+    match (
+        a.volume_serial_number(),
+        a.file_index(),
+        b.volume_serial_number(),
+        b.file_index(),
+    ) {
+        (Some(a_serial), Some(a_index), Some(b_serial), Some(b_index)) => {
+            a_serial == b_serial && a_index == b_index
+        }
+        _ => false,
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -88,13 +98,80 @@ fn revalidate_source_before_move(
     expected_source_meta: &fs::Metadata,
 ) -> Result<()> {
     let current_source_meta = fs::symlink_metadata(source)
-        .map_err(|err| Error::io_path("metadata", source_relative, err))?;
+        .map_err(|err| Error::io_path("symlink_metadata", source_relative, err))?;
     if !metadata_same_file(expected_source_meta, &current_source_meta) {
         return Err(Error::InvalidPath(
             "source identity changed during move; refusing to continue".to_string(),
         ));
     }
     Ok(())
+}
+
+fn validate_destination_before_move(
+    source_meta: &fs::Metadata,
+    destination: &Path,
+    destination_relative: &Path,
+    overwrite: bool,
+) -> Result<bool> {
+    let destination_meta = match fs::symlink_metadata(destination) {
+        Ok(meta) => Some(meta),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(Error::io_path(
+                "symlink_metadata",
+                destination_relative,
+                err,
+            ));
+        }
+    };
+
+    if let Some(dest_meta) = &destination_meta {
+        let same_destination_entity = metadata_same_file(source_meta, dest_meta);
+        if same_destination_entity {
+            return Ok(true);
+        }
+        if dest_meta.is_dir() {
+            return Err(Error::InvalidPath(
+                "destination exists and is a directory".to_string(),
+            ));
+        }
+        if !overwrite {
+            return Err(Error::InvalidPath("destination exists".to_string()));
+        }
+        if source_meta.is_dir() {
+            return Err(Error::InvalidPath(
+                "refusing to overwrite an existing destination with a directory".to_string(),
+            ));
+        }
+    }
+
+    Ok(false)
+}
+
+fn validate_directory_move_target(source: &Path, destination: &Path) -> Result<()> {
+    let normalized_source = crate::path_utils_internal::normalize_path_lexical(source);
+    let normalized_destination = crate::path_utils_internal::normalize_path_lexical(destination);
+    if normalized_destination != normalized_source
+        && crate::path_utils::starts_with_case_insensitive(
+            &normalized_destination,
+            &normalized_source,
+        )
+    {
+        return Err(Error::InvalidPath(
+            "refusing to move a directory into its own subdirectory".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_destination_exists_rename_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::AlreadyExists || matches!(err.raw_os_error(), Some(80 | 183))
+}
+
+#[cfg(not(windows))]
+fn is_destination_exists_rename_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::AlreadyExists
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,7 +283,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     let source = from_parent.join(from_name);
 
     let source_meta = fs::symlink_metadata(&source)
-        .map_err(|err| Error::io_path("metadata", &from_relative, err))?;
+        .map_err(|err| Error::io_path("symlink_metadata", &from_relative, err))?;
     let kind = if source_meta.file_type().is_file() {
         "file"
     } else if source_meta.file_type().is_dir() {
@@ -263,52 +340,23 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     }
 
     if source_meta.is_dir() {
-        let normalized_source = crate::path_utils_internal::normalize_path_lexical(&source);
-        let normalized_destination =
-            crate::path_utils_internal::normalize_path_lexical(&destination);
-        if normalized_destination != normalized_source
-            && crate::path_utils::starts_with_case_insensitive(
-                &normalized_destination,
-                &normalized_source,
-            )
-        {
-            return Err(Error::InvalidPath(
-                "refusing to move a directory into its own subdirectory".to_string(),
-            ));
-        }
+        validate_directory_move_target(&source, &destination)?;
     }
 
-    let destination_meta = match fs::symlink_metadata(&destination) {
-        Ok(meta) => Some(meta),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(Error::io_path("metadata", &to_relative, err)),
-    };
-
-    if let Some(dest_meta) = &destination_meta {
-        let same_destination_entity = metadata_same_file(&source_meta, dest_meta);
-        if same_destination_entity {
-            return Ok(MovePathResponse {
-                from: from_relative,
-                to: to_relative,
-                requested_from: Some(requested_from),
-                requested_to: Some(requested_to),
-                moved: false,
-                kind: kind.to_string(),
-            });
-        }
-        if dest_meta.is_dir() {
-            return Err(Error::InvalidPath(
-                "destination exists and is a directory".to_string(),
-            ));
-        }
-        if !request.overwrite {
-            return Err(Error::InvalidPath("destination exists".to_string()));
-        }
-        if source_meta.is_dir() {
-            return Err(Error::InvalidPath(
-                "refusing to overwrite an existing destination with a directory".to_string(),
-            ));
-        }
+    if validate_destination_before_move(
+        &source_meta,
+        &destination,
+        &to_relative,
+        request.overwrite,
+    )? {
+        return Ok(MovePathResponse {
+            from: from_relative,
+            to: to_relative,
+            requested_from: Some(requested_from),
+            requested_to: Some(requested_to),
+            moved: false,
+            kind: kind.to_string(),
+        });
     }
 
     let rechecked_from_parent = revalidate_parent_before_move(
@@ -350,10 +398,25 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         return Err(Error::SecretPathDenied(to_relative));
     }
     revalidate_source_before_move(&source, &from_relative, &source_meta)?;
+    if validate_destination_before_move(
+        &source_meta,
+        &destination,
+        &to_relative,
+        request.overwrite,
+    )? {
+        return Ok(MovePathResponse {
+            from: from_relative,
+            to: to_relative,
+            requested_from: Some(requested_from),
+            requested_to: Some(requested_to),
+            moved: false,
+            kind: kind.to_string(),
+        });
+    }
 
     let replace_existing = request.overwrite;
     super::io::rename_replace(&source, &destination, replace_existing).map_err(|err| {
-        if !replace_existing && err.kind() == std::io::ErrorKind::AlreadyExists {
+        if !replace_existing && is_destination_exists_rename_error(&err) {
             return Error::InvalidPath("destination exists".to_string());
         }
         if !replace_existing && err.kind() == std::io::ErrorKind::Unsupported {

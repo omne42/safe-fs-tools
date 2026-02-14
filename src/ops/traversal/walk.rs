@@ -8,6 +8,44 @@ use crate::error::{Error, Result};
 use super::super::{Context, ScanLimitReason};
 use super::{TRAVERSAL_GLOB_PROBE_NAME, TraversalDiagnostics, TraversalFile};
 
+fn resolve_walk_root_for_traversal(
+    ctx: &Context,
+    root_id: &str,
+    root_path: &Path,
+    walk_root: &Path,
+) -> Result<PathBuf> {
+    let normalized_root_path = crate::path_utils_internal::normalize_path_lexical(root_path);
+    let normalized_walk_root = crate::path_utils_internal::normalize_path_lexical(walk_root);
+
+    let relative_walk_root = crate::path_utils::strip_prefix_case_insensitive(
+        &normalized_walk_root,
+        &normalized_root_path,
+    )
+    .ok_or_else(|| {
+        Error::InvalidPath("derived traversal root escapes selected root".to_string())
+    })?;
+    let relative_walk_root = if relative_walk_root.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        relative_walk_root
+    };
+
+    match ctx.canonical_path_in_root(root_id, &relative_walk_root) {
+        Ok((canonical, _, _)) => Ok(canonical),
+        Err(Error::IoPath {
+            op: "canonicalize",
+            source,
+            ..
+        }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(ctx.canonical_root(root_id)?.join(relative_walk_root))
+        }
+        Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => Err(
+            Error::InvalidPath("derived traversal root escapes selected root".to_string()),
+        ),
+        Err(err) => Err(err),
+    }
+}
+
 fn walkdir_root_error(root_path: &Path, walk_root: &Path, err: walkdir::Error) -> Error {
     let relative = crate::path_utils::strip_prefix_case_insensitive(walk_root, root_path)
         .filter(|relative| !relative.as_os_str().is_empty())
@@ -17,10 +55,13 @@ fn walkdir_root_error(root_path: &Path, walk_root: &Path, err: walkdir::Error) -
         if let Some(raw_os_error) = io.raw_os_error() {
             std::io::Error::from_raw_os_error(raw_os_error)
         } else {
-            std::io::Error::new(io.kind(), err.to_string())
+            std::io::Error::from(io.kind())
         }
     } else {
-        std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "walkdir root traversal failed without io error detail",
+        )
     };
 
     Error::WalkDirRoot {
@@ -55,11 +96,27 @@ pub(super) fn walkdir_traversal_iter<'a>(
                         ) {
                             std::borrow::Cow::Owned(relative)
                         } else {
+                            debug_assert!(
+                                crate::path_utils::strip_prefix_case_insensitive(
+                                    entry.path(),
+                                    root_path,
+                                )
+                                .is_some(),
+                                "walkdir yielded a path outside the selected root"
+                            );
                             return false;
                         }
                     }
                     #[cfg(not(windows))]
                     {
+                        debug_assert!(
+                            crate::path_utils::strip_prefix_case_insensitive(
+                                entry.path(),
+                                root_path,
+                            )
+                            .is_some(),
+                            "walkdir yielded a path outside the selected root"
+                        );
                         return false;
                     }
                 }
@@ -138,27 +195,68 @@ fn resolve_entry_traversal_file(
     is_symlink: bool,
     diag: &mut TraversalDiagnostics,
 ) -> Result<Option<TraversalFile>> {
-    let (canonical, _canonical_relative, _requested_path) =
-        match ctx.canonical_path_in_root(root_id, &relative) {
-            Ok(ok) => ok,
-            Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => return Ok(None),
-            Err(Error::IoPath {
+    #[derive(Clone, Copy)]
+    enum ResolvePhase {
+        Canonicalize,
+        Open,
+    }
+
+    fn classify_resolve_error(
+        err: Error,
+        phase: ResolvePhase,
+        is_symlink: bool,
+        diag: &mut TraversalDiagnostics,
+    ) -> Result<()> {
+        match err {
+            Error::OutsideRoot { .. } | Error::SecretPathDenied(_) => {
+                diag.inc_skipped_walk_errors();
+                Ok(())
+            }
+            Error::IoPath {
                 op: "canonicalize",
                 source,
                 ..
-            }) if source.kind() == std::io::ErrorKind::NotFound => {
+            } if matches!(phase, ResolvePhase::Canonicalize)
+                && source.kind() == std::io::ErrorKind::NotFound =>
+            {
                 if is_symlink {
                     diag.inc_skipped_dangling_symlink_targets();
                 } else {
                     diag.inc_skipped_io_errors();
                 }
-                return Ok(None);
+                Ok(())
             }
-            Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+            Error::IoPath {
+                source, op: "open", ..
+            } if matches!(phase, ResolvePhase::Open)
+                && source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                if is_symlink {
+                    diag.inc_skipped_dangling_symlink_targets();
+                } else {
+                    diag.inc_skipped_io_errors();
+                }
+                Ok(())
+            }
+            Error::InvalidPath(_) if matches!(phase, ResolvePhase::Open) => {
                 diag.inc_skipped_io_errors();
+                Ok(())
+            }
+            Error::IoPath { .. } | Error::Io(_) => {
+                diag.inc_skipped_io_errors();
+                Ok(())
+            }
+            err => Err(err),
+        }
+    }
+
+    let (canonical, _canonical_relative, _requested_path) =
+        match ctx.canonical_path_in_root(root_id, &relative) {
+            Ok(ok) => ok,
+            Err(err) => {
+                classify_resolve_error(err, ResolvePhase::Canonicalize, is_symlink, diag)?;
                 return Ok(None);
             }
-            Err(err) => return Err(err),
         };
 
     let opened = super::super::io::open_regular_file_for_read(&canonical, &relative);
@@ -170,25 +268,10 @@ fn resolve_entry_traversal_file(
                 relative_path: relative,
             }))
         }
-        Err(Error::IoPath {
-            source, op: "open", ..
-        }) if source.kind() == std::io::ErrorKind::NotFound => {
-            if is_symlink {
-                diag.inc_skipped_dangling_symlink_targets();
-            } else {
-                diag.inc_skipped_io_errors();
-            }
+        Err(err) => {
+            classify_resolve_error(err, ResolvePhase::Open, is_symlink, diag)?;
             Ok(None)
         }
-        Err(Error::InvalidPath(_)) => {
-            diag.inc_skipped_io_errors();
-            Ok(None)
-        }
-        Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
-            diag.inc_skipped_io_errors();
-            Ok(None)
-        }
-        Err(err) => Err(err),
     }
 }
 
@@ -221,37 +304,29 @@ pub(super) fn walk_traversal_files(
         &mut TraversalDiagnostics,
     ) -> Result<std::ops::ControlFlow<()>>,
 ) -> Result<TraversalDiagnostics> {
-    let normalized_root_path = crate::path_utils_internal::normalize_path_lexical(root_path);
-    let normalized_walk_root = crate::path_utils_internal::normalize_path_lexical(walk_root);
-
-    if crate::path_utils::strip_prefix_case_insensitive(
-        &normalized_walk_root,
-        &normalized_root_path,
-    )
-    .is_none()
-    {
-        return Err(Error::InvalidPath(
-            "derived traversal root escapes selected root".to_string(),
-        ));
-    }
+    let walk_root = resolve_walk_root_for_traversal(ctx, root_id, root_path, walk_root)?;
 
     let mut diag = TraversalDiagnostics::default();
     let max_walk_entries = u64::try_from(ctx.policy.limits.max_walk_entries).unwrap_or(u64::MAX);
     let max_walk_files = u64::try_from(ctx.policy.limits.max_walk_files).unwrap_or(u64::MAX);
 
-    for entry in walkdir_traversal_iter(ctx, root_path, walk_root) {
+    for entry in walkdir_traversal_iter(ctx, root_path, &walk_root) {
         if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
             diag.mark_limit_reached(ScanLimitReason::Time);
             break;
         }
 
-        let entry =
-            match classify_walkdir_entry(entry, root_path, walk_root, &mut diag, max_walk_entries)?
-            {
-                WalkEntryAction::Continue => continue,
-                WalkEntryAction::Break => break,
-                WalkEntryAction::Entry(entry) => entry,
-            };
+        let entry = match classify_walkdir_entry(
+            entry,
+            root_path,
+            &walk_root,
+            &mut diag,
+            max_walk_entries,
+        )? {
+            WalkEntryAction::Continue => continue,
+            WalkEntryAction::Break => break,
+            WalkEntryAction::Entry(entry) => entry,
+        };
 
         let file_type = entry.file_type();
         if !(file_type.is_file() || file_type.is_symlink()) {

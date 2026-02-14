@@ -1,6 +1,6 @@
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::permissive_test_policy as test_policy;
 use safe_fs_tools::ops::{
@@ -11,15 +11,64 @@ use safe_fs_tools::ops::{
 use safe_fs_tools::policy::RootMode;
 
 #[cfg(any(unix, windows))]
-fn create_file_symlink(target: &std::path::Path, link: &std::path::Path) {
+fn create_symlink_file_or_skip(target: &Path, link: &Path) -> bool {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(target, link).expect("symlink");
+        true
     }
 
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_file(target, link).expect("symlink_file");
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                let allow_skip = std::env::var("SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP")
+                    .map(|value| value == "1")
+                    .unwrap_or(false);
+                if allow_skip {
+                    eprintln!("skipping symlink test (permission denied): {err}");
+                    return false;
+                }
+                panic!(
+                    "symlink test requires Windows symlink privileges (set Developer Mode or grant \
+                     SeCreateSymbolicLinkPrivilege). Set SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP=1 to \
+                     explicitly allow skipping: {err}"
+                );
+            }
+            Err(err) => panic!("symlink_file failed: {err}"),
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn create_symlink_dir_or_skip(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).expect("symlink");
+        true
+    }
+
+    #[cfg(windows)]
+    {
+        match std::os::windows::fs::symlink_dir(target, link) {
+            Ok(()) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                let allow_skip = std::env::var("SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP")
+                    .map(|value| value == "1")
+                    .unwrap_or(false);
+                if allow_skip {
+                    eprintln!("skipping symlink test (permission denied): {err}");
+                    return false;
+                }
+                panic!(
+                    "symlink test requires Windows symlink privileges (set Developer Mode or grant \
+                     SeCreateSymbolicLinkPrivilege). Set SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP=1 to \
+                     explicitly allow skipping: {err}"
+                );
+            }
+            Err(err) => panic!("symlink_dir failed: {err}"),
+        }
     }
 }
 
@@ -34,6 +83,22 @@ fn assert_not_permitted(err: safe_fs_tools::Error, expected_op: &str) {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+fn assert_secret_path_denied(err: safe_fs_tools::Error, expected_path: impl Into<PathBuf>) {
+    let expected_path = expected_path.into();
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(path) => {
+            assert_eq!(path, expected_path);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+fn ctx_with_deny_glob(root: &Path, mode: RootMode) -> Context {
+    let mut policy = test_policy(root, mode);
+    policy.secrets.deny_globs = vec!["deny/**".to_string()];
+    Context::new(policy).expect("ctx")
 }
 
 #[test]
@@ -109,27 +174,30 @@ fn stat_reports_file_metadata() {
 
 #[test]
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, ignore = "requires symlink privilege")]
-fn stat_rejects_symlink_targets() {
+fn stat_resolves_symlink_targets_with_requested_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("real.txt"), "hi").expect("write");
-    create_file_symlink(&dir.path().join("real.txt"), &dir.path().join("link.txt"));
+    if !create_symlink_file_or_skip(&dir.path().join("real.txt"), &dir.path().join("link.txt")) {
+        return;
+    }
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
     policy.permissions.stat = true;
     let ctx = Context::new(policy).expect("ctx");
 
-    let err = stat(
+    let resp = stat(
         &ctx,
         StatRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("link.txt"),
         },
     )
-    .expect_err("stat should reject symlink");
+    .expect("stat should resolve symlink to canonical target");
 
-    assert_eq!(err.code(), safe_fs_tools::Error::CODE_INVALID_PATH);
-    assert!(matches!(err, safe_fs_tools::Error::InvalidPath(_)));
+    assert_eq!(resp.path, PathBuf::from("real.txt"));
+    assert_eq!(resp.requested_path, Some(PathBuf::from("link.txt")));
+    assert!(matches!(resp.kind, safe_fs_tools::ops::StatKind::File));
+    assert_eq!(resp.size_bytes, 2);
 }
 
 #[test]
@@ -218,14 +286,15 @@ fn mkdir_rejects_existing_paths_when_creation_is_not_allowed() {
 
 #[test]
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, ignore = "requires symlink privilege")]
 fn mkdir_rejects_symlink_targets() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("real_dir")).expect("mkdir");
-    create_file_symlink(
+    if !create_symlink_dir_or_skip(
         &dir.path().join("real_dir"),
         &dir.path().join("link_to_dir"),
-    );
+    ) {
+        return;
+    }
 
     let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
     policy.permissions.mkdir = true;
@@ -359,11 +428,12 @@ fn write_file_rejects_directory_targets() {
 
 #[test]
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, ignore = "requires symlink privilege")]
 fn write_file_rejects_symlink_targets() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("real.txt"), "real").expect("write");
-    create_file_symlink(&dir.path().join("real.txt"), &dir.path().join("link.txt"));
+    if !create_symlink_file_or_skip(&dir.path().join("real.txt"), &dir.path().join("link.txt")) {
+        return;
+    }
 
     let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
     policy.permissions.write = true;
@@ -476,6 +546,125 @@ fn move_path_renames_entries() {
 }
 
 #[test]
+fn move_path_same_path_is_noop_when_source_exists() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("same.txt"), "hi").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let resp = move_path(
+        &ctx,
+        MovePathRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("same.txt"),
+            to: PathBuf::from("same.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect("same-path move should be a no-op");
+
+    assert_eq!(resp.from, PathBuf::from("same.txt"));
+    assert_eq!(resp.to, PathBuf::from("same.txt"));
+    assert_eq!(resp.requested_from, Some(PathBuf::from("same.txt")));
+    assert_eq!(resp.requested_to, Some(PathBuf::from("same.txt")));
+    assert!(!resp.moved);
+    assert_eq!(resp.kind, "file");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("same.txt")).expect("read original file"),
+        "hi"
+    );
+}
+
+#[test]
+fn move_path_same_path_missing_source_reports_not_found() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let err = move_path(
+        &ctx,
+        MovePathRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("missing.txt"),
+            to: PathBuf::from("missing.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("same-path move should still validate source");
+
+    match err {
+        safe_fs_tools::Error::IoPath { source, .. } => {
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn move_path_overwrite_replaces_existing_destination_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("from.txt"), "new").expect("write source");
+    std::fs::write(dir.path().join("to.txt"), "old").expect("write destination");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let resp = move_path(
+        &ctx,
+        MovePathRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("from.txt"),
+            to: PathBuf::from("to.txt"),
+            overwrite: true,
+            create_parents: false,
+        },
+    )
+    .expect("move with overwrite should succeed");
+
+    assert_eq!(resp.from, PathBuf::from("from.txt"));
+    assert_eq!(resp.to, PathBuf::from("to.txt"));
+    assert_eq!(resp.requested_from, Some(PathBuf::from("from.txt")));
+    assert_eq!(resp.requested_to, Some(PathBuf::from("to.txt")));
+    assert!(resp.moved);
+    assert_eq!(resp.kind, "file");
+    assert!(!dir.path().join("from.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("to.txt")).expect("read overwritten destination"),
+        "new"
+    );
+}
+
+#[test]
+fn move_path_create_parents_creates_missing_destination_parents() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("from.txt"), "hi").expect("write source");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let resp = move_path(
+        &ctx,
+        MovePathRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("from.txt"),
+            to: PathBuf::from("nested/dir/to.txt"),
+            overwrite: false,
+            create_parents: true,
+        },
+    )
+    .expect("move with create_parents should succeed");
+
+    assert_eq!(resp.from, PathBuf::from("from.txt"));
+    assert_eq!(resp.to, PathBuf::from("nested/dir/to.txt"));
+    assert_eq!(resp.requested_from, Some(PathBuf::from("from.txt")));
+    assert_eq!(resp.requested_to, Some(PathBuf::from("nested/dir/to.txt")));
+    assert!(resp.moved);
+    assert_eq!(resp.kind, "file");
+    assert!(!dir.path().join("from.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("nested").join("dir").join("to.txt"))
+            .expect("read moved file"),
+        "hi"
+    );
+}
+
+#[test]
 fn move_path_rejects_moving_directory_into_descendant() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("a").join("sub")).expect("mkdir");
@@ -555,6 +744,76 @@ fn copy_file_copies_regular_files() {
 }
 
 #[test]
+fn copy_file_overwrite_replaces_existing_destination_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("from.txt"), "new").expect("write source");
+    std::fs::write(dir.path().join("to.txt"), "old").expect("write destination");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let resp = copy_file(
+        &ctx,
+        CopyFileRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("from.txt"),
+            to: PathBuf::from("to.txt"),
+            overwrite: true,
+            create_parents: false,
+        },
+    )
+    .expect("copy with overwrite should succeed");
+
+    assert_eq!(resp.from, PathBuf::from("from.txt"));
+    assert_eq!(resp.to, PathBuf::from("to.txt"));
+    assert_eq!(resp.requested_from, Some(PathBuf::from("from.txt")));
+    assert_eq!(resp.requested_to, Some(PathBuf::from("to.txt")));
+    assert!(resp.copied);
+    assert_eq!(resp.bytes, 3);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("from.txt")).expect("read source file"),
+        "new"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("to.txt")).expect("read overwritten destination"),
+        "new"
+    );
+}
+
+#[test]
+fn copy_file_create_parents_creates_missing_destination_parents() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("from.txt"), "hi").expect("write source");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let resp = copy_file(
+        &ctx,
+        CopyFileRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("from.txt"),
+            to: PathBuf::from("nested/dir/to.txt"),
+            overwrite: false,
+            create_parents: true,
+        },
+    )
+    .expect("copy with create_parents should succeed");
+
+    assert_eq!(resp.from, PathBuf::from("from.txt"));
+    assert_eq!(resp.to, PathBuf::from("nested/dir/to.txt"));
+    assert_eq!(resp.requested_from, Some(PathBuf::from("from.txt")));
+    assert_eq!(resp.requested_to, Some(PathBuf::from("nested/dir/to.txt")));
+    assert!(resp.copied);
+    assert_eq!(resp.bytes, 2);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("from.txt")).expect("read source file"),
+        "hi"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("nested").join("dir").join("to.txt"))
+            .expect("read copied file"),
+        "hi"
+    );
+}
+
+#[test]
 fn copy_file_same_path_still_validates_source_exists() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
@@ -611,11 +870,12 @@ fn copy_file_same_path_is_a_noop_when_source_exists() {
 
 #[test]
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, ignore = "requires symlink privilege")]
 fn copy_file_rejects_symlink_sources() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("real.txt"), "hi").expect("write");
-    create_file_symlink(&dir.path().join("real.txt"), &dir.path().join("link.txt"));
+    if !create_symlink_file_or_skip(&dir.path().join("real.txt"), &dir.path().join("link.txt")) {
+        return;
+    }
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let err = copy_file(
@@ -658,6 +918,271 @@ fn copy_file_rejects_readonly_root() {
     assert_not_permitted(err, "copy_file");
     assert!(dir.path().join("a.txt").exists());
     assert!(!dir.path().join("b.txt").exists());
+}
+
+#[test]
+fn list_dir_denies_secret_requested_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny").join("sub")).expect("mkdir");
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadOnly);
+    let err = list_dir(
+        &ctx,
+        ListDirRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("deny/sub"),
+            max_entries: None,
+        },
+    )
+    .expect_err("list_dir should reject denied requested path");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("sub"));
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn list_dir_denies_after_canonicalization_through_symlink() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny").join("sub")).expect("mkdir");
+    if !create_symlink_dir_or_skip(&dir.path().join("deny"), &dir.path().join("alias")) {
+        return;
+    }
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadOnly);
+    let err = list_dir(
+        &ctx,
+        ListDirRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("alias/sub"),
+            max_entries: None,
+        },
+    )
+    .expect_err("list_dir should reject denied canonical path");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("sub"));
+}
+
+#[test]
+fn stat_denies_secret_requested_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+    std::fs::write(dir.path().join("deny").join("secret.txt"), "secret").expect("write");
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadOnly);
+    let err = stat(
+        &ctx,
+        StatRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("deny/secret.txt"),
+        },
+    )
+    .expect_err("stat should reject denied requested path");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("secret.txt"));
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn stat_denies_after_canonicalization_through_symlink() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+    std::fs::write(dir.path().join("deny").join("secret.txt"), "secret").expect("write");
+    if !create_symlink_file_or_skip(
+        &dir.path().join("deny").join("secret.txt"),
+        &dir.path().join("alias.txt"),
+    ) {
+        return;
+    }
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadOnly);
+    let err = stat(
+        &ctx,
+        StatRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("alias.txt"),
+        },
+    )
+    .expect_err("stat should reject denied canonical path");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("secret.txt"));
+}
+
+#[test]
+fn mkdir_denies_secret_requested_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let err = mkdir(
+        &ctx,
+        MkdirRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("deny/new_dir"),
+            create_parents: false,
+            ignore_existing: false,
+        },
+    )
+    .expect_err("mkdir should reject denied requested path");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("new_dir"));
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn mkdir_denies_after_canonicalization_through_symlink_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+    if !create_symlink_dir_or_skip(&dir.path().join("deny"), &dir.path().join("alias_parent")) {
+        return;
+    }
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let err = mkdir(
+        &ctx,
+        MkdirRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("alias_parent/new_dir"),
+            create_parents: false,
+            ignore_existing: false,
+        },
+    )
+    .expect_err("mkdir should reject denied canonical path");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("new_dir"));
+}
+
+#[test]
+fn write_file_denies_secret_requested_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let err = write_file(
+        &ctx,
+        WriteFileRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("deny/new.txt"),
+            content: "x".to_string(),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("write_file should reject denied requested path");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("new.txt"));
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn write_file_denies_after_canonicalization_through_symlink_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+    if !create_symlink_dir_or_skip(&dir.path().join("deny"), &dir.path().join("alias_parent")) {
+        return;
+    }
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let err = write_file(
+        &ctx,
+        WriteFileRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("alias_parent/new.txt"),
+            content: "x".to_string(),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("write_file should reject denied canonical path");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("new.txt"));
+}
+
+#[test]
+fn move_path_denies_secret_requested_destination_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+    std::fs::write(dir.path().join("from.txt"), "source").expect("write");
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let err = move_path(
+        &ctx,
+        MovePathRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("from.txt"),
+            to: PathBuf::from("deny/out.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("move_path should reject denied requested destination");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("out.txt"));
+    assert!(dir.path().join("from.txt").exists());
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn move_path_denies_after_canonicalization_through_symlink_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+    std::fs::write(dir.path().join("from.txt"), "source").expect("write");
+    if !create_symlink_dir_or_skip(&dir.path().join("deny"), &dir.path().join("alias_parent")) {
+        return;
+    }
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let err = move_path(
+        &ctx,
+        MovePathRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("from.txt"),
+            to: PathBuf::from("alias_parent/out.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("move_path should reject denied canonical destination");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("out.txt"));
+    assert!(dir.path().join("from.txt").exists());
+}
+
+#[test]
+fn copy_file_denies_secret_requested_destination_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+    std::fs::write(dir.path().join("from.txt"), "source").expect("write");
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let err = copy_file(
+        &ctx,
+        CopyFileRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("from.txt"),
+            to: PathBuf::from("deny/out.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("copy_file should reject denied requested destination");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("out.txt"));
+    assert!(dir.path().join("from.txt").exists());
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn copy_file_denies_after_canonicalization_through_symlink_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
+    std::fs::write(dir.path().join("from.txt"), "source").expect("write");
+    if !create_symlink_dir_or_skip(&dir.path().join("deny"), &dir.path().join("alias_parent")) {
+        return;
+    }
+
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let err = copy_file(
+        &ctx,
+        CopyFileRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("from.txt"),
+            to: PathBuf::from("alias_parent/out.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect_err("copy_file should reject denied canonical destination");
+    assert_secret_path_denied(err, PathBuf::from("deny").join("out.txt"));
+    assert!(dir.path().join("from.txt").exists());
 }
 
 #[test]

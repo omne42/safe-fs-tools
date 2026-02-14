@@ -17,7 +17,15 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 #[cfg(windows)]
 fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
-    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+    let (Some(a_volume), Some(a_index), Some(b_volume), Some(b_index)) = (
+        a.volume_serial_number(),
+        a.file_index(),
+        b.volume_serial_number(),
+        b.file_index(),
+    ) else {
+        return false;
+    };
+    a_volume == b_volume && a_index == b_index
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -104,6 +112,40 @@ fn cleanup_created_target_dir(
     })
 }
 
+fn handle_existing_target_dir(
+    canonical_parent: &Path,
+    relative_parent: &Path,
+    expected_parent_meta: &fs::Metadata,
+    root_id: &str,
+    canonical_root: &Path,
+    target: &Path,
+    relative: &Path,
+    requested_path: &Path,
+    existing_meta: &fs::Metadata,
+    ignore_existing: bool,
+) -> Result<MkdirResponse> {
+    if existing_meta.file_type().is_symlink() {
+        return Err(Error::InvalidPath(
+            "refusing to create directory through symlink".to_string(),
+        ));
+    }
+    if existing_meta.is_dir() {
+        ensure_parent_dir_unchanged(canonical_parent, relative_parent, expected_parent_meta)?;
+        ensure_target_dir_within_root(root_id, canonical_root, target, relative, requested_path)?;
+        if ignore_existing {
+            return Ok(MkdirResponse {
+                path: relative.to_path_buf(),
+                requested_path: Some(requested_path.to_path_buf()),
+                created: false,
+            });
+        }
+        return Err(Error::InvalidPath("directory exists".to_string()));
+    }
+    Err(Error::InvalidPath(
+        "path exists and is not a directory".to_string(),
+    ))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MkdirRequest {
     pub root_id: String,
@@ -183,34 +225,21 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
         });
     }
 
+    ensure_parent_dir_unchanged(&canonical_parent, &relative_parent, &canonical_parent_meta)?;
+
     match fs::symlink_metadata(&target) {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() {
-                return Err(Error::InvalidPath(
-                    "refusing to create directory through symlink".to_string(),
-                ));
-            }
-            if meta.is_dir() {
-                if request.ignore_existing {
-                    ensure_target_dir_within_root(
-                        &request.root_id,
-                        &canonical_root,
-                        &target,
-                        &relative,
-                        &requested_path,
-                    )?;
-                    return Ok(MkdirResponse {
-                        path: relative,
-                        requested_path: Some(requested_path),
-                        created: false,
-                    });
-                }
-                return Err(Error::InvalidPath("directory exists".to_string()));
-            }
-            Err(Error::InvalidPath(
-                "path exists and is not a directory".to_string(),
-            ))
-        }
+        Ok(meta) => handle_existing_target_dir(
+            &canonical_parent,
+            &relative_parent,
+            &canonical_parent_meta,
+            &request.root_id,
+            &canonical_root,
+            &target,
+            &relative,
+            &requested_path,
+            &meta,
+            request.ignore_existing,
+        ),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             ensure_parent_dir_unchanged(
                 &canonical_parent,
@@ -219,33 +248,26 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
             )?;
             if let Err(err) = fs::create_dir(&target) {
                 if err.kind() == std::io::ErrorKind::AlreadyExists {
-                    let existing = fs::symlink_metadata(&target)
-                        .map_err(|meta_err| Error::io_path("metadata", &relative, meta_err))?;
-                    if existing.file_type().is_symlink() {
-                        return Err(Error::InvalidPath(
-                            "refusing to create directory through symlink".to_string(),
-                        ));
-                    }
-                    if existing.is_dir() && request.ignore_existing {
-                        ensure_target_dir_within_root(
-                            &request.root_id,
-                            &canonical_root,
-                            &target,
-                            &relative,
-                            &requested_path,
-                        )?;
-                        return Ok(MkdirResponse {
-                            path: relative,
-                            requested_path: Some(requested_path),
-                            created: false,
-                        });
-                    }
-                    if existing.is_dir() {
-                        return Err(Error::InvalidPath("directory exists".to_string()));
-                    }
-                    return Err(Error::InvalidPath(
-                        "path exists and is not a directory".to_string(),
-                    ));
+                    ensure_parent_dir_unchanged(
+                        &canonical_parent,
+                        &relative_parent,
+                        &canonical_parent_meta,
+                    )?;
+                    let existing = fs::symlink_metadata(&target).map_err(|meta_err| {
+                        Error::io_path("symlink_metadata", &relative, meta_err)
+                    })?;
+                    return handle_existing_target_dir(
+                        &canonical_parent,
+                        &relative_parent,
+                        &canonical_parent_meta,
+                        &request.root_id,
+                        &canonical_root,
+                        &target,
+                        &relative,
+                        &requested_path,
+                        &existing,
+                        request.ignore_existing,
+                    );
                 }
                 return Err(Error::io_path("create_dir", &relative, err));
             }
@@ -288,6 +310,6 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 created: true,
             })
         }
-        Err(err) => Err(Error::io_path("metadata", &relative, err)),
+        Err(err) => Err(Error::io_path("symlink_metadata", &relative, err)),
     }
 }

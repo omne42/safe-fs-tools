@@ -2,14 +2,50 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::test_policy;
+use common::{permissive_test_policy, test_policy};
+#[cfg(unix)]
+use safe_fs_tools::ops::DeleteKind;
 use safe_fs_tools::ops::{Context, DeleteRequest, delete};
 use safe_fs_tools::policy::RootMode;
+
+#[cfg(unix)]
+struct UnixThreadGuard {
+    keep_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    wake_tx: std::sync::mpsc::Sender<()>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl UnixThreadGuard {
+    fn new(
+        keep_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        wake_tx: std::sync::mpsc::Sender<()>,
+        handle: std::thread::JoinHandle<()>,
+    ) -> Self {
+        Self {
+            keep_running,
+            wake_tx,
+            handle: Some(handle),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnixThreadGuard {
+    fn drop(&mut self) {
+        self.keep_running
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let _ = self.wake_tx.send(());
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
 
 #[test]
 fn delete_absolute_paths_report_relative_requested_path_when_parent_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.paths.allow_absolute = true;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -38,7 +74,7 @@ fn delete_absolute_paths_report_relative_requested_path_when_parent_is_missing()
 fn delete_absolute_paths_report_relative_requested_path_when_leaf_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("parent")).expect("mkdir");
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.paths.allow_absolute = true;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -74,7 +110,7 @@ fn delete_unlinks_symlink_without_deleting_target() {
     std::fs::write(&target, "hello\n").expect("write");
     symlink(&target, &link).expect("symlink");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let resp = delete(
         &ctx,
         DeleteRequest {
@@ -105,7 +141,7 @@ fn delete_unlinks_symlink_even_if_target_is_outside_root() {
     let link = dir.path().join("outside-link.txt");
     symlink(outside.path(), &link).expect("symlink");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let resp = delete(
         &ctx,
         DeleteRequest {
@@ -135,7 +171,7 @@ fn delete_denies_requested_path_before_resolving_symlink_dirs() {
     std::fs::write(dir.path().join("allowed").join("file.txt"), "hello\n").expect("write");
     symlink(dir.path().join("allowed"), dir.path().join("deny")).expect("symlink dir");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.secrets.deny_globs = vec!["deny/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -174,7 +210,7 @@ fn delete_denies_after_canonicalization_when_symlink_parent_points_to_denied_pat
     std::fs::write(denied_dir.join("file.txt"), "secret\n").expect("write");
     symlink(&denied_dir, dir.path().join("allowed_link")).expect("symlink dir");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
     policy.secrets.deny_globs = vec!["denied_dir/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -207,7 +243,9 @@ fn delete_is_not_allowed_on_readonly_root() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("file.txt");
     std::fs::write(&file, "keep\n").expect("write");
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.permissions.delete = true;
+    let ctx = Context::new(policy).expect("ctx");
 
     let err = delete(
         &ctx,
@@ -221,7 +259,10 @@ fn delete_is_not_allowed_on_readonly_root() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::NotPermitted(_) => {}
+        safe_fs_tools::Error::NotPermitted(message) => {
+            assert!(message.contains("read_only"));
+            assert!(message.contains("root"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 
@@ -236,7 +277,7 @@ fn delete_rejects_dot_and_empty_paths() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sentinel = dir.path().join("sentinel.txt");
     std::fs::write(&sentinel, "keep\n").expect("write sentinel");
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let err = delete(
         &ctx,
@@ -291,7 +332,7 @@ fn delete_rejects_directories_without_recursive() {
     let subdir = dir.path().join("subdir");
     std::fs::create_dir_all(&subdir).expect("mkdir");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let err = delete(
         &ctx,
@@ -324,7 +365,9 @@ fn delete_revalidate_parent_detects_path_change() {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     };
+    use std::time::{Duration, Instant};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let dir_a = dir.path().join("dir_a");
@@ -335,26 +378,44 @@ fn delete_revalidate_parent_detects_path_change() {
     let pivot = dir.path().join("pivot");
     symlink(&dir_a, &pivot).expect("symlink pivot");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let keep_flapping = Arc::new(AtomicBool::new(true));
     let keep_flapping_bg = Arc::clone(&keep_flapping);
+    let (burst_tx, burst_rx) = mpsc::channel::<()>();
+    let (burst_started_tx, burst_started_rx) = mpsc::channel::<()>();
+    let (burst_done_tx, burst_done_rx) = mpsc::channel::<()>();
     let pivot_bg = pivot.clone();
     let dir_a_bg = dir_a.clone();
     let dir_b_bg = dir_b.clone();
     let toggler = std::thread::spawn(move || {
         while keep_flapping_bg.load(Ordering::Relaxed) {
-            let _ = std::fs::remove_file(&pivot_bg);
-            let _ = symlink(&dir_b_bg, &pivot_bg);
-            std::thread::yield_now();
-            let _ = std::fs::remove_file(&pivot_bg);
-            let _ = symlink(&dir_a_bg, &pivot_bg);
-            std::thread::yield_now();
+            if burst_rx.recv().is_err() {
+                break;
+            }
+            if !keep_flapping_bg.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let _ = burst_started_tx.send(());
+            for _ in 0..2_048 {
+                let _ = std::fs::remove_file(&pivot_bg);
+                let _ = symlink(&dir_b_bg, &pivot_bg);
+                std::thread::yield_now();
+                let _ = std::fs::remove_file(&pivot_bg);
+                let _ = symlink(&dir_a_bg, &pivot_bg);
+                std::thread::yield_now();
+            }
+            let _ = burst_done_tx.send(());
         }
     });
+    let _toggler_guard = UnixThreadGuard::new(keep_flapping, burst_tx.clone(), toggler);
 
     let mut observed_changed = false;
-    for _ in 0..4_000 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        burst_tx.send(()).expect("start toggle burst");
+        burst_started_rx.recv().expect("wait toggler start");
         let err = delete(
             &ctx,
             DeleteRequest {
@@ -365,6 +426,7 @@ fn delete_revalidate_parent_detects_path_change() {
             },
         )
         .expect_err("should reject");
+        burst_done_rx.recv().expect("wait toggler done");
 
         match err {
             safe_fs_tools::Error::InvalidPath(message)
@@ -380,23 +442,22 @@ fn delete_revalidate_parent_detects_path_change() {
         }
     }
 
-    keep_flapping.store(false, Ordering::Relaxed);
-    toggler.join().expect("join toggler");
-
     assert!(
         observed_changed,
-        "expected to observe revalidation failure for path change"
+        "expected to observe revalidation failure for path change within timeout"
     );
 }
 
 #[test]
 #[cfg(unix)]
-fn delete_revalidate_parent_returns_missing_when_ignore_missing_is_true() {
+fn delete_ignore_missing_returns_missing_when_symlink_parent_is_temporarily_absent() {
     use std::os::unix::fs::symlink;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     };
+    use std::time::{Duration, Instant};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let actual_parent = dir.path().join("actual_parent");
@@ -405,23 +466,42 @@ fn delete_revalidate_parent_returns_missing_when_ignore_missing_is_true() {
     let pivot = dir.path().join("pivot");
     symlink(&actual_parent, &pivot).expect("symlink pivot");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let keep_flapping = Arc::new(AtomicBool::new(true));
     let keep_flapping_bg = Arc::clone(&keep_flapping);
+    let (window_tx, window_rx) = mpsc::channel::<()>();
+    let (pivot_missing_tx, pivot_missing_rx) = mpsc::channel::<()>();
+    let (window_done_tx, window_done_rx) = mpsc::channel::<()>();
     let pivot_bg = pivot.clone();
     let actual_parent_bg = actual_parent.clone();
     let toggler = std::thread::spawn(move || {
         while keep_flapping_bg.load(Ordering::Relaxed) {
+            if window_rx.recv().is_err() {
+                break;
+            }
+            if !keep_flapping_bg.load(Ordering::Relaxed) {
+                break;
+            }
             let _ = std::fs::remove_file(&pivot_bg);
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            let _ = pivot_missing_tx.send(());
+            for _ in 0..8_192 {
+                if !keep_flapping_bg.load(Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::yield_now();
+            }
             let _ = symlink(&actual_parent_bg, &pivot_bg);
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            let _ = window_done_tx.send(());
         }
     });
+    let _toggler_guard = UnixThreadGuard::new(keep_flapping, window_tx.clone(), toggler);
 
     let mut observed_missing = None;
-    for _ in 0..2_000 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        window_tx.send(()).expect("start missing window");
+        pivot_missing_rx.recv().expect("wait for missing parent");
         match delete(
             &ctx,
             DeleteRequest {
@@ -431,7 +511,7 @@ fn delete_revalidate_parent_returns_missing_when_ignore_missing_is_true() {
                 ignore_missing: true,
             },
         ) {
-            Ok(resp) if resp.kind == "missing" => {
+            Ok(resp) if resp.kind == DeleteKind::Missing => {
                 observed_missing = Some(resp);
                 break;
             }
@@ -441,16 +521,17 @@ fn delete_revalidate_parent_returns_missing_when_ignore_missing_is_true() {
                 if source.kind() == std::io::ErrorKind::NotFound => {}
             other => panic!("unexpected result: {other:?}"),
         }
+        window_done_rx.recv().expect("wait window done");
     }
-
-    keep_flapping.store(false, Ordering::Relaxed);
-    toggler.join().expect("join toggler");
+    if observed_missing.is_some() {
+        window_done_rx.recv().expect("wait final window done");
+    }
 
     let resp = observed_missing.expect("expected ignore_missing response when parent disappears");
     assert_eq!(resp.path, PathBuf::from("pivot/subdir"));
     assert_eq!(resp.requested_path, Some(PathBuf::from("pivot/subdir")));
     assert!(!resp.deleted);
-    assert_eq!(resp.kind, "missing");
+    assert_eq!(resp.kind, DeleteKind::Missing);
     assert!(
         actual_parent.join("subdir").is_dir(),
         "missing response must not remove existing directories"
@@ -460,9 +541,9 @@ fn delete_revalidate_parent_returns_missing_when_ignore_missing_is_true() {
 #[test]
 fn delete_ignore_missing_returns_missing_when_parent_directory_is_absent() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
-    let result = delete(
+    let resp = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
@@ -470,23 +551,14 @@ fn delete_ignore_missing_returns_missing_when_parent_directory_is_absent() {
             recursive: false,
             ignore_missing: true,
         },
-    );
+    )
+    .expect("delete");
 
-    match result {
-        Ok(resp) => {
-            assert_eq!(resp.path, PathBuf::from("missing").join("file.txt"));
-            assert_eq!(
-                resp.requested_path,
-                Some(PathBuf::from("missing").join("file.txt"))
-            );
-            assert!(!resp.deleted);
-            assert_eq!(resp.kind, "missing");
-        }
-        Err(safe_fs_tools::Error::IoPath { path, source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound =>
-        {
-            assert_eq!(path, PathBuf::from("missing"));
-        }
-        other => panic!("unexpected result: {other:?}"),
-    }
+    assert_eq!(resp.path, PathBuf::from("missing").join("file.txt"));
+    assert_eq!(
+        resp.requested_path,
+        Some(PathBuf::from("missing").join("file.txt"))
+    );
+    assert!(!resp.deleted);
+    assert_eq!(resp.kind, "missing");
 }

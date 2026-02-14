@@ -24,6 +24,7 @@ impl Context {
         let redactor = SecretRedactor::from_rules(&policy.secrets)?;
 
         let mut roots = HashMap::<String, RootRuntime>::new();
+        let mut seen_canonical_roots = Vec::<(String, PathBuf)>::new();
         for root in &policy.roots {
             let canonical = root.path.canonicalize().map_err(|err| {
                 Error::InvalidPolicy(format!(
@@ -46,20 +47,42 @@ impl Context {
                     canonical.display()
                 )));
             }
+
+            for (existing_id, existing_canonical) in &seen_canonical_roots {
+                if canonical_paths_equal(&canonical, existing_canonical) {
+                    return Err(Error::InvalidPolicy(format!(
+                        "root {} ({}) resolves to the same canonical directory as root {} ({})",
+                        root.id,
+                        canonical.display(),
+                        existing_id,
+                        existing_canonical.display()
+                    )));
+                }
+
+                if canonical_paths_overlap(&canonical, existing_canonical) {
+                    return Err(Error::InvalidPolicy(format!(
+                        "root {} ({}) overlaps with root {} ({})",
+                        root.id,
+                        canonical.display(),
+                        existing_id,
+                        existing_canonical.display()
+                    )));
+                }
+            }
+
             match roots.entry(root.id.clone()) {
                 Entry::Vacant(slot) => {
                     slot.insert(RootRuntime {
-                        canonical_path: canonical,
+                        canonical_path: canonical.clone(),
                         mode: root.mode,
                     });
+                    seen_canonical_roots.push((root.id.clone(), canonical));
                 }
                 Entry::Occupied(_) => {
-                    // `SandboxPolicy::validate` is the single source of truth for duplicate ids.
-                    debug_assert!(
-                        false,
-                        "duplicate root.id was not rejected by policy.validate: {:?}",
+                    return Err(Error::InvalidPolicy(format!(
+                        "duplicate root.id: {:?}",
                         root.id
-                    );
+                    )));
                 }
             }
         }
@@ -171,4 +194,14 @@ impl Context {
         }
         Ok(())
     }
+}
+
+fn canonical_paths_equal(a: &Path, b: &Path) -> bool {
+    crate::path_utils::starts_with_case_insensitive(a, b)
+        && crate::path_utils::starts_with_case_insensitive(b, a)
+}
+
+fn canonical_paths_overlap(a: &Path, b: &Path) -> bool {
+    crate::path_utils::starts_with_case_insensitive(a, b)
+        || crate::path_utils::starts_with_case_insensitive(b, a)
 }

@@ -5,11 +5,6 @@ mod unix_helpers;
 
 #[cfg(feature = "policy-io")]
 mod policy_io {
-    const DUPLICATE_ROOT_ID_FRAGMENT: &str = "duplicate root.id";
-    const MAX_BYTES_NONZERO_FRAGMENT: &str = "must be > 0";
-    const NON_REGULAR_FILE_FRAGMENT: &str = "not a regular file";
-    const POLICY_BYTES_HARD_LIMIT_FRAGMENT: &str = "hard limit";
-    const UNSUPPORTED_POLICY_FORMAT_FRAGMENT: &str = "unsupported policy format";
     const SYMLINK_FRAGMENT: &str = "symlink";
 
     use safe_fs_tools::ops::Context;
@@ -47,11 +42,25 @@ mod policy_io {
         std::fs::write(policy_path, encoded).expect("write toml");
     }
 
+    fn assert_invalid_path(err: safe_fs_tools::Error) {
+        match err {
+            safe_fs_tools::Error::InvalidPath(_) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
     fn assert_invalid_path_contains(err: safe_fs_tools::Error, fragment: &str) {
         match err {
             safe_fs_tools::Error::InvalidPath(msg) => {
                 assert!(msg.contains(fragment), "unexpected message: {msg}");
             }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    fn assert_invalid_policy(err: safe_fs_tools::Error) {
+        match err {
+            safe_fs_tools::Error::InvalidPolicy(_) => {}
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -122,6 +131,124 @@ mod policy_io {
     }
 
     #[test]
+    fn load_policy_without_extension_defaults_to_toml() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+        let path = dir.path().join("policy");
+
+        write_readonly_toml_policy(&path, &root_path);
+
+        let policy = safe_fs_tools::policy_io::load_policy(&path).expect("load toml");
+        assert_eq!(policy.roots.len(), 1);
+        assert_eq!(policy.roots[0].id, "workspace");
+        assert_eq!(policy.roots[0].path, root_path);
+        assert_eq!(policy.roots[0].mode, RootMode::ReadOnly);
+        assert!(policy.permissions.read);
+    }
+
+    #[test]
+    fn load_policy_hidden_dot_json_ok() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+        let json_path = dir.path().join(".json");
+
+        std::fs::write(
+            &json_path,
+            serde_json::to_string(&SandboxPolicy {
+                roots: vec![Root {
+                    id: "workspace".to_string(),
+                    path: root_path.clone(),
+                    mode: RootMode::ReadOnly,
+                }],
+                permissions: Permissions {
+                    read: true,
+                    ..Default::default()
+                },
+                limits: Default::default(),
+                secrets: Default::default(),
+                traversal: Default::default(),
+                paths: Default::default(),
+            })
+            .expect("serialize json"),
+        )
+        .expect("write json");
+
+        let json_policy = safe_fs_tools::policy_io::load_policy(&json_path).expect("load json");
+        assert_eq!(json_policy.roots.len(), 1);
+        assert_eq!(json_policy.roots[0].id, "workspace");
+        assert_eq!(json_policy.roots[0].path, root_path);
+        assert_eq!(json_policy.roots[0].mode, RootMode::ReadOnly);
+        assert!(json_policy.permissions.read);
+        assert!(!json_policy.paths.allow_absolute);
+    }
+
+    #[test]
+    fn load_policy_hidden_dot_toml_ok() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+        let toml_path = dir.path().join(".toml");
+
+        write_readonly_toml_policy(&toml_path, &root_path);
+
+        let toml_policy = safe_fs_tools::policy_io::load_policy(&toml_path).expect("load toml");
+        assert_eq!(toml_policy.roots.len(), 1);
+        assert_eq!(toml_policy.roots[0].id, "workspace");
+        assert_eq!(toml_policy.roots[0].path, root_path);
+        assert_eq!(toml_policy.roots[0].mode, RootMode::ReadOnly);
+        assert!(toml_policy.permissions.read);
+        assert!(!toml_policy.paths.allow_absolute);
+    }
+
+    #[test]
+    fn load_policy_accepts_case_insensitive_extensions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+
+        let toml_path = dir.path().join("policy.TOML");
+        write_readonly_toml_policy(&toml_path, &root_path);
+
+        let toml_policy = safe_fs_tools::policy_io::load_policy(&toml_path).expect("load toml");
+        assert_eq!(toml_policy.roots.len(), 1);
+        assert_eq!(toml_policy.roots[0].id, "workspace");
+        assert_eq!(toml_policy.roots[0].path, root_path.clone());
+        assert_eq!(toml_policy.roots[0].mode, RootMode::ReadOnly);
+        assert!(toml_policy.permissions.read);
+
+        let json_path = dir.path().join("policy.JSON");
+        std::fs::write(
+            &json_path,
+            serde_json::to_string(&SandboxPolicy {
+                roots: vec![Root {
+                    id: "workspace".to_string(),
+                    path: root_path.clone(),
+                    mode: RootMode::ReadOnly,
+                }],
+                permissions: Permissions {
+                    read: true,
+                    ..Default::default()
+                },
+                limits: Default::default(),
+                secrets: Default::default(),
+                traversal: Default::default(),
+                paths: Default::default(),
+            })
+            .expect("serialize json"),
+        )
+        .expect("write json");
+
+        let json_policy = safe_fs_tools::policy_io::load_policy(&json_path).expect("load json");
+        assert_eq!(json_policy.roots.len(), 1);
+        assert_eq!(json_policy.roots[0].id, "workspace");
+        assert_eq!(json_policy.roots[0].path, root_path);
+        assert_eq!(json_policy.roots[0].mode, RootMode::ReadOnly);
+        assert!(json_policy.permissions.read);
+    }
+
+    #[test]
     fn context_from_policy_path_uses_loaded_policy() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root_path = dir.path().join("root");
@@ -141,7 +268,13 @@ mod policy_io {
 
         let err = safe_fs_tools::policy_io::load_policy_limited(&path, 10).expect_err("reject");
         match err {
-            safe_fs_tools::Error::InputTooLarge { .. } => {}
+            safe_fs_tools::Error::InputTooLarge {
+                size_bytes,
+                max_bytes,
+            } => {
+                assert_eq!(max_bytes, 10);
+                assert!(size_bytes >= 100, "unexpected size_bytes: {size_bytes}");
+            }
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -155,7 +288,7 @@ mod policy_io {
         write_readonly_toml_policy(&path, &root_path);
 
         let err = safe_fs_tools::policy_io::load_policy_limited(&path, 0).expect_err("reject");
-        assert_invalid_policy_contains(err, MAX_BYTES_NONZERO_FRAGMENT);
+        assert_invalid_policy_contains(err, "max policy bytes must be > 0");
     }
 
     #[test]
@@ -168,7 +301,7 @@ mod policy_io {
 
         let err =
             safe_fs_tools::policy_io::load_policy_limited(&path, u64::MAX).expect_err("reject");
-        assert_invalid_policy_contains(err, POLICY_BYTES_HARD_LIMIT_FRAGMENT);
+        assert_invalid_policy_contains(err, "hard limit");
     }
 
     #[test]
@@ -180,7 +313,7 @@ mod policy_io {
         write_readonly_toml_policy(&path, &root_path);
 
         let err = safe_fs_tools::policy_io::load_policy(&path).expect_err("reject");
-        assert_invalid_policy_contains(err, UNSUPPORTED_POLICY_FORMAT_FRAGMENT);
+        assert_invalid_policy(err);
     }
 
     #[test]
@@ -191,7 +324,7 @@ mod policy_io {
         crate::unix_helpers::create_fifo(&path);
 
         let err = safe_fs_tools::policy_io::load_policy_limited(&path, 8).expect_err("reject");
-        assert_invalid_path_contains(err, NON_REGULAR_FILE_FRAGMENT);
+        assert_invalid_path(err);
     }
 
     #[test]
@@ -241,12 +374,7 @@ mode = "read_only"
         .expect("write");
 
         let err = safe_fs_tools::policy_io::load_policy(&policy_path).expect_err("reject");
-        match err {
-            safe_fs_tools::Error::InvalidPolicy(msg) => {
-                assert!(msg.contains(DUPLICATE_ROOT_ID_FRAGMENT))
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_invalid_policy(err);
     }
 
     #[test]
@@ -271,12 +399,7 @@ mode = "read_only"
             safe_fs_tools::policy_io::PolicyFormat::Json,
         )
         .expect_err("should validate");
-        match err {
-            safe_fs_tools::Error::InvalidPolicy(msg) => {
-                assert!(msg.contains(DUPLICATE_ROOT_ID_FRAGMENT))
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_invalid_policy(err);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use std::io::{BufRead, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -46,10 +46,11 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
         ));
     }
 
+    let mode = parse_read_mode(request.start_line, request.end_line)?;
+
     let (path, relative, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
-    let mode = parse_read_mode(request.start_line, request.end_line)?;
     let (bytes_read, content) = match mode {
         ReadMode::Full => read_full(&path, &relative, ctx)?,
         ReadMode::LineRange {
@@ -94,7 +95,7 @@ fn parse_read_mode(start_line: Option<u64>, end_line: Option<u64>) -> Result<Rea
 
 fn read_full(path: &std::path::Path, relative: &PathBuf, ctx: &Context) -> Result<(u64, String)> {
     let bytes = super::io::read_bytes_limited(path, relative, ctx.policy.limits.max_read_bytes)?;
-    let bytes_read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let bytes_read = usize_to_u64(bytes.len(), relative, "file size")?;
     let content =
         String::from_utf8(bytes).map_err(|err| Error::invalid_utf8(relative.clone(), err))?;
     Ok((bytes_read, content))
@@ -164,4 +165,13 @@ fn read_line_range(
 
 fn invalid_line_range(message: String) -> Error {
     Error::InvalidPath(format!("invalid argument: {message}"))
+}
+
+fn usize_to_u64(value: usize, path: &Path, context: &str) -> Result<u64> {
+    u64::try_from(value).map_err(|_| {
+        Error::InvalidPath(format!(
+            "{}: {context} exceeds supported size",
+            path.display()
+        ))
+    })
 }

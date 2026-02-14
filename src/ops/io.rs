@@ -169,14 +169,14 @@ pub(super) fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -
 pub(super) fn read_string_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<String> {
     let (file, meta) = open_regular_file_for_read(path, relative)?;
     let bytes = read_open_file_limited(file, relative, max_bytes, meta.len())?;
-    decode_utf8(relative, &bytes)
+    decode_utf8(relative, bytes)
 }
 
 pub(super) fn read_string_limited_with_identity(
     path: &Path,
     relative: &Path,
     max_bytes: u64,
-) -> Result<(String, Option<FileIdentity>)> {
+) -> Result<(String, FileIdentity)> {
     let (file, meta) = open_regular_file_for_read(path, relative)?;
     let identity = FileIdentity::from_metadata(&meta).ok_or_else(|| {
         Error::InvalidPath(format!(
@@ -185,13 +185,11 @@ pub(super) fn read_string_limited_with_identity(
         ))
     })?;
     let bytes = read_open_file_limited(file, relative, max_bytes, meta.len())?;
-    decode_utf8(relative, &bytes).map(|text| (text, Some(identity)))
+    decode_utf8(relative, bytes).map(|text| (text, identity))
 }
 
-fn decode_utf8(relative: &Path, bytes: &[u8]) -> Result<String> {
-    std::str::from_utf8(bytes)
-        .map_err(|err| Error::invalid_utf8(relative.to_path_buf(), err))
-        .map(str::to_string)
+fn decode_utf8(relative: &Path, bytes: Vec<u8>) -> Result<String> {
+    String::from_utf8(bytes).map_err(|err| Error::invalid_utf8(relative.to_path_buf(), err))
 }
 
 fn file_too_large(relative: &Path, size_bytes: u64, max_bytes: u64) -> Error {
@@ -232,14 +230,8 @@ pub(super) fn write_bytes_atomic_checked(
     path: &Path,
     relative: &Path,
     bytes: &[u8],
-    expected_identity: Option<FileIdentity>,
+    expected_identity: FileIdentity,
 ) -> Result<()> {
-    let expected_identity = expected_identity.ok_or_else(|| {
-        Error::InvalidPath(format!(
-            "cannot verify identity for path {} on this platform",
-            relative.display()
-        ))
-    })?;
     write_bytes_atomic_impl(path, relative, bytes, Some(expected_identity), true)
 }
 
@@ -251,14 +243,14 @@ fn write_bytes_atomic_impl(
     recheck_before_commit: bool,
 ) -> Result<()> {
     // Preserve prior behavior: fail if the original file isn't writable.
-    let (_existing_file, meta) = open_regular_file_for_write(path, relative)?;
+    let (existing_file, meta) = open_regular_file_for_write(path, relative)?;
     verify_expected_identity(
         relative,
         expected_identity,
         FileIdentity::from_metadata(&meta),
     )?;
 
-    // Keep existing mode/readonly permissions; other metadata is not preserved here.
+    // Keep existing mode/readonly permissions, then preserve Unix security metadata.
     let perms = meta.permissions();
 
     let parent = path.parent().ok_or_else(|| {
@@ -293,6 +285,9 @@ fn write_bytes_atomic_impl(
         .as_file()
         .set_permissions(perms)
         .map_err(|err| Error::io_path("set_permissions", relative, err))?;
+    #[cfg(unix)]
+    preserve_unix_security_metadata(&existing_file, &meta, tmp_file.as_file())
+        .map_err(|err| Error::io_path("preserve_metadata", relative, err))?;
     tmp_file
         .as_file_mut()
         .sync_all()
@@ -314,6 +309,240 @@ fn write_bytes_atomic_impl(
     rename_replace(tmp_path.as_ref(), path, true)
         .map_err(|err| Error::io_path("replace_file", relative, err))?;
 
+    Ok(())
+}
+
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+fn preserve_unix_security_metadata(
+    src_file: &fs::File,
+    src_meta: &fs::Metadata,
+    tmp_file: &fs::File,
+) -> std::io::Result<()> {
+    use std::collections::HashSet;
+    use std::ffi::{CStr, CString};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+
+    fn xattr_read_fd_required(fd: libc::c_int, name: &CStr) -> std::io::Result<Vec<u8>> {
+        // Safety: `name` is NUL-terminated and both pointers are valid for this call.
+        let len = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
+        if len < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let len = usize::try_from(len).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "xattr length overflow")
+        })?;
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let mut buf = vec![0_u8; len];
+        // Safety: destination buffer is valid for `buf.len()` bytes.
+        let read = unsafe {
+            libc::fgetxattr(
+                fd,
+                name.as_ptr(),
+                buf.as_mut_ptr().cast::<libc::c_void>(),
+                buf.len(),
+            )
+        };
+        if read < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let read = usize::try_from(read).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "xattr read length overflow",
+            )
+        })?;
+        buf.truncate(read);
+        Ok(buf)
+    }
+
+    fn xattr_read_fd(fd: libc::c_int, name: &CStr) -> std::io::Result<Option<Vec<u8>>> {
+        // Safety: `name` is NUL-terminated and both pointers are valid for this call.
+        let len = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
+        if len < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ENODATA) {
+                return Ok(None);
+            }
+            return Err(err);
+        }
+        let len = usize::try_from(len).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "xattr length overflow")
+        })?;
+        if len == 0 {
+            return Ok(Some(Vec::new()));
+        }
+        let mut buf = vec![0_u8; len];
+        // Safety: destination buffer is valid for `buf.len()` bytes.
+        let read = unsafe {
+            libc::fgetxattr(
+                fd,
+                name.as_ptr(),
+                buf.as_mut_ptr().cast::<libc::c_void>(),
+                buf.len(),
+            )
+        };
+        if read < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let read = usize::try_from(read).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "xattr read length overflow",
+            )
+        })?;
+        buf.truncate(read);
+        Ok(Some(buf))
+    }
+
+    fn xattr_list_fd(fd: libc::c_int) -> std::io::Result<Vec<CString>> {
+        // Safety: null buffer with size 0 asks kernel for the required size.
+        let list_len = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
+        if list_len < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let list_len = usize::try_from(list_len).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "xattr name list length overflow",
+            )
+        })?;
+        if list_len == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut names = vec![0_u8; list_len];
+        // Safety: `names` is a writable buffer of `names.len()` bytes.
+        let list_read =
+            unsafe { libc::flistxattr(fd, names.as_mut_ptr().cast::<libc::c_char>(), names.len()) };
+        if list_read < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let list_read = usize::try_from(list_read).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "xattr name list read length overflow",
+            )
+        })?;
+
+        names[..list_read]
+            .split(|byte| *byte == 0)
+            .filter(|raw_name| !raw_name.is_empty())
+            .map(|raw_name| {
+                CString::new(raw_name).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "xattr name contains interior NUL byte",
+                    )
+                })
+            })
+            .collect()
+    }
+
+    let tmp_meta = tmp_file.metadata()?;
+    let src_uid: libc::uid_t = src_meta.uid().into();
+    let src_gid: libc::gid_t = src_meta.gid().into();
+    let tmp_uid: libc::uid_t = tmp_meta.uid().into();
+    let tmp_gid: libc::gid_t = tmp_meta.gid().into();
+    if src_uid != tmp_uid || src_gid != tmp_gid {
+        let uid: libc::uid_t = if src_uid == tmp_uid {
+            libc::uid_t::MAX
+        } else {
+            src_uid
+        };
+        let gid: libc::gid_t = if src_gid == tmp_gid {
+            libc::gid_t::MAX
+        } else {
+            src_gid
+        };
+        // Safety: fd comes from a live file handle and uid/gid values are plain integers.
+        let chown_rc = unsafe { libc::fchown(tmp_file.as_raw_fd(), uid, gid) };
+        if chown_rc != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+
+    let src_fd = src_file.as_raw_fd();
+    let fd = tmp_file.as_raw_fd();
+
+    let src_names = xattr_list_fd(src_fd)?;
+    let src_name_set: HashSet<Vec<u8>> = src_names
+        .iter()
+        .map(|name| name.as_bytes().to_vec())
+        .collect();
+    for dst_name in xattr_list_fd(fd)? {
+        if src_name_set.contains(dst_name.as_bytes()) {
+            continue;
+        }
+        // Safety: xattr name pointer is valid for this synchronous call.
+        let remove_rc = unsafe { libc::fremovexattr(fd, dst_name.as_ptr()) };
+        if remove_rc != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ENODATA) {
+                continue;
+            }
+            return Err(err);
+        }
+    }
+
+    for name in src_names {
+        let name_cstr = name.as_c_str();
+        let src_value = xattr_read_fd_required(src_fd, name_cstr)?;
+        let dst_value = xattr_read_fd(fd, name_cstr)?;
+        if dst_value.as_deref() == Some(src_value.as_slice()) {
+            continue;
+        }
+        // Safety: xattr name/value buffers are valid for this synchronous call.
+        let set_rc = unsafe {
+            libc::fsetxattr(
+                fd,
+                name_cstr.as_ptr(),
+                src_value.as_ptr().cast::<libc::c_void>(),
+                src_value.len(),
+                0,
+            )
+        };
+        if set_rc != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn preserve_unix_security_metadata(
+    _src_file: &fs::File,
+    src_meta: &fs::Metadata,
+    tmp_file: &fs::File,
+) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+
+    let tmp_meta = tmp_file.metadata()?;
+    let src_uid: libc::uid_t = src_meta.uid().into();
+    let src_gid: libc::gid_t = src_meta.gid().into();
+    let tmp_uid: libc::uid_t = tmp_meta.uid().into();
+    let tmp_gid: libc::gid_t = tmp_meta.gid().into();
+    if src_uid != tmp_uid || src_gid != tmp_gid {
+        let uid: libc::uid_t = if src_uid == tmp_uid {
+            libc::uid_t::MAX
+        } else {
+            src_uid
+        };
+        let gid: libc::gid_t = if src_gid == tmp_gid {
+            libc::gid_t::MAX
+        } else {
+            src_gid
+        };
+        // Safety: fd comes from a live file handle and uid/gid values are plain integers.
+        let chown_rc = unsafe { libc::fchown(tmp_file.as_raw_fd(), uid, gid) };
+        if chown_rc != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
     Ok(())
 }
 
@@ -358,7 +587,9 @@ pub(super) fn rename_replace(
 ) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
-    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MoveFileExW};
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
 
     fn to_wide_null(p: &Path) -> Vec<u16> {
         let mut wide: Vec<u16> = p.as_os_str().encode_wide().collect();
@@ -370,9 +601,9 @@ pub(super) fn rename_replace(
     let dest_w = to_wide_null(dest_path);
 
     let flags = if replace_existing {
-        MOVEFILE_REPLACE_EXISTING
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
     } else {
-        0
+        MOVEFILE_WRITE_THROUGH
     };
 
     // WHY THIS UNSAFE EXISTS (and why we intentionally keep it):

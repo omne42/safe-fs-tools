@@ -10,11 +10,16 @@ use safe_fs_tools::policy::RootMode;
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn setup_skip_glob_fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir_all(dir.path().join("node_modules")).expect("mkdir");
+    std::fs::create_dir_all(dir.path().join("node_modules").join("sub")).expect("mkdir");
     std::fs::write(dir.path().join("keep.txt"), "needle_keep\n").expect("write");
     std::fs::write(
         dir.path().join("node_modules").join("skip.txt"),
         "needle_skip\n",
+    )
+    .expect("write");
+    std::fs::write(
+        dir.path().join("node_modules").join("sub").join("deep.txt"),
+        "needle_deep\n",
     )
     .expect("write");
     dir
@@ -27,6 +32,8 @@ fn assert_skip_glob_applies_to_grep_but_not_direct_read(skip_pattern: &str) {
     let dir = setup_skip_glob_fixture();
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.permissions.read = true;
+    policy.permissions.grep = true;
     policy.traversal.skip_globs = vec![skip_pattern.to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -43,6 +50,18 @@ fn assert_skip_glob_applies_to_grep_but_not_direct_read(skip_pattern: &str) {
 
     assert_eq!(resp.matches.len(), 1);
     assert_eq!(resp.matches[0].path, PathBuf::from("keep.txt"));
+    for blocked in [
+        PathBuf::from("node_modules").join("skip.txt"),
+        PathBuf::from("node_modules").join("sub").join("deep.txt"),
+    ] {
+        assert!(
+            !resp.matches.iter().any(|m| m.path == blocked),
+            "expected traversal.skip_globs to exclude {blocked:?}: {:?}",
+            resp.matches
+        );
+    }
+    assert_eq!(resp.scanned_entries, 1);
+    assert_eq!(resp.scanned_files, 1);
 
     let read = read_file(
         &ctx,
@@ -64,6 +83,8 @@ fn assert_skip_glob_applies_to_glob_paths(skip_pattern: &str) {
     let dir = setup_skip_glob_fixture();
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.permissions.read = true;
+    policy.permissions.glob = true;
     policy.traversal.skip_globs = vec![skip_pattern.to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -76,12 +97,16 @@ fn assert_skip_glob_applies_to_glob_paths(skip_pattern: &str) {
     )
     .expect("glob");
 
-    let blocked = PathBuf::from("node_modules").join("skip.txt");
-    assert!(
-        !resp.matches.iter().any(|path| path == &blocked),
-        "expected traversal.skip_globs to exclude node_modules/skip.txt: {:?}",
-        resp.matches
-    );
+    for blocked in [
+        PathBuf::from("node_modules").join("skip.txt"),
+        PathBuf::from("node_modules").join("sub").join("deep.txt"),
+    ] {
+        assert!(
+            !resp.matches.iter().any(|path| path == &blocked),
+            "expected traversal.skip_globs to exclude {blocked:?}: {:?}",
+            resp.matches
+        );
+    }
     assert!(
         resp.matches
             .iter()
@@ -89,6 +114,8 @@ fn assert_skip_glob_applies_to_glob_paths(skip_pattern: &str) {
         "expected keep.txt to remain visible in traversal result: {:?}",
         resp.matches
     );
+    assert_eq!(resp.scanned_entries, 1);
+    assert_eq!(resp.scanned_files, 1);
 }
 
 #[test]
@@ -97,7 +124,7 @@ fn traversal_skip_globs_support_leading_dot_slash() {
     assert_skip_glob_applies_to_grep_but_not_direct_read("./node_modules/**");
 }
 
-fn assert_skip_glob_pattern_rejected(pattern: &str, semantic_hint: &str) {
+fn assert_skip_glob_pattern_rejected(pattern: &str, expected_message_fragment: &str) {
     let dir = tempfile::tempdir().expect("tempdir");
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
@@ -111,8 +138,8 @@ fn assert_skip_glob_pattern_rejected(pattern: &str, semantic_hint: &str) {
                 "unexpected invalid policy scope for pattern {pattern:?}: {message}"
             );
             assert!(
-                message.contains(semantic_hint),
-                "expected invalid policy message to include semantic hint {semantic_hint:?} for pattern {pattern:?}: {message}"
+                message.contains(expected_message_fragment),
+                "expected error message to contain {expected_message_fragment:?}, got {message:?}"
             );
         }
         other => panic!("unexpected error: {other:?}"),
@@ -121,7 +148,7 @@ fn assert_skip_glob_pattern_rejected(pattern: &str, semantic_hint: &str) {
 
 #[test]
 fn traversal_skip_globs_reject_absolute_pattern() {
-    assert_skip_glob_pattern_rejected("/node_modules/**", "root-relative");
+    assert_skip_glob_pattern_rejected("/node_modules/**", "must not start with '/'");
 }
 
 #[test]
@@ -131,13 +158,26 @@ fn traversal_skip_globs_reject_windows_drive_absolute_pattern() {
 }
 
 #[test]
+#[cfg(windows)]
+fn traversal_skip_globs_reject_windows_unc_absolute_pattern() {
+    assert_skip_glob_pattern_rejected(r"\\server\share\**", "must not start with '/'");
+}
+
+#[test]
 fn traversal_skip_globs_reject_parent_prefix_pattern() {
-    assert_skip_glob_pattern_rejected("../**/*.txt", "must not contain '..'");
+    assert_skip_glob_pattern_rejected("../**/*.txt", "must not contain '..' segments");
 }
 
 #[test]
 fn traversal_skip_globs_reject_parent_segment_pattern() {
-    assert_skip_glob_pattern_rejected("src/../*.txt", "must not contain '..'");
+    assert_skip_glob_pattern_rejected("src/../*.txt", "must not contain '..' segments");
+}
+
+#[test]
+fn traversal_skip_globs_reject_empty_or_whitespace_pattern() {
+    for pattern in ["", "   "] {
+        assert_skip_glob_pattern_rejected(pattern, "glob pattern must not be empty");
+    }
 }
 
 #[test]

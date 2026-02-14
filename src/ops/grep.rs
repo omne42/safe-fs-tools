@@ -127,15 +127,16 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         .and_then(derive_safe_traversal_prefix)
     {
         Some(prefix) => {
+            let walk_root = root_path.join(&prefix);
+            let prefix_denied_or_skipped =
+                ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
             let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
-            if ctx.redactor.is_path_denied(&prefix)
-                || ctx.redactor.is_path_denied(&probe)
-                || ctx.is_traversal_path_skipped(&prefix)
-                || ctx.is_traversal_path_skipped(&probe)
-            {
+            let probe_denied_or_skipped =
+                ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe);
+            if prefix_denied_or_skipped || probe_denied_or_skipped {
                 return Ok(build_grep_response(matches, diag, counters, &started));
             }
-            root_path.join(prefix)
+            walk_root
         }
         None => root_path.clone(),
     };

@@ -12,6 +12,8 @@ use safe_fs_tools::policy::{RootMode, SandboxPolicy};
 use safe_fs_tools::ops::{GlobRequest, glob_paths};
 
 fn toggle_drive_letter_case(path: &std::path::Path) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::path::{Component, Prefix};
 
     fn toggle_ascii_letter(ch: char) -> Option<char> {
@@ -25,44 +27,40 @@ fn toggle_drive_letter_case(path: &std::path::Path) -> Option<PathBuf> {
         })
     }
 
-    fn toggle_first_ascii_letter(input: &str) -> Option<String> {
-        let (idx, ch) = input
-            .char_indices()
-            .find(|(_, ch)| ch.is_ascii_alphabetic())?;
-        let toggled = toggle_ascii_letter(ch)?;
-        let mut out = input.to_string();
-        out.replace_range(idx..idx + ch.len_utf8(), &toggled.to_string());
-        Some(out)
-    }
-
     let mut components = path.components();
     let prefix = match components.next()? {
         Component::Prefix(prefix) => prefix,
         _ => return None,
     };
-    let suffix = components.as_path().to_string_lossy();
-    let toggled_prefix = match prefix.kind() {
-        Prefix::Disk(letter) => {
-            let toggled = toggle_ascii_letter(char::from(letter))?;
-            format!("{toggled}:")
-        }
-        Prefix::VerbatimDisk(letter) => {
-            let toggled = toggle_ascii_letter(char::from(letter))?;
-            format!(r"\\?\{toggled}:")
-        }
-        Prefix::UNC(server, share) => {
-            let server = server.to_string_lossy();
-            let server = toggle_first_ascii_letter(server.as_ref())?;
-            format!(r"\\{server}\{}", share.to_string_lossy())
-        }
-        Prefix::VerbatimUNC(server, share) => {
-            let server = server.to_string_lossy();
-            let server = toggle_first_ascii_letter(server.as_ref())?;
-            format!(r"\\?\UNC\{server}\{}", share.to_string_lossy())
-        }
+    match prefix.kind() {
+        Prefix::Disk(_) | Prefix::VerbatimDisk(_) => {}
         _ => return None,
-    };
-    Some(PathBuf::from(format!("{toggled_prefix}{suffix}")))
+    }
+
+    let mut prefix_units: Vec<u16> = prefix.as_os_str().encode_wide().collect();
+    let (idx, toggled) = prefix_units.iter().enumerate().find_map(|(idx, unit)| {
+        char::from_u32(u32::from(*unit))
+            .and_then(toggle_ascii_letter)
+            .map(|toggled| (idx, toggled))
+    })?;
+    let toggled_u16 = u16::try_from(u32::from(toggled)).ok()?;
+    prefix_units[idx] = toggled_u16;
+
+    let mut rebuilt = PathBuf::from(OsString::from_wide(&prefix_units));
+    rebuilt.push(components.as_path());
+    Some(rebuilt)
+}
+
+fn assert_invalid_path_contains(err: safe_fs_tools::Error, expected_substring: &str) {
+    match err {
+        safe_fs_tools::Error::InvalidPath(msg) => {
+            assert!(
+                msg.contains(expected_substring),
+                "unexpected InvalidPath msg: {msg}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -73,12 +71,8 @@ fn deny_globs_apply_to_absolute_paths_even_when_parent_is_missing() {
     policy.secrets.deny_globs = vec!["missing/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
-    let root = toggle_drive_letter_case(dir.path()).unwrap_or_else(|| {
-        panic!(
-            "unable to toggle drive-letter case for root {}",
-            dir.path().display()
-        )
-    });
+    let root = toggle_drive_letter_case(dir.path())
+        .expect("tempdir path must have a disk or verbatim-disk prefix on Windows");
     let abs = root.join("missing").join("file.txt");
     let err = read_file(
         &ctx,
@@ -109,10 +103,7 @@ fn resolve_path_rejects_drive_relative_paths() {
         .resolve_path("root", Path::new("C:foo"))
         .expect_err("should reject");
 
-    assert!(
-        matches!(err, safe_fs_tools::Error::InvalidPath(_)),
-        "unexpected error: {err:?}"
-    );
+    assert_invalid_path_contains(err, "drive-relative paths are not supported");
 }
 
 #[test]
@@ -125,10 +116,7 @@ fn resolve_path_rejects_colon_paths_on_windows() {
         .resolve_path("root", Path::new("file.txt::$DATA"))
         .expect_err("should reject");
 
-    assert!(
-        matches!(err, safe_fs_tools::Error::InvalidPath(_)),
-        "unexpected error: {err:?}"
-    );
+    assert_invalid_path_contains(err, "':' is not allowed on Windows");
 }
 
 #[test]

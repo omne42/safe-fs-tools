@@ -90,22 +90,70 @@ fn unlink_symlink(target: &Path) -> std::io::Result<()> {
     }
 }
 
+#[cfg(unix)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(windows)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(any(unix, windows))]
+fn ensure_delete_identity_verification_supported() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn ensure_delete_identity_verification_supported() -> Result<()> {
+    Err(Error::InvalidPath(
+        "delete is unsupported on this platform: cannot verify file identity".to_string(),
+    ))
+}
+
 fn revalidate_parent_before_delete(
     ctx: &Context,
     request: &DeleteRequest,
     requested_parent: &Path,
     canonical_parent: &Path,
+    canonical_parent_meta: &fs::Metadata,
     requested_path: &Path,
 ) -> Result<Option<DeleteResponse>> {
     match ctx.ensure_dir_under_root(&request.root_id, requested_parent, false) {
         Ok(rechecked_parent) => {
-            if rechecked_parent == canonical_parent {
-                Ok(None)
-            } else {
+            if rechecked_parent != canonical_parent {
                 Err(Error::InvalidPath(format!(
                     "path {} changed during delete; refusing to continue",
                     requested_path.display()
                 )))
+            } else {
+                let rechecked_parent_meta = match fs::symlink_metadata(&rechecked_parent) {
+                    Ok(meta) => meta,
+                    Err(err)
+                        if request.ignore_missing && err.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        return Ok(Some(missing_response(requested_path)));
+                    }
+                    Err(err) => {
+                        return Err(Error::io_path("symlink_metadata", requested_parent, err));
+                    }
+                };
+                if !rechecked_parent_meta.is_dir()
+                    || !metadata_same_file(canonical_parent_meta, &rechecked_parent_meta)
+                {
+                    return Err(Error::InvalidPath(
+                        "parent identity changed during delete; refusing to continue".to_string(),
+                    ));
+                }
+                Ok(None)
             }
         }
         Err(Error::IoPath { source, .. })
@@ -123,6 +171,7 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
             "delete is disabled by policy".to_string(),
         ));
     }
+    ensure_delete_identity_verification_supported()?;
     ctx.ensure_can_write(&request.root_id, "delete")?;
 
     let resolved =
@@ -154,6 +203,19 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
             }
             Err(err) => return Err(err),
         };
+    let canonical_parent_meta = match fs::symlink_metadata(&canonical_parent) {
+        Ok(meta) => meta,
+        Err(err) if request.ignore_missing && err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(missing_response(&requested_path));
+        }
+        Err(err) => return Err(Error::io_path("symlink_metadata", requested_parent, err)),
+    };
+    if !canonical_parent_meta.is_dir() {
+        return Err(Error::InvalidPath(format!(
+            "parent path {} is not a directory",
+            requested_parent.display()
+        )));
+    }
 
     let relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, &canonical_root)
@@ -181,6 +243,7 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
         &request,
         requested_parent,
         &canonical_parent,
+        &canonical_parent_meta,
         &requested_path,
     )? {
         return Ok(response);
@@ -191,7 +254,7 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound && request.ignore_missing => {
             return Ok(missing_response(&requested_path));
         }
-        Err(err) => return Err(Error::io_path("metadata", &relative, err)),
+        Err(err) => return Err(Error::io_path("symlink_metadata", &relative, err)),
     };
 
     let file_type = meta.file_type();
@@ -211,8 +274,24 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
             &request,
             requested_parent,
             &canonical_parent,
+            &canonical_parent_meta,
             &requested_path,
         )
+    };
+    let ensure_target_stable_or_missing = || -> Result<Option<DeleteResponse>> {
+        let current_meta = match fs::symlink_metadata(&target) {
+            Ok(meta) => meta,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound && request.ignore_missing => {
+                return Ok(Some(missing_response(&requested_path)));
+            }
+            Err(err) => return Err(Error::io_path("symlink_metadata", &relative, err)),
+        };
+        if !metadata_same_file(&meta, &current_meta) {
+            return Err(Error::InvalidPath(
+                "target identity changed during delete; refusing to continue".to_string(),
+            ));
+        }
+        Ok(None)
     };
 
     if file_type.is_dir() {
@@ -225,6 +304,9 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
         if let Some(response) = ensure_parent_stable_or_missing()? {
             return Ok(response);
         }
+        if let Some(response) = ensure_target_stable_or_missing()? {
+            return Ok(response);
+        }
 
         if let Err(err) = fs::remove_dir_all(&target) {
             if err.kind() == std::io::ErrorKind::NotFound && request.ignore_missing {
@@ -234,6 +316,9 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
         }
     } else {
         if let Some(response) = ensure_parent_stable_or_missing()? {
+            return Ok(response);
+        }
+        if let Some(response) = ensure_target_stable_or_missing()? {
             return Ok(response);
         }
 

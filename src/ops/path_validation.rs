@@ -45,12 +45,11 @@ fn validate_requested_path_contract(
     spec: LeafValidationSpec,
 ) -> Result<()> {
     let normalized = crate::path_utils_internal::normalize_path_lexical(requested_path);
-    if normalized != requested_path {
-        return Err(Error::InvalidPath(format!(
-            "invalid {} path {:?}: internal contract violation: requested path must be normalized root-relative",
-            spec.op_name, raw_input_path
-        )));
-    }
+    debug_assert_eq!(
+        normalized.as_os_str(),
+        requested_path.as_os_str(),
+        "internal contract violation: requested path must be normalized root-relative: requested={requested_path:?}, raw={raw_input_path:?}"
+    );
 
     let has_non_relative_components = requested_path.components().any(|component| {
         matches!(
@@ -60,8 +59,8 @@ fn validate_requested_path_contract(
     });
     if has_non_relative_components {
         return Err(Error::InvalidPath(format!(
-            "invalid {} path {:?}: internal contract violation: requested path must stay root-relative",
-            spec.op_name, raw_input_path
+            "invalid {} path {:?}: internal contract violation: requested path must stay root-relative (raw input {:?})",
+            spec.op_name, requested_path, raw_input_path
         )));
     }
 
@@ -71,8 +70,8 @@ fn validate_requested_path_contract(
 /// Validates the leaf path segment for mutating operations.
 ///
 /// Contract: `requested_path` must be a normalized root-relative path emitted by
-/// path resolution (`.` means root). We keep missing-leaf and dot-segment checks
-/// as defensive validation for callers violating that contract.
+/// path resolution (`.` means root). Missing-leaf checks are kept as defensive
+/// validation for callers violating that contract.
 pub(super) fn ensure_non_root_leaf<'a>(
     requested_path: &'a Path,
     raw_input_path: &Path,
@@ -93,13 +92,6 @@ pub(super) fn ensure_non_root_leaf<'a>(
         ))
     })?;
 
-    if file_name == OsStr::new(".") || file_name == OsStr::new("..") {
-        return Err(Error::InvalidPath(format!(
-            "invalid {} path {:?}",
-            spec.op_name, raw_input_path
-        )));
-    }
-
     Ok(file_name)
 }
 
@@ -115,43 +107,54 @@ mod tests {
     }
 
     #[test]
-    fn rejects_root_dot_with_root_specific_message() {
-        let err = ensure_non_root_leaf(Path::new("."), Path::new("."), LeafOp::Write)
-            .expect_err("root path should be rejected");
+    fn rejects_root_dot_with_operation_specific_message() {
+        let cases = [
+            (LeafOp::Write, "refusing to write to the root directory"),
+            (LeafOp::Delete, "refusing to delete the root directory"),
+            (LeafOp::Mkdir, "refusing to create the root directory"),
+        ];
 
-        assert_eq!(
-            invalid_path_message(err),
-            "refusing to write to the root directory"
-        );
+        for (op, expected_message) in cases {
+            let err = ensure_non_root_leaf(Path::new("."), Path::new("."), op)
+                .expect_err("root path should be rejected");
+
+            assert_eq!(invalid_path_message(err), expected_message);
+        }
     }
 
     #[test]
-    fn rejects_non_normalized_requested_path() {
-        let err = ensure_non_root_leaf(
-            Path::new("./nested/file.txt"),
-            Path::new("./nested/file.txt"),
-            LeafOp::Write,
-        )
-        .expect_err("non-normalized requested path should be rejected");
+    fn rejects_non_root_relative_requested_path_for_all_ops() {
+        let cases = [
+            (LeafOp::Write, "write"),
+            (LeafOp::Delete, "delete"),
+            (LeafOp::Mkdir, "mkdir"),
+        ];
 
-        assert_eq!(
-            invalid_path_message(err),
-            "invalid write path \"./nested/file.txt\": internal contract violation: requested path must be normalized root-relative"
-        );
+        for (op, op_name) in cases {
+            let err = ensure_non_root_leaf(Path::new("../file.txt"), Path::new("../file.txt"), op)
+                .expect_err("parent-dir segment should be rejected");
+
+            assert_eq!(
+                invalid_path_message(err),
+                format!(
+                    "invalid {op_name} path \"../file.txt\": internal contract violation: requested path must stay root-relative (raw input \"../file.txt\")"
+                )
+            );
+        }
     }
 
     #[test]
-    fn rejects_requested_path_with_parent_dir_component() {
+    fn contract_violation_reports_requested_path_for_diagnostics() {
         let err = ensure_non_root_leaf(
             Path::new("../file.txt"),
-            Path::new("../file.txt"),
+            Path::new("user-input.txt"),
             LeafOp::Delete,
         )
         .expect_err("parent-dir segment should be rejected");
 
         assert_eq!(
             invalid_path_message(err),
-            "invalid delete path \"../file.txt\": internal contract violation: requested path must stay root-relative"
+            "invalid delete path \"../file.txt\": internal contract violation: requested path must stay root-relative (raw input \"user-input.txt\")"
         );
     }
 
@@ -166,7 +169,7 @@ mod tests {
 
         assert_eq!(
             invalid_path_message(err),
-            "invalid delete path \"/tmp/file.txt\": internal contract violation: requested path must stay root-relative"
+            "invalid delete path \"/tmp/file.txt\": internal contract violation: requested path must stay root-relative (raw input \"/tmp/file.txt\")"
         );
     }
 
@@ -182,30 +185,34 @@ mod tests {
 
         assert_eq!(
             invalid_path_message(err),
-            "invalid delete path \"C:\\tmp\\file.txt\": internal contract violation: requested path must stay root-relative"
+            "invalid delete path \"C:\\tmp\\file.txt\": internal contract violation: requested path must stay root-relative (raw input \"C:\\tmp\\file.txt\")"
         );
     }
 
     #[test]
     fn reports_contract_violation_before_leaf_extraction() {
-        let err = ensure_non_root_leaf(Path::new(""), Path::new(""), LeafOp::Delete)
-            .expect_err("empty path should be rejected as contract violation");
+        let err = ensure_non_root_leaf(Path::new(".."), Path::new(".."), LeafOp::Delete)
+            .expect_err("contract violation should trigger before missing-leaf checks");
 
         assert_eq!(
             invalid_path_message(err),
-            "invalid delete path \"\": internal contract violation: requested path must be normalized root-relative"
+            "invalid delete path \"..\": internal contract violation: requested path must stay root-relative (raw input \"..\")"
         );
     }
 
     #[test]
-    fn accepts_normalized_non_root_leaf() {
-        let leaf = ensure_non_root_leaf(
-            Path::new("nested/file.txt"),
-            Path::new("nested/file.txt"),
-            LeafOp::Delete,
-        )
-        .expect("valid normalized path should pass");
+    fn accepts_normalized_non_root_leaf_for_all_ops() {
+        let cases = [LeafOp::Write, LeafOp::Delete, LeafOp::Mkdir];
 
-        assert_eq!(leaf, OsStr::new("file.txt"));
+        for op in cases {
+            let leaf = ensure_non_root_leaf(
+                Path::new("nested/file.txt"),
+                Path::new("nested/file.txt"),
+                op,
+            )
+            .expect("valid normalized path should pass");
+
+            assert_eq!(leaf, OsStr::new("file.txt"));
+        }
     }
 }

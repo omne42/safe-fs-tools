@@ -85,6 +85,7 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         });
     }
 
+    ensure_destination_parent_identity_verification_supported()?;
     let destination = prepare_destination(ctx, &request, &mut paths)?;
     if paths.source == destination.path {
         return Ok(noop_response(
@@ -130,14 +131,19 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         }
     }
 
-    ensure_destination_parent_identity_verification_supported()?;
     let destination_parent_meta = capture_destination_parent_identity(
         &destination.parent,
+        &destination.to_effective_relative,
+    )?;
+    verify_destination_parent_identity(
+        &destination.parent,
+        &destination_parent_meta,
         &destination.to_effective_relative,
     )?;
     let (tmp_path, bytes) = copy_to_temp(
         &mut input,
         &destination.parent,
+        &destination_parent_meta,
         &paths.from_relative,
         &destination.to_effective_relative,
         ctx.policy.limits.max_write_bytes,
@@ -305,6 +311,7 @@ fn prepare_destination(
 fn copy_to_temp(
     input: &mut fs::File,
     destination_parent: &Path,
+    expected_parent_meta: &fs::Metadata,
     from_relative: &Path,
     to_effective_relative: &Path,
     max_write_bytes: u64,
@@ -314,6 +321,11 @@ fn copy_to_temp(
         .suffix(".tmp")
         .tempfile_in(destination_parent)
         .map_err(|err| Error::io_path("create_temp", to_effective_relative, err))?;
+    verify_destination_parent_identity(
+        destination_parent,
+        expected_parent_meta,
+        to_effective_relative,
+    )?;
 
     let limit = max_write_bytes.saturating_add(1);
     let bytes = std::io::copy(&mut input.take(limit), tmp_file.as_file_mut())
@@ -344,12 +356,22 @@ fn commit_replace(
     overwrite: bool,
     source_meta: &fs::Metadata,
 ) -> Result<()> {
+    let tmp_path_ref: &Path = tmp_path.as_ref();
+
+    fs::set_permissions(tmp_path_ref, source_meta.permissions())
+        .map_err(|err| Error::io_path("set_permissions", to_effective_relative, err))?;
+    fs::OpenOptions::new()
+        .read(true)
+        .open(tmp_path_ref)
+        .and_then(|file| file.sync_all())
+        .map_err(|err| Error::io_path("sync", to_effective_relative, err))?;
+
     verify_destination_parent_identity(
         destination_parent,
         expected_parent_meta,
         to_effective_relative,
     )?;
-    super::io::rename_replace(tmp_path.as_ref(), destination, overwrite).map_err(|err| {
+    super::io::rename_replace(tmp_path_ref, destination, overwrite).map_err(|err| {
         if !overwrite && err.kind() == std::io::ErrorKind::AlreadyExists {
             return Error::InvalidPath("destination exists".to_string());
         }
@@ -360,8 +382,6 @@ fn commit_replace(
         }
         Error::io_path("rename", to_effective_relative, err)
     })?;
-    fs::set_permissions(destination, source_meta.permissions())
-        .map_err(|err| Error::io_path("set_permissions", to_effective_relative, err))?;
     Ok(())
 }
 

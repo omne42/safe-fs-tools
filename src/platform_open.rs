@@ -1,52 +1,70 @@
-use std::fs::{File, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions};
 use std::io;
 use std::path::Path;
 
-/// Returns `true` when an open failure should be mapped to an
-/// `InvalidPath("... is a symlink")` style policy error.
 #[cfg(unix)]
-pub fn is_symlink_open_error(err: &io::Error) -> bool {
-    match err.raw_os_error() {
-        Some(libc::ELOOP) => true,
+fn unix_is_symlink_open_errno(code: i32) -> bool {
+    match code {
+        libc::ELOOP => true,
         #[cfg(any(
             target_os = "freebsd",
             target_os = "dragonfly",
             target_os = "openbsd",
             target_os = "netbsd"
         ))]
-        Some(libc::EMLINK) => true,
+        libc::EMLINK => true,
         _ => false,
     }
 }
 
 /// Returns `true` when an open failure should be mapped to an
-/// `InvalidPath("... is a symlink")` style policy error.
+/// `InvalidPath("... is a symlink/reparse point")` style policy error.
+#[cfg(unix)]
+pub fn is_symlink_or_reparse_open_error(err: &io::Error) -> bool {
+    err.raw_os_error().is_some_and(unix_is_symlink_open_errno)
+}
+
 #[cfg(windows)]
-pub fn is_symlink_open_error(err: &io::Error) -> bool {
+fn windows_is_symlink_open_errno(code: i32) -> bool {
     use windows_sys::Win32::Foundation::{
         ERROR_CANT_RESOLVE_FILENAME, ERROR_REPARSE_POINT_ENCOUNTERED, ERROR_STOPPED_ON_SYMLINK,
     };
 
-    match err.raw_os_error() {
-        Some(code) => {
-            // Keep a strict whitelist: direct "symlink encountered" plus
-            // unresolved link traversal (loop/too many indirections).
-            code == ERROR_STOPPED_ON_SYMLINK as i32
-                || code == ERROR_REPARSE_POINT_ENCOUNTERED as i32
-                || code == ERROR_CANT_RESOLVE_FILENAME as i32
-        }
-        None => false,
-    }
+    // Keep a strict whitelist: direct "symlink encountered" plus
+    // unresolved link traversal (loop/too many indirections).
+    code == ERROR_STOPPED_ON_SYMLINK as i32
+        || code == ERROR_REPARSE_POINT_ENCOUNTERED as i32
+        || code == ERROR_CANT_RESOLVE_FILENAME as i32
 }
 
 /// Returns `true` when an open failure should be mapped to an
-/// `InvalidPath("... is a symlink")` style policy error.
+/// `InvalidPath("... is a symlink/reparse point")` style policy error.
+#[cfg(windows)]
+pub fn is_symlink_or_reparse_open_error(err: &io::Error) -> bool {
+    err.raw_os_error()
+        .is_some_and(windows_is_symlink_open_errno)
+}
+
+/// Returns `true` when an open failure should be mapped to an
+/// `InvalidPath("... is a symlink/reparse point")` style policy error.
 #[cfg(all(not(unix), not(windows)))]
-pub fn is_symlink_open_error(_err: &io::Error) -> bool {
+pub fn is_symlink_or_reparse_open_error(_err: &io::Error) -> bool {
     false
 }
 
+/// Backward-compatible alias kept for existing call sites.
+///
+/// Prefer `is_symlink_or_reparse_open_error` for clearer semantics.
+pub fn is_symlink_open_error(err: &io::Error) -> bool {
+    is_symlink_or_reparse_open_error(err)
+}
+
 /// Opens `path` for read-only access without following the final path component.
+///
+/// Security contract:
+/// - This only enforces "no follow" for the final path component.
+/// - This does **not** guarantee that `path` is a regular file.
+///   Callers must still validate `file.metadata()?.is_file()` for policy checks.
 ///
 /// On Unix we also set `O_NONBLOCK` to avoid blocking when the target is a FIFO.
 #[cfg(unix)]
@@ -61,6 +79,11 @@ pub fn open_readonly_nofollow(path: &Path) -> io::Result<File> {
 }
 
 /// Opens `path` for read-only access without following the final path component.
+///
+/// Security contract:
+/// - This only enforces "no follow" for the final path component.
+/// - This does **not** guarantee that `path` is a regular file.
+///   Callers must still validate `file.metadata()?.is_file()` for policy checks.
 #[cfg(windows)]
 pub fn open_readonly_nofollow(path: &Path) -> io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
@@ -82,6 +105,25 @@ pub fn open_readonly_nofollow(path: &Path) -> io::Result<File> {
     ))
 }
 
+fn ensure_regular_file(path: &Path, file: File) -> io::Result<(File, Metadata)> {
+    let metadata = file.metadata()?;
+    if metadata.is_file() {
+        Ok((file, metadata))
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("path is not a regular file: {}", path.display()),
+        ))
+    }
+}
+
+/// Opens `path` read-only without following the final path component and enforces
+/// that the opened handle is a regular file.
+pub fn open_regular_readonly_nofollow(path: &Path) -> io::Result<(File, Metadata)> {
+    let file = open_readonly_nofollow(path)?;
+    ensure_regular_file(path, file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +141,7 @@ mod tests {
         symlink(&target, &link).expect("create symlink");
 
         let err = open_readonly_nofollow(&link).expect_err("symlink open should fail");
+        assert!(is_symlink_or_reparse_open_error(&err));
         assert!(is_symlink_open_error(&err));
     }
 
@@ -106,6 +149,7 @@ mod tests {
     #[test]
     fn unix_eloop_errno_is_classified_as_symlink_error() {
         let err = io::Error::from_raw_os_error(libc::ELOOP);
+        assert!(is_symlink_or_reparse_open_error(&err));
         assert!(is_symlink_open_error(&err));
     }
 
@@ -118,6 +162,7 @@ mod tests {
     #[test]
     fn bsd_emlink_errno_is_classified_as_symlink_error() {
         let err = io::Error::from_raw_os_error(libc::EMLINK);
+        assert!(is_symlink_or_reparse_open_error(&err));
         assert!(is_symlink_open_error(&err));
     }
 
@@ -125,7 +170,43 @@ mod tests {
     #[test]
     fn unix_non_symlink_errno_is_not_classified_as_symlink_error() {
         let err = io::Error::from_raw_os_error(libc::ENOENT);
+        assert!(!is_symlink_or_reparse_open_error(&err));
         assert!(!is_symlink_open_error(&err));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_open_directory_does_not_imply_regular_file() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let file = open_readonly_nofollow(dir.path()).expect("directory open should succeed");
+        let meta = file
+            .metadata()
+            .expect("directory metadata should be available");
+        assert!(
+            !meta.is_file(),
+            "open_readonly_nofollow must not be treated as a regular-file guarantee"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_open_regular_rejects_directory() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let err = open_regular_readonly_nofollow(dir.path())
+            .expect_err("directory open should fail regular-file enforcement");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_open_regular_accepts_regular_file() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let file_path = dir.path().join("file.txt");
+        std::fs::write(&file_path, b"ok").expect("write file");
+
+        let (_file, metadata) =
+            open_regular_readonly_nofollow(&file_path).expect("regular file open should succeed");
+        assert!(metadata.is_file());
     }
 
     #[cfg(windows)]
@@ -141,7 +222,15 @@ mod tests {
             ERROR_CANT_RESOLVE_FILENAME,
             ERROR_REPARSE_POINT_ENCOUNTERED,
         ] {
+            assert!(
+                windows_is_symlink_open_errno(code as i32),
+                "helper must classify code {code} as symlink-related"
+            );
             let err = io::Error::from_raw_os_error(code as i32);
+            assert!(
+                is_symlink_or_reparse_open_error(&err),
+                "code {code} should be true"
+            );
             assert!(is_symlink_open_error(&err), "code {code} should be true");
         }
 
@@ -150,7 +239,15 @@ mod tests {
             ERROR_NOT_A_REPARSE_POINT,
             ERROR_INVALID_REPARSE_DATA,
         ] {
+            assert!(
+                !windows_is_symlink_open_errno(code as i32),
+                "helper must reject non-symlink code {code}"
+            );
             let err = io::Error::from_raw_os_error(code as i32);
+            assert!(
+                !is_symlink_or_reparse_open_error(&err),
+                "code {code} should be false"
+            );
             assert!(!is_symlink_open_error(&err), "code {code} should be false");
         }
     }
@@ -161,6 +258,7 @@ mod tests {
         let path = Path::new("dummy");
         let err = open_readonly_nofollow(path).expect_err("open must fail");
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(!is_symlink_or_reparse_open_error(&err));
         assert!(!is_symlink_open_error(&err));
     }
 }

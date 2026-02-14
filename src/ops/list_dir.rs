@@ -8,21 +8,46 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SameFileCheck {
+    Same,
+    Different,
+    Unsupported,
+}
+
 #[cfg(unix)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> SameFileCheck {
     use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
+    if a.dev() == b.dev() && a.ino() == b.ino() {
+        SameFileCheck::Same
+    } else {
+        SameFileCheck::Different
+    }
 }
 
 #[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> SameFileCheck {
     use std::os::windows::fs::MetadataExt;
-    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+    match (
+        a.volume_serial_number(),
+        b.volume_serial_number(),
+        a.file_index(),
+        b.file_index(),
+    ) {
+        (Some(a_serial), Some(b_serial), Some(a_index), Some(b_index)) => {
+            if a_serial == b_serial && a_index == b_index {
+                SameFileCheck::Same
+            } else {
+                SameFileCheck::Different
+            }
+        }
+        _ => SameFileCheck::Unsupported,
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
-    true
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> SameFileCheck {
+    SameFileCheck::Unsupported
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +109,13 @@ enum EntryOutcome {
     SkippedIoError,
 }
 
+fn directory_changed_during_list_error(relative_dir: &Path) -> Error {
+    Error::InvalidPath(format!(
+        "path {} changed during list_dir; refusing to continue",
+        relative_dir.display()
+    ))
+}
+
 fn ensure_directory_identity_unchanged(
     dir: &Path,
     relative_dir: &Path,
@@ -91,33 +123,39 @@ fn ensure_directory_identity_unchanged(
 ) -> Result<()> {
     let current_meta = fs::symlink_metadata(dir)
         .map_err(|err| Error::io_path("symlink_metadata", relative_dir, err))?;
-    if current_meta.file_type().is_symlink()
-        || !current_meta.is_dir()
-        || !metadata_same_file(expected_meta, &current_meta)
-    {
-        return Err(Error::InvalidPath(format!(
-            "path {} changed during list_dir; refusing to continue",
-            relative_dir.display()
-        )));
+    if current_meta.file_type().is_symlink() || !current_meta.is_dir() {
+        return Err(directory_changed_during_list_error(relative_dir));
     }
-    Ok(())
+    match metadata_same_file(expected_meta, &current_meta) {
+        SameFileCheck::Same => Ok(()),
+        SameFileCheck::Different => Err(directory_changed_during_list_error(relative_dir)),
+        SameFileCheck::Unsupported => {
+            #[cfg(windows)]
+            {
+                // Some Windows filesystems do not provide stable file IDs.
+                // Keep the directory/symlink re-check above and continue.
+                Ok(())
+            }
+            #[cfg(not(windows))]
+            {
+                Err(Error::InvalidPath(format!(
+                    "cannot verify directory identity for path {} on this platform",
+                    relative_dir.display()
+                )))
+            }
+        }
+    }
 }
 
 fn process_dir_entry(
     ctx: &Context,
     entry: fs::DirEntry,
-    root_id: &str,
     root_path: &std::path::Path,
 ) -> Result<EntryOutcome> {
     let path = entry.path();
     let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, root_path) {
         Some(relative) => relative,
-        None => {
-            return Err(Error::OutsideRoot {
-                root_id: root_id.to_string(),
-                path,
-            });
-        }
+        None => return Ok(EntryOutcome::SkippedIoError),
     };
 
     if ctx.redactor.is_path_denied(&relative) {
@@ -198,7 +236,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 continue;
             }
         };
-        match process_dir_entry(ctx, entry, &request.root_id, &root_path)? {
+        match process_dir_entry(ctx, entry, &root_path)? {
             EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
                 if max_entries == 0 {

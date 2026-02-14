@@ -50,6 +50,36 @@ fn derive_safe_traversal_prefix_is_conservative() {
             expected: Some("src"),
         },
         Case {
+            name: "repeated_leading_dot_segments",
+            pattern: "././src/*",
+            expected: Some("src"),
+        },
+        Case {
+            name: "repeated_separators_before_globstar",
+            pattern: "src///**/*.rs",
+            expected: Some("src"),
+        },
+        Case {
+            name: "literal_dot_only_pattern",
+            pattern: ".",
+            expected: None,
+        },
+        Case {
+            name: "character_class_meta_segment",
+            pattern: "src/[ab].rs",
+            expected: Some("src"),
+        },
+        Case {
+            name: "single_char_meta_segment",
+            pattern: "src/?.rs",
+            expected: Some("src"),
+        },
+        Case {
+            name: "brace_meta_segment",
+            pattern: "src/{foo,bar}.rs",
+            expected: Some("src"),
+        },
+        Case {
             name: "concrete_file_path",
             pattern: "src/lib.rs",
             expected: Some("src/lib.rs"),
@@ -178,78 +208,120 @@ fn walk_traversal_files_rejects_walk_root_outside_root() {
 
 #[test]
 #[cfg(any(feature = "glob", feature = "grep"))]
-fn traversal_skip_globs_apply_to_directories_via_probe() {
+fn traversal_skip_globs_apply_to_directories_via_probe_matrix_does_not_recurse_skipped_dir() {
     use std::time::Instant;
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    fs::create_dir_all(dir.path().join("node_modules").join("sub")).expect("mkdir");
-    fs::write(dir.path().join("keep.txt"), "keep\n").expect("write");
-    fs::write(dir.path().join("node_modules").join("skip.txt"), "skip\n").expect("write");
-    fs::write(
-        dir.path()
-            .join("node_modules")
-            .join("sub")
-            .join("keep2.txt"),
-        "keep\n",
-    )
-    .expect("write");
+    struct Case {
+        name: &'static str,
+        pattern: &'static str,
+    }
 
-    let mut policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
-    policy.traversal.skip_globs = vec!["node_modules/*".to_string()];
-    let ctx = Context::new(policy).expect("ctx");
-
-    assert!(
-        !ctx.is_traversal_path_skipped(Path::new("node_modules")),
-        "expected the skip glob not to match the directory itself"
-    );
-    let probe = Path::new("node_modules").join(traversal::TRAVERSAL_GLOB_PROBE_NAME);
-    assert!(
-        ctx.is_traversal_path_skipped(&probe),
-        "expected the skip glob to match the probe path"
-    );
-
-    let root_path = ctx.canonical_root("root").expect("root").to_path_buf();
-    let mut seen = Vec::new();
-    let diag = traversal::walk_traversal_files(
-        &ctx,
-        "root",
-        &root_path,
-        &root_path,
-        &Instant::now(),
-        None,
-        |file, _diag| {
-            seen.push(file.relative_path);
-            Ok(std::ops::ControlFlow::Continue(()))
+    #[cfg(not(windows))]
+    let cases = [
+        Case {
+            name: "single_segment_glob",
+            pattern: "node_modules/*",
         },
-    )
-    .expect("walk");
+        Case {
+            name: "globstar",
+            pattern: "node_modules/**",
+        },
+        Case {
+            name: "dot_prefix",
+            pattern: "./node_modules/*",
+        },
+    ];
 
-    assert!(
-        seen.iter().any(|path| path == Path::new("keep.txt")),
-        "expected keep.txt to be traversed, saw: {seen:?}"
-    );
-    assert!(
-        !seen
-            .iter()
-            .any(|path| path.starts_with(Path::new("node_modules"))),
-        "expected node_modules to be excluded via probe semantics, saw: {seen:?}"
-    );
-    assert_eq!(
-        seen.len(),
-        1,
-        "expected exactly one visited file, saw: {seen:?}"
-    );
-    assert_eq!(
-        diag.scanned_files(),
-        1,
-        "unexpected scanned files: {diag:?}"
-    );
-    // Directory iteration order can vary across filesystems, so allow one or two entries
-    // as long as the observed files and scanned_files invariants stay strict.
-    assert!(
-        (1..=2).contains(&diag.scanned_entries()),
-        "unexpected scanned entries: {diag:?}"
-    );
+    #[cfg(windows)]
+    let cases = [
+        Case {
+            name: "single_segment_glob",
+            pattern: "node_modules/*",
+        },
+        Case {
+            name: "globstar",
+            pattern: "node_modules/**",
+        },
+        Case {
+            name: "dot_prefix",
+            pattern: "./node_modules/*",
+        },
+        Case {
+            name: "windows_backslash",
+            pattern: r"node_modules\*",
+        },
+    ];
+
+    for case in cases {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(dir.path().join("node_modules").join("sub")).expect("mkdir");
+        fs::write(dir.path().join("keep.txt"), "keep\n").expect("write");
+        fs::write(dir.path().join("node_modules").join("skip.txt"), "skip\n").expect("write");
+        fs::write(
+            dir.path()
+                .join("node_modules")
+                .join("sub")
+                .join("keep2.txt"),
+            "keep\n",
+        )
+        .expect("write");
+
+        let mut policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+        policy.traversal.skip_globs = vec![case.pattern.to_string()];
+        let ctx = Context::new(policy).expect("ctx");
+
+        assert!(
+            !ctx.is_traversal_path_skipped(Path::new("node_modules")),
+            "case {} pattern {:?}: skip glob should not match directory itself",
+            case.name,
+            case.pattern
+        );
+        let probe = Path::new("node_modules").join(traversal::TRAVERSAL_GLOB_PROBE_NAME);
+        assert!(
+            ctx.is_traversal_path_skipped(&probe),
+            "case {} pattern {:?}: skip glob should match probe path",
+            case.name,
+            case.pattern
+        );
+
+        let root_path = ctx.canonical_root("root").expect("root").to_path_buf();
+        let mut seen = Vec::new();
+        let diag = traversal::walk_traversal_files(
+            &ctx,
+            "root",
+            &root_path,
+            &root_path,
+            &Instant::now(),
+            None,
+            |file, _diag| {
+                seen.push(file.relative_path);
+                Ok(std::ops::ControlFlow::Continue(()))
+            },
+        )
+        .expect("walk");
+
+        assert_eq!(
+            seen,
+            vec![PathBuf::from("keep.txt")],
+            "case {} pattern {:?}: unexpected traversed files",
+            case.name,
+            case.pattern
+        );
+        assert_eq!(
+            diag.scanned_files(),
+            1,
+            "case {} pattern {:?}: unexpected scanned files: {diag:?}",
+            case.name,
+            case.pattern
+        );
+        assert_eq!(
+            diag.scanned_entries(),
+            1,
+            "case {} pattern {:?}: unexpected scanned entries: {diag:?}",
+            case.name,
+            case.pattern
+        );
+    }
 }
 
 #[test]

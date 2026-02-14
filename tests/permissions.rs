@@ -13,17 +13,33 @@ use safe_fs_tools::policy::RootMode;
 #[cfg(feature = "patch")]
 use safe_fs_tools::ops::{PatchRequest, apply_unified_patch};
 
-fn assert_not_permitted(err: safe_fs_tools::Error, op: &str, reason_token: &str) {
+#[derive(Clone, Copy, Debug)]
+enum NotPermittedReason {
+    DisabledByPolicy,
+    ReadOnlyRoot,
+}
+
+impl NotPermittedReason {
+    fn stable_tokens(self) -> &'static [&'static str] {
+        match self {
+            Self::DisabledByPolicy => &["disabled by policy"],
+            Self::ReadOnlyRoot => &["is not allowed", "read_only"],
+        }
+    }
+}
+
+fn assert_not_permitted(err: safe_fs_tools::Error, op: &str, reason: NotPermittedReason) {
     match err {
         safe_fs_tools::Error::NotPermitted(message) => {
-            let actual_op = message.split_whitespace().next().unwrap_or_default();
-            assert_eq!(
-                actual_op, op,
-                "expected not_permitted reason to start with operation token '{op}', got '{message}'"
-            );
+            let expected_prefix = format!("{op} ");
             assert!(
-                message.contains(reason_token),
-                "expected not_permitted reason to contain '{reason_token}', got '{message}'"
+                message.starts_with(&expected_prefix),
+                "expected not_permitted reason to start with '{expected_prefix}', got '{message}'"
+            );
+            let stable_tokens = reason.stable_tokens();
+            assert!(
+                stable_tokens.iter().all(|token| message.contains(token)),
+                "expected not_permitted reason to contain all of {stable_tokens:?} for {reason:?}, got '{message}'"
             );
         }
         other => panic!("unexpected error: {other:?}"),
@@ -49,7 +65,7 @@ fn read_is_disabled_by_policy() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err, "read", "disabled by policy");
+    assert_not_permitted(err, "read", NotPermittedReason::DisabledByPolicy);
 }
 
 #[test]
@@ -70,7 +86,7 @@ fn glob_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "glob", "disabled by policy");
+    assert_not_permitted(err, "glob", NotPermittedReason::DisabledByPolicy);
 }
 
 #[test]
@@ -93,7 +109,7 @@ fn grep_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "grep", "disabled by policy");
+    assert_not_permitted(err, "grep", NotPermittedReason::DisabledByPolicy);
 }
 
 #[test]
@@ -115,7 +131,7 @@ fn list_dir_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "list_dir", "disabled by policy");
+    assert_not_permitted(err, "list_dir", NotPermittedReason::DisabledByPolicy);
 }
 
 #[test]
@@ -136,7 +152,7 @@ fn stat_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "stat", "disabled by policy");
+    assert_not_permitted(err, "stat", NotPermittedReason::DisabledByPolicy);
 }
 
 #[test]
@@ -163,7 +179,7 @@ fn edit_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "edit", "disabled by policy");
+    assert_not_permitted(err, "edit", NotPermittedReason::DisabledByPolicy);
     let after = std::fs::read_to_string(&file_path).expect("read after deny");
     let after_meta = std::fs::metadata(&file_path).expect("metadata after deny");
     assert_eq!(after, before, "edit deny must not change file content");
@@ -197,7 +213,7 @@ fn patch_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "patch", "disabled by policy");
+    assert_not_permitted(err, "patch", NotPermittedReason::DisabledByPolicy);
     let after = std::fs::read_to_string(&file_path).expect("read after deny");
     let after_meta = std::fs::metadata(&file_path).expect("metadata after deny");
     assert_eq!(after, before, "patch deny must not change file content");
@@ -227,7 +243,7 @@ fn mkdir_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "mkdir", "disabled by policy");
+    assert_not_permitted(err, "mkdir", NotPermittedReason::DisabledByPolicy);
     assert!(
         !dir.path().join("sub").exists(),
         "mkdir deny must not create target directory"
@@ -258,7 +274,7 @@ fn write_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "write", "disabled by policy");
+    assert_not_permitted(err, "write", NotPermittedReason::DisabledByPolicy);
     let after = std::fs::read_to_string(&file_path).expect("read after deny");
     let after_meta = std::fs::metadata(&file_path).expect("metadata after deny");
     assert_eq!(after, before, "write deny must not change file content");
@@ -289,7 +305,7 @@ fn delete_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "delete", "disabled by policy");
+    assert_not_permitted(err, "delete", NotPermittedReason::DisabledByPolicy);
     let file_path = dir.path().join("file.txt");
     assert!(file_path.exists(), "delete deny must keep source file");
     assert_eq!(
@@ -323,7 +339,7 @@ fn move_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "move", "disabled by policy");
+    assert_not_permitted(err, "move", NotPermittedReason::DisabledByPolicy);
     assert_eq!(
         std::fs::read_to_string(&from).expect("read from after deny"),
         "from\n",
@@ -360,7 +376,7 @@ fn copy_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err, "copy_file", "disabled by policy");
+    assert_not_permitted(err, "copy_file", NotPermittedReason::DisabledByPolicy);
     assert_eq!(
         std::fs::read_to_string(&from).expect("read from after deny"),
         "from\n",
@@ -391,7 +407,7 @@ fn edit_is_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err, "edit", "is not allowed");
+    assert_not_permitted(err, "edit", NotPermittedReason::ReadOnlyRoot);
     assert_eq!(
         std::fs::read_to_string(&file_path).expect("read after deny"),
         "hello\n",
@@ -416,7 +432,7 @@ fn patch_is_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err, "patch", "is not allowed");
+    assert_not_permitted(err, "patch", NotPermittedReason::ReadOnlyRoot);
     assert_eq!(
         std::fs::read_to_string(&file_path).expect("read after deny"),
         "hello\n",
@@ -441,7 +457,7 @@ fn delete_is_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err, "delete", "is not allowed");
+    assert_not_permitted(err, "delete", NotPermittedReason::ReadOnlyRoot);
     assert!(
         file_path.exists(),
         "readonly delete deny must keep source file"
@@ -466,7 +482,7 @@ fn delete_recursive_is_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err, "delete", "is not allowed");
+    assert_not_permitted(err, "delete", NotPermittedReason::ReadOnlyRoot);
     assert!(
         sub_dir.exists(),
         "readonly recursive delete deny must keep dir"
@@ -488,7 +504,7 @@ fn mkdir_is_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err, "mkdir", "is not allowed");
+    assert_not_permitted(err, "mkdir", NotPermittedReason::ReadOnlyRoot);
     assert!(
         !dir.path().join("sub").exists(),
         "readonly mkdir deny must not create sub/"
@@ -513,7 +529,7 @@ fn write_is_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err, "write", "is not allowed");
+    assert_not_permitted(err, "write", NotPermittedReason::ReadOnlyRoot);
     assert_eq!(
         std::fs::read_to_string(&file_path).expect("read after deny"),
         "baseline\n",
@@ -541,7 +557,7 @@ fn move_is_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err, "move", "is not allowed");
+    assert_not_permitted(err, "move", NotPermittedReason::ReadOnlyRoot);
     assert_eq!(
         std::fs::read_to_string(&from).expect("read from after deny"),
         "from\n",
@@ -574,7 +590,7 @@ fn copy_is_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err, "copy_file", "is not allowed");
+    assert_not_permitted(err, "copy_file", NotPermittedReason::ReadOnlyRoot);
     assert_eq!(
         std::fs::read_to_string(&from).expect("read from after deny"),
         "from\n",
@@ -599,8 +615,17 @@ fn assert_missing_root<T: std::fmt::Debug>(result: Result<T, safe_fs_tools::Erro
     assert_root_not_found(err, "missing");
 }
 
-#[test]
-fn root_not_found_is_reported() {
+const MISSING_ROOT_ID: &str = "missing";
+
+struct MissingRootFixture {
+    _dir: tempfile::TempDir,
+    ctx: Context,
+    file_path: PathBuf,
+    from: PathBuf,
+    to: PathBuf,
+}
+
+fn setup_missing_root_fixture() -> MissingRootFixture {
     let dir = tempfile::tempdir().expect("tempdir");
     let file_path = dir.path().join("file.txt");
     let from = dir.path().join("from.txt");
@@ -610,24 +635,83 @@ fn root_not_found_is_reported() {
     std::fs::write(&to, "to\n").expect("write to");
     let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
-    assert_missing_root(
-        read_file(
-            &ctx,
-            ReadRequest {
-                root_id: "missing".to_string(),
-                path: PathBuf::from("file.txt"),
-                start_line: None,
-                end_line: None,
-            },
-        ),
-        "read",
+    MissingRootFixture {
+        _dir: dir,
+        ctx,
+        file_path,
+        from,
+        to,
+    }
+}
+
+fn assert_missing_root_side_effects(fixture: &MissingRootFixture) {
+    assert_eq!(
+        std::fs::read_to_string(&fixture.file_path).expect("read file after missing root rejects"),
+        "hello\n"
     );
+    assert_eq!(
+        std::fs::read_to_string(&fixture.from).expect("read from after missing root rejects"),
+        "from\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&fixture.to).expect("read to after missing root rejects"),
+        "to\n"
+    );
+    let sub_dir = fixture
+        .file_path
+        .parent()
+        .expect("fixture root dir")
+        .join("sub");
+    assert!(
+        !sub_dir.exists(),
+        "missing root mkdir must not create target directory"
+    );
+}
+
+#[test]
+fn missing_root_with_disabled_write_permission_reports_not_permitted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file_path = dir.path().join("file.txt");
+    std::fs::write(&file_path, "hello\n").expect("write baseline");
+
+    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
+    policy.permissions.write = false;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = write_file(
+        &ctx,
+        WriteFileRequest {
+            root_id: MISSING_ROOT_ID.to_string(),
+            path: PathBuf::from("file.txt"),
+            content: "updated\n".to_string(),
+            overwrite: true,
+            create_parents: false,
+        },
+    )
+    .expect_err("should reject");
+
+    assert_not_permitted(err, "write", NotPermittedReason::DisabledByPolicy);
+    assert_eq!(
+        std::fs::read_to_string(&file_path).expect("read after deny"),
+        "hello\n",
+        "disabled write permission must reject before missing-root handling"
+    );
+}
+
+#[test]
+fn missing_root_with_readonly_root_reports_root_not_found() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file_path = dir.path().join("file.txt");
+    std::fs::write(&file_path, "hello\n").expect("write baseline");
+
+    let policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let ctx = Context::new(policy).expect("ctx");
 
     assert_missing_root(
         write_file(
             &ctx,
             WriteFileRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 path: PathBuf::from("file.txt"),
                 content: "updated\n".to_string(),
                 overwrite: true,
@@ -636,23 +720,74 @@ fn root_not_found_is_reported() {
         ),
         "write",
     );
+    assert_eq!(
+        std::fs::read_to_string(&file_path).expect("read after deny"),
+        "hello\n",
+        "missing root must be reported before readonly root rejection"
+    );
+}
 
+#[test]
+fn root_not_found_is_reported_for_read() {
+    let fixture = setup_missing_root_fixture();
+    assert_missing_root(
+        read_file(
+            &fixture.ctx,
+            ReadRequest {
+                root_id: MISSING_ROOT_ID.to_string(),
+                path: PathBuf::from("file.txt"),
+                start_line: None,
+                end_line: None,
+            },
+        ),
+        "read",
+    );
+    assert_missing_root_side_effects(&fixture);
+}
+
+#[test]
+fn root_not_found_is_reported_for_write() {
+    let fixture = setup_missing_root_fixture();
+    assert_missing_root(
+        write_file(
+            &fixture.ctx,
+            WriteFileRequest {
+                root_id: MISSING_ROOT_ID.to_string(),
+                path: PathBuf::from("file.txt"),
+                content: "updated\n".to_string(),
+                overwrite: true,
+                create_parents: false,
+            },
+        ),
+        "write",
+    );
+    assert_missing_root_side_effects(&fixture);
+}
+
+#[test]
+fn root_not_found_is_reported_for_glob() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         glob_paths(
-            &ctx,
+            &fixture.ctx,
             GlobRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 pattern: "**/*.txt".to_string(),
             },
         ),
         "glob",
     );
+    assert_missing_root_side_effects(&fixture);
+}
 
+#[test]
+fn root_not_found_is_reported_for_grep() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         grep(
-            &ctx,
+            &fixture.ctx,
             GrepRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 query: "hello".to_string(),
                 regex: false,
                 glob: None,
@@ -660,35 +795,50 @@ fn root_not_found_is_reported() {
         ),
         "grep",
     );
+    assert_missing_root_side_effects(&fixture);
+}
 
+#[test]
+fn root_not_found_is_reported_for_list_dir() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         list_dir(
-            &ctx,
+            &fixture.ctx,
             ListDirRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 path: PathBuf::from("."),
                 max_entries: None,
             },
         ),
         "list_dir",
     );
+    assert_missing_root_side_effects(&fixture);
+}
 
+#[test]
+fn root_not_found_is_reported_for_stat() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         stat(
-            &ctx,
+            &fixture.ctx,
             StatRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 path: PathBuf::from("file.txt"),
             },
         ),
         "stat",
     );
+    assert_missing_root_side_effects(&fixture);
+}
 
+#[test]
+fn root_not_found_is_reported_for_edit() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         edit_range(
-            &ctx,
+            &fixture.ctx,
             EditRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 path: PathBuf::from("file.txt"),
                 start_line: 1,
                 end_line: 1,
@@ -697,25 +847,35 @@ fn root_not_found_is_reported() {
         ),
         "edit",
     );
+    assert_missing_root_side_effects(&fixture);
+}
 
-    #[cfg(feature = "patch")]
+#[test]
+#[cfg(feature = "patch")]
+fn root_not_found_is_reported_for_patch() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         apply_unified_patch(
-            &ctx,
+            &fixture.ctx,
             PatchRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 path: PathBuf::from("file.txt"),
                 patch: "x".to_string(),
             },
         ),
         "patch",
     );
+    assert_missing_root_side_effects(&fixture);
+}
 
+#[test]
+fn root_not_found_is_reported_for_mkdir() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         mkdir(
-            &ctx,
+            &fixture.ctx,
             MkdirRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 path: PathBuf::from("sub"),
                 create_parents: true,
                 ignore_existing: false,
@@ -723,12 +883,17 @@ fn root_not_found_is_reported() {
         ),
         "mkdir",
     );
+    assert_missing_root_side_effects(&fixture);
+}
 
+#[test]
+fn root_not_found_is_reported_for_delete() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         delete(
-            &ctx,
+            &fixture.ctx,
             DeleteRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 path: PathBuf::from("file.txt"),
                 recursive: false,
                 ignore_missing: false,
@@ -736,12 +901,17 @@ fn root_not_found_is_reported() {
         ),
         "delete",
     );
+    assert_missing_root_side_effects(&fixture);
+}
 
+#[test]
+fn root_not_found_is_reported_for_move() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         move_path(
-            &ctx,
+            &fixture.ctx,
             MovePathRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 from: PathBuf::from("from.txt"),
                 to: PathBuf::from("to.txt"),
                 overwrite: true,
@@ -750,12 +920,17 @@ fn root_not_found_is_reported() {
         ),
         "move",
     );
+    assert_missing_root_side_effects(&fixture);
+}
 
+#[test]
+fn root_not_found_is_reported_for_copy() {
+    let fixture = setup_missing_root_fixture();
     assert_missing_root(
         copy_file(
-            &ctx,
+            &fixture.ctx,
             CopyFileRequest {
-                root_id: "missing".to_string(),
+                root_id: MISSING_ROOT_ID.to_string(),
                 from: PathBuf::from("from.txt"),
                 to: PathBuf::from("to.txt"),
                 overwrite: true,
@@ -764,21 +939,5 @@ fn root_not_found_is_reported() {
         ),
         "copy_file",
     );
-
-    assert_eq!(
-        std::fs::read_to_string(&file_path).expect("read file after missing root rejects"),
-        "hello\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(&from).expect("read from after missing root rejects"),
-        "from\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(&to).expect("read to after missing root rejects"),
-        "to\n"
-    );
-    assert!(
-        !dir.path().join("sub").exists(),
-        "missing root mkdir must not create target directory"
-    );
+    assert_missing_root_side_effects(&fixture);
 }

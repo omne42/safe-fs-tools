@@ -8,25 +8,62 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
-#[cfg(unix)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
-}
-
-#[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
-}
-
 #[cfg(any(unix, windows))]
-fn ensure_parent_identity_verification_supported() -> Result<()> {
-    Ok(())
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParentIdentity {
+    #[cfg(unix)]
+    Unix { dev: u64, ino: u64 },
+    #[cfg(windows)]
+    Windows { volume_serial: u64, file_index: u64 },
 }
 
 #[cfg(not(any(unix, windows)))]
-fn ensure_parent_identity_verification_supported() -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParentIdentity;
+
+#[cfg(unix)]
+fn parent_identity_from_metadata(
+    meta: &fs::Metadata,
+    _relative_parent: &Path,
+) -> Result<ParentIdentity> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(ParentIdentity::Unix {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn parent_identity_from_metadata(
+    meta: &fs::Metadata,
+    relative_parent: &Path,
+) -> Result<ParentIdentity> {
+    use std::os::windows::fs::MetadataExt;
+
+    let Some(volume_serial) = meta.volume_serial_number() else {
+        return Err(Error::InvalidPath(format!(
+            "cannot verify parent identity for path {}",
+            relative_parent.display()
+        )));
+    };
+    let Some(file_index) = meta.file_index() else {
+        return Err(Error::InvalidPath(format!(
+            "cannot verify parent identity for path {}",
+            relative_parent.display()
+        )));
+    };
+    Ok(ParentIdentity::Windows {
+        volume_serial: u64::from(volume_serial),
+        file_index,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn parent_identity_from_metadata(
+    _meta: &fs::Metadata,
+    _relative_parent: &Path,
+) -> Result<ParentIdentity> {
     Err(Error::InvalidPath(
         "write is unsupported on this platform: cannot verify destination parent identity"
             .to_string(),
@@ -36,7 +73,7 @@ fn ensure_parent_identity_verification_supported() -> Result<()> {
 fn capture_parent_identity(
     canonical_parent: &Path,
     relative_parent: &Path,
-) -> Result<fs::Metadata> {
+) -> Result<ParentIdentity> {
     let meta = fs::symlink_metadata(canonical_parent)
         .map_err(|err| Error::io_path("symlink_metadata", relative_parent, err))?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
@@ -45,39 +82,7 @@ fn capture_parent_identity(
             relative_parent.display()
         )));
     }
-    Ok(meta)
-}
-
-#[cfg(any(unix, windows))]
-fn verify_parent_identity(
-    canonical_parent: &Path,
-    relative_parent: &Path,
-    expected_parent_meta: &fs::Metadata,
-) -> Result<()> {
-    let current_parent_meta = fs::symlink_metadata(canonical_parent)
-        .map_err(|err| Error::io_path("symlink_metadata", relative_parent, err))?;
-    if current_parent_meta.file_type().is_symlink()
-        || !current_parent_meta.is_dir()
-        || !metadata_same_file(expected_parent_meta, &current_parent_meta)
-    {
-        return Err(Error::InvalidPath(format!(
-            "parent path {} changed during operation",
-            relative_parent.display()
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn verify_parent_identity(
-    _canonical_parent: &Path,
-    _relative_parent: &Path,
-    _expected_parent_meta: &fs::Metadata,
-) -> Result<()> {
-    Err(Error::InvalidPath(
-        "write is unsupported on this platform: cannot verify destination parent identity"
-            .to_string(),
-    ))
+    parent_identity_from_metadata(&meta, relative_parent)
 }
 
 fn write_temp_file(
@@ -112,6 +117,108 @@ fn write_temp_file(
     Ok(tmp_file.into_temp_path())
 }
 
+fn commit_write<F>(
+    canonical_parent: &Path,
+    relative_parent: &Path,
+    expected_parent_identity: &ParentIdentity,
+    relative: &Path,
+    target: &Path,
+    bytes: &[u8],
+    permissions: Option<fs::Permissions>,
+    overwrite: bool,
+    map_rename_error: F,
+) -> Result<()>
+where
+    F: FnOnce(std::io::Error) -> Error,
+{
+    verify_parent_identity(canonical_parent, relative_parent, expected_parent_identity)?;
+    let tmp_path = write_temp_file(canonical_parent, relative, bytes, permissions)?;
+    verify_parent_identity(canonical_parent, relative_parent, expected_parent_identity)?;
+    super::io::rename_replace(tmp_path.as_ref(), target, overwrite).map_err(map_rename_error)?;
+    Ok(())
+}
+
+fn verify_parent_identity(
+    canonical_parent: &Path,
+    relative_parent: &Path,
+    expected_parent_identity: &ParentIdentity,
+) -> Result<()> {
+    let current_parent_meta = fs::symlink_metadata(canonical_parent)
+        .map_err(|err| Error::io_path("symlink_metadata", relative_parent, err))?;
+    if current_parent_meta.file_type().is_symlink() || !current_parent_meta.is_dir() {
+        return Err(Error::InvalidPath(format!(
+            "parent path {} changed during operation",
+            relative_parent.display()
+        )));
+    }
+    let current_parent_identity =
+        parent_identity_from_metadata(&current_parent_meta, relative_parent)?;
+    if current_parent_identity != *expected_parent_identity {
+        return Err(Error::InvalidPath(format!(
+            "parent path {} changed during operation",
+            relative_parent.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_writeonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    options.open(path)
+}
+
+#[cfg(windows)]
+fn open_writeonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .write(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn open_writeonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    let _ = path;
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "platform does not support atomic no-follow writes",
+    ))
+}
+
+fn ensure_existing_target_writable(target: &Path, relative: &Path) -> Result<()> {
+    let file = open_writeonly_nofollow(target).map_err(|err| {
+        if crate::platform_open::is_symlink_open_error(&err) {
+            return Error::InvalidPath(format!("path {} is a symlink", relative.display()));
+        }
+        Error::io_path("open_for_write", relative, err)
+    })?;
+    let meta = file
+        .metadata()
+        .map_err(|err| Error::io_path("metadata", relative, err))?;
+    if meta.file_type().is_symlink() {
+        return Err(Error::InvalidPath(format!(
+            "path {} is a symlink",
+            relative.display()
+        )));
+    }
+    if !meta.is_file() {
+        return Err(Error::InvalidPath(format!(
+            "path {} is not a regular file",
+            relative.display()
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WriteFileRequest {
     pub root_id: String,
@@ -129,6 +236,8 @@ pub struct WriteFileResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_path: Option<PathBuf>,
     pub bytes_written: u64,
+    /// Best-effort preflight observation. Concurrent writers may still turn an
+    /// apparent create into a replace before commit.
     pub created: bool,
 }
 
@@ -174,8 +283,7 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
                 root_id: request.root_id.clone(),
                 path: requested_path.clone(),
             })?;
-    ensure_parent_identity_verification_supported()?;
-    let canonical_parent_meta = capture_parent_identity(&canonical_parent, &relative_parent)?;
+    let parent_identity = capture_parent_identity(&canonical_parent, &relative_parent)?;
     let relative = relative_parent.join(file_name);
 
     if ctx.redactor.is_path_denied(&relative) {
@@ -218,17 +326,19 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         if !request.overwrite {
             return Err(Error::InvalidPath("file exists".to_string()));
         }
+        ensure_existing_target_writable(&target, &relative)?;
 
-        verify_parent_identity(&canonical_parent, &relative_parent, &canonical_parent_meta)?;
-        let tmp_path = write_temp_file(
+        commit_write(
             &canonical_parent,
+            &relative_parent,
+            &parent_identity,
             &relative,
+            &target,
             request.content.as_bytes(),
             Some(meta.permissions()),
+            true,
+            |err| Error::io_path("rename", &relative, err),
         )?;
-        verify_parent_identity(&canonical_parent, &relative_parent, &canonical_parent_meta)?;
-        super::io::rename_replace(tmp_path.as_ref(), &target, true)
-            .map_err(|err| Error::io_path("rename", &relative, err))?;
         return Ok(WriteFileResponse {
             path: relative,
             requested_path: Some(requested_path),
@@ -237,26 +347,27 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         });
     }
 
-    verify_parent_identity(&canonical_parent, &relative_parent, &canonical_parent_meta)?;
-    let tmp_path = write_temp_file(
+    commit_write(
         &canonical_parent,
+        &relative_parent,
+        &parent_identity,
         &relative,
+        &target,
         request.content.as_bytes(),
         None,
+        request.overwrite,
+        |err| {
+            if err.kind() == std::io::ErrorKind::AlreadyExists && !request.overwrite {
+                return Error::InvalidPath("file exists".to_string());
+            }
+            if err.kind() == std::io::ErrorKind::Unsupported && !request.overwrite {
+                return Error::InvalidPath(
+                    "create without overwrite is unsupported on this platform".to_string(),
+                );
+            }
+            Error::io_path("rename", &relative, err)
+        },
     )?;
-    verify_parent_identity(&canonical_parent, &relative_parent, &canonical_parent_meta)?;
-
-    super::io::rename_replace(tmp_path.as_ref(), &target, request.overwrite).map_err(|err| {
-        if err.kind() == std::io::ErrorKind::AlreadyExists && !request.overwrite {
-            return Error::InvalidPath("file exists".to_string());
-        }
-        if err.kind() == std::io::ErrorKind::Unsupported && !request.overwrite {
-            return Error::InvalidPath(
-                "create without overwrite is unsupported on this platform".to_string(),
-            );
-        }
-        Error::io_path("rename", &relative, err)
-    })?;
 
     Ok(WriteFileResponse {
         path: relative,

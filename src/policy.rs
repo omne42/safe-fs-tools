@@ -105,6 +105,49 @@ const fn default_max_line_bytes() -> usize {
     4096
 }
 
+const ROOT_ID_MAX_LEN: usize = 64;
+// Hard caps are policy-level guardrails against misconfiguration and accidental DoS.
+const MAX_READ_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
+const MAX_PATCH_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
+const MAX_WRITE_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
+const MAX_RESULTS_HARD_CAP: usize = 1_000_000;
+const MAX_WALK_ENTRIES_HARD_CAP: usize = 10_000_000;
+const MAX_WALK_FILES_HARD_CAP: usize = 5_000_000;
+const MAX_LINE_BYTES_HARD_CAP: usize = 1024 * 1024;
+
+fn is_valid_root_id(id: &str) -> bool {
+    id.as_bytes().iter().all(|byte| {
+        matches!(
+            byte,
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'_' | b'-'
+        )
+    })
+}
+
+fn validate_u64_limit(value: u64, field: &str, hard_cap: u64) -> Result<()> {
+    if value == 0 {
+        return Err(Error::InvalidPolicy(format!("{field} must be > 0")));
+    }
+    if value > hard_cap {
+        return Err(Error::InvalidPolicy(format!(
+            "{field} must be <= {hard_cap}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_usize_limit(value: usize, field: &str, hard_cap: usize) -> Result<()> {
+    if value == 0 {
+        return Err(Error::InvalidPolicy(format!("{field} must be > 0")));
+    }
+    if value > hard_cap {
+        return Err(Error::InvalidPolicy(format!(
+            "{field} must be <= {hard_cap}"
+        )));
+    }
+    Ok(())
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self {
@@ -220,6 +263,9 @@ impl SandboxPolicy {
         }
     }
 
+    /// Backward-compatible policy validation entrypoint.
+    ///
+    /// This is an alias of [`SandboxPolicy::validate_for_load`].
     /// Structural validation only: validates policy shape and limit values.
     ///
     /// This is a purely *structural* validation: it does **not** perform any filesystem IO
@@ -231,51 +277,64 @@ impl SandboxPolicy {
     /// Pattern syntax (deny globs / traversal skip globs / redact regexes) is also validated in
     /// `ops::Context::new` when compiling rule matchers.
     pub fn validate(&self) -> Result<()> {
+        self.validate_for_load()
+    }
+
+    /// Validation entrypoint for policy loading.
+    ///
+    /// This is intentionally a *load-time structural* check, not a runtime-ready check.
+    /// Runtime IO checks and matcher compilation still happen in `ops::Context::new`.
+    pub fn validate_for_load(&self) -> Result<()> {
+        self.validate_structural()
+    }
+
+    /// Structural policy validation for config loading and early checks.
+    pub fn validate_structural(&self) -> Result<()> {
         if self.roots.is_empty() {
             return Err(Error::InvalidPolicy("roots is empty".to_string()));
         }
-        if self.limits.max_read_bytes == 0 {
-            return Err(Error::InvalidPolicy(
-                "limits.max_read_bytes must be > 0".to_string(),
-            ));
+        validate_u64_limit(
+            self.limits.max_read_bytes,
+            "limits.max_read_bytes",
+            MAX_READ_BYTES_HARD_CAP,
+        )?;
+        if let Some(max_patch_bytes) = self.limits.max_patch_bytes {
+            validate_u64_limit(
+                max_patch_bytes,
+                "limits.max_patch_bytes",
+                MAX_PATCH_BYTES_HARD_CAP,
+            )?;
         }
-        if let Some(max_patch_bytes) = self.limits.max_patch_bytes
-            && max_patch_bytes == 0
-        {
-            return Err(Error::InvalidPolicy(
-                "limits.max_patch_bytes must be > 0".to_string(),
-            ));
-        }
-        if self.limits.max_write_bytes == 0 {
-            return Err(Error::InvalidPolicy(
-                "limits.max_write_bytes must be > 0".to_string(),
-            ));
-        }
-        if self.limits.max_results == 0 {
-            return Err(Error::InvalidPolicy(
-                "limits.max_results must be > 0".to_string(),
-            ));
-        }
-        if self.limits.max_walk_files == 0 {
-            return Err(Error::InvalidPolicy(
-                "limits.max_walk_files must be > 0".to_string(),
-            ));
-        }
-        if self.limits.max_walk_entries == 0 {
-            return Err(Error::InvalidPolicy(
-                "limits.max_walk_entries must be > 0".to_string(),
-            ));
-        }
+        validate_u64_limit(
+            self.limits.max_write_bytes,
+            "limits.max_write_bytes",
+            MAX_WRITE_BYTES_HARD_CAP,
+        )?;
+        validate_usize_limit(
+            self.limits.max_results,
+            "limits.max_results",
+            MAX_RESULTS_HARD_CAP,
+        )?;
+        validate_usize_limit(
+            self.limits.max_walk_files,
+            "limits.max_walk_files",
+            MAX_WALK_FILES_HARD_CAP,
+        )?;
+        validate_usize_limit(
+            self.limits.max_walk_entries,
+            "limits.max_walk_entries",
+            MAX_WALK_ENTRIES_HARD_CAP,
+        )?;
         if self.limits.max_walk_files > self.limits.max_walk_entries {
             return Err(Error::InvalidPolicy(
                 "limits.max_walk_files must be <= limits.max_walk_entries".to_string(),
             ));
         }
-        if self.limits.max_line_bytes == 0 {
-            return Err(Error::InvalidPolicy(
-                "limits.max_line_bytes must be > 0".to_string(),
-            ));
-        }
+        validate_usize_limit(
+            self.limits.max_line_bytes,
+            "limits.max_line_bytes",
+            MAX_LINE_BYTES_HARD_CAP,
+        )?;
         let mut seen_ids = std::collections::HashSet::<&str>::new();
         for root in &self.roots {
             let normalized_id = root.id.trim();
@@ -285,6 +344,18 @@ impl SandboxPolicy {
             if normalized_id != root.id {
                 return Err(Error::InvalidPolicy(format!(
                     "root.id must not contain leading/trailing whitespace: {:?}",
+                    root.id
+                )));
+            }
+            if normalized_id.len() > ROOT_ID_MAX_LEN {
+                return Err(Error::InvalidPolicy(format!(
+                    "root.id is too long: {:?} (max={})",
+                    root.id, ROOT_ID_MAX_LEN
+                )));
+            }
+            if !is_valid_root_id(normalized_id) {
+                return Err(Error::InvalidPolicy(format!(
+                    "root.id contains invalid characters: {:?} (allowed: [A-Za-z0-9._-])",
                     root.id
                 )));
             }
@@ -375,13 +446,35 @@ impl SandboxPolicy {
         Ok(root.path.join(path))
     }
 
+    /// Resolve a path against the selected root and enforce lexical root-boundary checks.
+    ///
+    /// This check is lexical only (no filesystem IO, no symlink resolution).
+    /// For canonicalized checks against existing filesystem state, use `ops::Context`.
+    pub fn resolve_path_checked(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
+        let root = self.root(root_id)?;
+        let resolved = self.resolve_path_unchecked(root_id, path)?;
+        let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
+        let normalized_root = crate::path_utils::normalize_path_lexical(&root.path);
+        if !crate::path_utils::starts_with_case_insensitive(&normalized_resolved, &normalized_root)
+        {
+            return Err(Error::OutsideRoot {
+                root_id: root_id.to_string(),
+                path: crate::path_utils::normalize_path_lexical(path),
+            });
+        }
+        Ok(resolved)
+    }
+
     /// Compatibility alias for unchecked lexical path resolution.
     ///
     /// This API does **not** enforce root-boundary checks and must not be used as a
     /// security decision point.
     ///
-    /// Prefer [`SandboxPolicy::resolve_path_unchecked`] at new callsites so API semantics are
-    /// explicit.
+    /// Prefer [`SandboxPolicy::resolve_path_checked`] for boundary-sensitive flows, or
+    /// [`SandboxPolicy::resolve_path_unchecked`] when unchecked semantics are intentional.
+    #[deprecated(
+        note = "resolve_path is unchecked and must not be used for root-boundary decisions; use resolve_path_checked or resolve_path_unchecked explicitly"
+    )]
     pub fn resolve_path(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
         self.resolve_path_unchecked(root_id, path)
     }

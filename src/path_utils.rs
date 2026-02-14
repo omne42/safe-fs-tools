@@ -14,6 +14,7 @@
 use std::borrow::Cow;
 #[cfg(windows)]
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 use globset::GlobBuilder;
@@ -84,56 +85,67 @@ pub(crate) fn build_glob_from_normalized(
 }
 
 pub(crate) fn normalize_path_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    let mut seen_prefix = false;
+    #[derive(Debug)]
+    enum Segment {
+        ParentDir,
+        Normal(OsString),
+    }
+
+    let mut path_prefix: Option<OsString> = None;
+    let mut has_root = false;
+    let mut segments: Vec<Segment> = Vec::new();
+
     for comp in path.components() {
         match comp {
             Component::CurDir => {}
             Component::ParentDir => {
-                if out.as_os_str().is_empty() {
-                    out.push("..");
-                    continue;
-                }
-
-                match out.components().next_back() {
-                    Some(Component::Normal(_)) => {
-                        out.pop();
-                    }
-                    Some(Component::ParentDir) => {
-                        out.push("..");
-                    }
-                    Some(Component::Prefix(_)) => {
-                        out.push("..");
-                    }
-                    // If we're at the filesystem root, `..` is a no-op.
-                    Some(Component::RootDir) | None => {}
-                    _ => {}
+                if matches!(segments.last(), Some(Segment::Normal(_))) {
+                    segments.pop();
+                } else if !has_root {
+                    segments.push(Segment::ParentDir);
                 }
             }
-            Component::Normal(part) => out.push(part),
+            Component::Normal(part) => segments.push(Segment::Normal(part.to_os_string())),
             Component::RootDir => {
-                if seen_prefix {
-                    // On Windows, pushing `RootDir` after `Prefix` would reset the path (dropping
-                    // the prefix). Append a separator instead.
-                    #[cfg(windows)]
-                    {
-                        out.as_mut_os_string()
-                            .push(std::path::MAIN_SEPARATOR.to_string());
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        out.push(comp.as_os_str());
-                    }
-                } else {
-                    out.push(comp.as_os_str());
-                }
+                has_root = true;
             }
-            Component::Prefix(prefix) => {
-                seen_prefix = true;
-                out.push(prefix.as_os_str());
+            Component::Prefix(prefix_comp) => {
+                path_prefix = Some(prefix_comp.as_os_str().to_os_string());
             }
         }
     }
+
+    let mut out = PathBuf::new();
+    if let Some(prefix) = path_prefix {
+        out.push(Path::new(&prefix));
+    }
+    if has_root {
+        if out.as_os_str().is_empty() {
+            #[cfg(windows)]
+            out.push("\\");
+            #[cfg(not(windows))]
+            out.push("/");
+        } else {
+            // On Windows, pushing `RootDir` after `Prefix` would reset the path (dropping
+            // the prefix). Append a separator instead.
+            #[cfg(windows)]
+            {
+                out.as_mut_os_string()
+                    .push(std::path::MAIN_SEPARATOR.to_string());
+            }
+            #[cfg(not(windows))]
+            {
+                out.push("/");
+            }
+        }
+    }
+    for segment in segments {
+        match segment {
+            Segment::ParentDir => out.push(".."),
+            Segment::Normal(part) => out.push(part),
+        }
+    }
+
     if out.as_os_str().is_empty() && path.is_relative() {
         PathBuf::from(".")
     } else {
@@ -147,8 +159,7 @@ fn os_str_eq_case_insensitive_windows(a: &OsStr, b: &OsStr) -> bool {
     use std::os::windows::ffi::OsStrExt;
     use std::ptr;
 
-    // SAFETY: `CompareStringOrdinal` is called with valid pointers into stack-owned UTF-16
-    // buffers, explicit lengths, and no pointers escape the call.
+    // SAFETY: foreign function declaration for `CompareStringOrdinal`.
     #[link(name = "Kernel32")]
     unsafe extern "system" {
         #[link_name = "CompareStringOrdinal"]
@@ -183,7 +194,12 @@ fn os_str_eq_case_insensitive_windows(a: &OsStr, b: &OsStr) -> bool {
         b_wide.as_ptr()
     };
 
-    // SAFETY: pointers and lengths describe valid UTF-16 buffers for the duration of the call.
+    // SAFETY:
+    // - `a_ptr`/`b_ptr` are either null for empty strings or point to valid UTF-16 buffers owned
+    //   by `a_wide`/`b_wide`.
+    // - `a_len`/`b_len` are checked `usize -> i32` conversions that match those buffers.
+    // - Both vectors live across the FFI call, and pointers do not escape.
+    // - `ignore_case = 1` requests ordinal, case-insensitive comparison.
     unsafe { compare_string_ordinal(a_ptr, a_len, b_ptr, b_len, 1) == CSTR_EQUAL }
 }
 
@@ -228,14 +244,28 @@ fn is_lexically_normalized_for_boundary(path: &Path) -> bool {
     path.as_os_str().is_empty() || normalize_path_lexical(path) == path
 }
 
+#[inline]
+fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
+    if is_lexically_normalized_for_boundary(path) {
+        Cow::Borrowed(path)
+    } else {
+        Cow::Owned(normalize_path_lexical(path))
+    }
+}
+
 /// A case-insensitive `Path::starts_with` for Windows paths.
 ///
-/// This function is purely lexical and does not resolve `.`/`..` or symlinks.
-/// For boundary/security checks, callers must pass canonicalized or otherwise normalized paths.
+/// This function is purely lexical and does not resolve symlinks.
+/// Inputs are normalized lexically before comparison.
 ///
 /// On non-Windows platforms this is equivalent to `Path::starts_with`.
 #[inline]
 pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
+    let path = normalized_for_boundary(path);
+    let prefix = normalized_for_boundary(prefix);
+    let path = path.as_ref();
+    let prefix = prefix.as_ref();
+
     debug_assert!(
         is_lexically_normalized_for_boundary(path),
         "starts_with_case_insensitive requires normalized `path` input, got: {path:?}"
@@ -247,8 +277,6 @@ pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
 
     #[cfg(windows)]
     {
-        use std::path::Component;
-
         let mut path_components = path.components();
         for prefix_comp in prefix.components() {
             let Some(path_comp) = path_components.next() else {
@@ -270,12 +298,17 @@ pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
 
 /// A case-insensitive `Path::strip_prefix` for Windows paths.
 ///
-/// This function is purely lexical and does not resolve `.`/`..` or symlinks.
-/// For boundary/security checks, callers must pass canonicalized or otherwise normalized paths.
+/// This function is purely lexical and does not resolve symlinks.
+/// Inputs are normalized lexically before comparison.
 ///
 /// On non-Windows platforms this is equivalent to `Path::strip_prefix`.
 #[inline]
 pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
+    let path = normalized_for_boundary(path);
+    let prefix = normalized_for_boundary(prefix);
+    let path = path.as_ref();
+    let prefix = prefix.as_ref();
+
     debug_assert!(
         is_lexically_normalized_for_boundary(path),
         "strip_prefix_case_insensitive requires normalized `path` input, got: {path:?}"
@@ -364,17 +397,66 @@ mod tests {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "requires normalized `path` input")]
-    fn starts_with_case_insensitive_panics_on_unnormalized_path_in_debug() {
-        let _ = starts_with_case_insensitive(Path::new("a/./b"), Path::new("a"));
+    fn starts_with_case_insensitive_normalizes_unnormalized_inputs() {
+        assert!(starts_with_case_insensitive(
+            Path::new("a/./b"),
+            Path::new("./a")
+        ));
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "requires normalized `prefix` input")]
-    fn strip_prefix_case_insensitive_panics_on_unnormalized_prefix_in_debug() {
-        let _ = strip_prefix_case_insensitive(Path::new("a/b"), Path::new("a/./b"));
+    fn strip_prefix_case_insensitive_normalizes_unnormalized_inputs() {
+        assert_eq!(
+            strip_prefix_case_insensitive(Path::new("a/./b/c"), Path::new("./a/b")),
+            Some(PathBuf::from("c"))
+        );
+    }
+
+    #[test]
+    fn normalize_path_lexical_handles_deep_paths() {
+        let mut input = PathBuf::new();
+        for _ in 0..10_000 {
+            input.push("a");
+        }
+        for _ in 0..9_999 {
+            input.push("..");
+        }
+        input.push("tail");
+
+        assert_eq!(
+            normalize_path_lexical(&input),
+            PathBuf::from("a").join("tail")
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn normalize_path_lexical_handles_absolute_paths() {
+        assert_eq!(
+            normalize_path_lexical(Path::new("/../etc")),
+            PathBuf::from("/etc")
+        );
+        assert_eq!(
+            normalize_path_lexical(Path::new("/a/./b")),
+            PathBuf::from("/a/b")
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn normalize_path_lexical_handles_windows_prefix_paths() {
+        assert_eq!(
+            normalize_path_lexical(Path::new(r"C:\foo\..\bar")),
+            PathBuf::from(r"C:\bar")
+        );
+        assert_eq!(
+            normalize_path_lexical(Path::new(r"\\?\C:\foo\..")),
+            PathBuf::from("\\\\?\\C:\\")
+        );
+        assert_eq!(
+            normalize_path_lexical(Path::new(r"\\server\share\a\..")),
+            PathBuf::from("\\\\server\\share\\")
+        );
     }
 
     #[test]
@@ -434,6 +516,41 @@ mod tests {
         assert_eq!(
             strip_prefix_case_insensitive(path, Path::new("")),
             path.strip_prefix(Path::new("")).ok().map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn os_str_eq_case_insensitive_windows_handles_empty_and_unicode() {
+        use std::ffi::OsStr;
+
+        assert!(os_str_eq_case_insensitive_windows(
+            OsStr::new(""),
+            OsStr::new("")
+        ));
+        assert!(os_str_eq_case_insensitive_windows(
+            OsStr::new("Straße"),
+            OsStr::new("straße")
+        ));
+        assert!(!os_str_eq_case_insensitive_windows(
+            OsStr::new("alpha"),
+            OsStr::new("beta")
+        ));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn starts_with_case_insensitive_matches_device_namespace_prefixes() {
+        assert!(starts_with_case_insensitive(
+            Path::new(r"\\.\COM1\Logs\Today.txt"),
+            Path::new(r"\\.\com1\logs")
+        ));
+        assert_eq!(
+            strip_prefix_case_insensitive(
+                Path::new(r"\\.\COM1\Logs\Today.txt"),
+                Path::new(r"\\.\com1\logs")
+            ),
+            Some(PathBuf::from("Today.txt"))
         );
     }
 }

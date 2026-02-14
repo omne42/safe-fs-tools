@@ -1,11 +1,11 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-use super::Context;
+use super::{Context, io::FileIdentity};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatRequest {
@@ -24,6 +24,8 @@ pub enum StatKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatResponse {
     pub path: PathBuf,
+    // Kept as `Option` for response-shape compatibility with other ops; this endpoint always
+    // returns `Some(...)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_path: Option<PathBuf>,
     #[serde(rename = "type")]
@@ -38,6 +40,30 @@ pub struct StatResponse {
     pub readonly: bool,
 }
 
+impl StatResponse {
+    fn new(
+        path: PathBuf,
+        requested_path: PathBuf,
+        kind: StatKind,
+        size_bytes: u64,
+        modified_ms: Option<u64>,
+        accessed_ms: Option<u64>,
+        created_ms: Option<u64>,
+        readonly: bool,
+    ) -> Self {
+        Self {
+            path,
+            requested_path: Some(requested_path),
+            kind,
+            size_bytes,
+            modified_ms,
+            accessed_ms,
+            created_ms,
+            readonly,
+        }
+    }
+}
+
 fn system_time_to_millis(value: std::time::SystemTime) -> Option<u64> {
     value
         .duration_since(std::time::UNIX_EPOCH)
@@ -47,6 +73,81 @@ fn system_time_to_millis(value: std::time::SystemTime) -> Option<u64> {
 
 fn metadata_time_to_millis(value: std::io::Result<std::time::SystemTime>) -> Option<u64> {
     value.ok().and_then(system_time_to_millis)
+}
+
+fn file_identity_from_metadata(meta: &fs::Metadata) -> Option<FileIdentity> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        Some(FileIdentity::Unix {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        })
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        Some(FileIdentity::Windows {
+            volume_serial: u64::from(meta.volume_serial_number()?),
+            file_index: meta.file_index()?,
+        })
+    }
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        let _ = meta;
+        None
+    }
+}
+
+fn revalidate_path_stability(
+    ctx: &Context,
+    request: &StatRequest,
+    canonical_path: &Path,
+    relative_path: &Path,
+    requested_path: &Path,
+    expected_identity: FileIdentity,
+) -> Result<()> {
+    let (rechecked_canonical, rechecked_relative, rechecked_requested) =
+        ctx.canonical_path_in_root(&request.root_id, &request.path)?;
+
+    if rechecked_canonical != canonical_path
+        || rechecked_relative != relative_path
+        || rechecked_requested != requested_path
+    {
+        return Err(Error::InvalidPath(format!(
+            "path {} changed during operation",
+            relative_path.display()
+        )));
+    }
+
+    let rechecked_meta = fs::symlink_metadata(canonical_path)
+        .map_err(|err| Error::io_path("symlink_metadata", requested_path, err))?;
+    if rechecked_meta.file_type().is_symlink() {
+        return Err(Error::InvalidPath(format!(
+            "path {} changed during operation",
+            relative_path.display()
+        )));
+    }
+
+    match file_identity_from_metadata(&rechecked_meta) {
+        Some(actual_identity) if actual_identity == expected_identity => {}
+        Some(_) => {
+            return Err(Error::InvalidPath(format!(
+                "path {} changed during operation",
+                relative_path.display()
+            )));
+        }
+        None => {
+            return Err(Error::InvalidPath(format!(
+                "cannot verify identity for path {} on this platform",
+                relative_path.display()
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
@@ -60,7 +161,7 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
     let meta = fs::symlink_metadata(&path)
-        .map_err(|err| Error::io_path("symlink_metadata", &relative, err))?;
+        .map_err(|err| Error::io_path("symlink_metadata", &requested_path, err))?;
     // This only detects final-component symlink races; it is not full TOCTOU protection.
     if meta.file_type().is_symlink() {
         return Err(Error::InvalidPath(format!(
@@ -68,6 +169,24 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
             relative.display()
         )));
     }
+
+    let expected_identity = file_identity_from_metadata(&meta).ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "cannot verify identity for path {} on this platform",
+            relative.display()
+        ))
+    })?;
+
+    // Re-resolve after metadata read to narrow the path-rebinding window on parent components.
+    revalidate_path_stability(
+        ctx,
+        &request,
+        &path,
+        &relative,
+        &requested_path,
+        expected_identity,
+    )?;
+
     let kind = if meta.is_file() {
         StatKind::File
     } else if meta.is_dir() {
@@ -84,14 +203,14 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
     let created_ms = metadata_time_to_millis(meta.created());
     let readonly = meta.permissions().readonly();
 
-    Ok(StatResponse {
-        path: relative,
-        requested_path: Some(requested_path),
+    Ok(StatResponse::new(
+        relative,
+        requested_path,
         kind,
         size_bytes,
         modified_ms,
         accessed_ms,
         created_ms,
         readonly,
-    })
+    ))
 }

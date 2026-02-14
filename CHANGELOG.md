@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Batch review/apply refresh (`10` 并发) across `cli`/`src/ops`/`tests`: tightened error-path consistency, reduced deeply nested control flow, and normalized formatting/readability in hot and boundary-sensitive paths.
+- Path-resolution contract hardening: internal lexical resolve flow now uses `resolve_path_checked` for explicit root-boundary validation semantics.
 - Batch review-driven maintenance sweep across core ops/CLI/tests: tightened path/permission/error handling contracts, reduced control-flow complexity, and aligned helper APIs with clearer ownership and typing boundaries.
 - Review follow-up refactor/hardening sweep: strengthened root-relative path contract validation for mutating ops, tightened IO/path error typing and redaction plumbing, and expanded cross-op regression coverage in `tests/*`.
 - Internal refactor: flattened traversal walk error/symlink handling into focused helpers in `src/ops/traversal/walk.rs` to reduce nested control flow.
@@ -59,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `copy_file` replacement commit path handling now avoids `TempPath::as_ref()` type ambiguity by using an explicit `&Path` binding, restoring clean `cargo check` on current toolchain.
 - Regression cleanup after bulk review apply: restored `mkdir` leaf-validation contract, restored default test redaction/permission baseline, aligned read-range error wording back to `invalid line range`, and normalized missing-parent metadata error tagging in directory resolution.
 - Tests: expanded `glob` edge coverage for missing derived prefixes and `.` pattern stability.
 - CLI tests: Unix FIFO helper now treats `EEXIST` as success, reducing flaky failures in retry/parallel test scenarios.

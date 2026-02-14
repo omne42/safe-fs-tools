@@ -21,7 +21,7 @@ fn open_policy_file(path: &Path) -> Result<std::fs::File> {
             ));
         }
         if err.kind() == std::io::ErrorKind::Unsupported {
-            return Error::InvalidPath(
+            return Error::NotPermitted(
                 "loading policy files on this platform requires an atomic no-follow open primitive"
                     .to_string(),
             );
@@ -66,12 +66,16 @@ pub fn load_policy(path: impl AsRef<Path>) -> Result<SandboxPolicy> {
     load_policy_limited(path, DEFAULT_MAX_POLICY_BYTES)
 }
 
-fn detect_policy_format(path: &Path) -> Result<PolicyFormat> {
+fn detect_policy_format(path: &Path) -> Result<(PolicyFormat, bool)> {
     match path.extension() {
-        None => Ok(PolicyFormat::Toml),
+        None => match path.file_name().and_then(|name| name.to_str()) {
+            Some(name) if name.eq_ignore_ascii_case(".json") => Ok((PolicyFormat::Json, false)),
+            Some(name) if name.eq_ignore_ascii_case(".toml") => Ok((PolicyFormat::Toml, false)),
+            _ => Ok((PolicyFormat::Toml, true)),
+        },
         Some(ext) => match ext.to_str() {
-            Some(ext) if ext.eq_ignore_ascii_case("json") => Ok(PolicyFormat::Json),
-            Some(ext) if ext.eq_ignore_ascii_case("toml") => Ok(PolicyFormat::Toml),
+            Some(ext) if ext.eq_ignore_ascii_case("json") => Ok((PolicyFormat::Json, false)),
+            Some(ext) if ext.eq_ignore_ascii_case("toml") => Ok((PolicyFormat::Toml, false)),
             Some(other) => Err(Error::InvalidPolicy(format!(
                 "unsupported policy format {other:?}; expected .toml or .json"
             ))),
@@ -88,10 +92,37 @@ fn detect_policy_format(path: &Path) -> Result<PolicyFormat> {
 /// Format detection is by file extension:
 /// - `.json` => JSON
 /// - `.toml` or no extension => TOML
+/// - hidden file names `.json` / `.toml` are also recognized explicitly
+///
+/// For no-extension paths, TOML is inferred by default. Use
+/// [`load_policy_limited_with_format`] to disable format inference.
 ///
 /// This rejects symlink targets for the final path component and non-regular files
 /// (FIFOs, sockets, device nodes) to avoid blocking behavior and related DoS risks.
 pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<SandboxPolicy> {
+    let path = path.as_ref();
+    let (format, inferred_default_toml) = detect_policy_format(path)?;
+    load_policy_limited_inner(path, max_bytes, format, inferred_default_toml)
+}
+
+/// Load and validate a policy file from disk with a byte limit and explicit format.
+///
+/// This is equivalent to [`load_policy_limited`] except it bypasses extension-based
+/// format inference.
+pub fn load_policy_limited_with_format(
+    path: impl AsRef<Path>,
+    max_bytes: u64,
+    format: PolicyFormat,
+) -> Result<SandboxPolicy> {
+    load_policy_limited_inner(path.as_ref(), max_bytes, format, false)
+}
+
+fn load_policy_limited_inner(
+    path: &Path,
+    max_bytes: u64,
+    format: PolicyFormat,
+    inferred_default_toml: bool,
+) -> Result<SandboxPolicy> {
     if max_bytes == 0 {
         return Err(Error::InvalidPolicy(
             "max policy bytes must be > 0".to_string(),
@@ -103,8 +134,6 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
         )));
     }
 
-    let path = path.as_ref();
-    let format = detect_policy_format(path)?;
     let file = open_policy_file(path)?;
     let meta = file
         .metadata()
@@ -117,7 +146,8 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
     }
     let meta_len = meta.len();
     if meta_len > max_bytes {
-        return Err(Error::InputTooLarge {
+        return Err(Error::FileTooLarge {
+            path: path.to_path_buf(),
             size_bytes: meta_len,
             max_bytes,
         });
@@ -131,7 +161,8 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
 
     let read_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     if read_size > max_bytes {
-        return Err(Error::InputTooLarge {
+        return Err(Error::FileTooLarge {
+            path: path.to_path_buf(),
             size_bytes: read_size,
             max_bytes,
         });
@@ -139,5 +170,14 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
 
     let raw =
         std::str::from_utf8(&bytes).map_err(|err| Error::invalid_utf8(path.to_path_buf(), err))?;
-    parse_policy(raw, format)
+    let parsed = parse_policy(raw, format);
+    if inferred_default_toml {
+        return parsed.map_err(|err| match err {
+            Error::InvalidPolicy(msg) => Error::InvalidPolicy(format!(
+                "{msg}; policy format was inferred as TOML because the path has no extension"
+            )),
+            other => other,
+        });
+    }
+    parsed
 }

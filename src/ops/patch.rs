@@ -1,6 +1,6 @@
-#[cfg(feature = "patch")]
-use std::path::Path;
 use std::path::PathBuf;
+#[cfg(feature = "patch")]
+use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +10,23 @@ use super::Context;
 
 #[cfg(feature = "patch")]
 use diffy::{Line, Patch, apply};
+
+#[cfg(feature = "patch")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatchHeaderPathError {
+    EmptyPath,
+    AbsolutePath,
+    ParentDir,
+    WindowsPrefix,
+}
+
+#[cfg(feature = "patch")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatchHeaderMatchResult {
+    Match,
+    Mismatch,
+    Invalid(PatchHeaderPathError),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchRequest {
@@ -110,23 +127,31 @@ fn ensure_patch_headers_match_target(
     requested_path: &Path,
     relative: &Path,
 ) -> Result<()> {
-    if patch_uses_diffy_default_filenames(patch) {
-        return Err(Error::Patch(format!(
-            "{}: patch headers must include target path; default 'original'/'modified' headers are not allowed",
-            relative.display()
-        )));
-    }
-
     let original_header = required_patch_header("original", patch.original(), relative)?;
     let modified_header = required_patch_header("modified", patch.modified(), relative)?;
+    if patch_uses_diffy_default_filenames(original_header, modified_header) {
+        return Ok(());
+    }
+    let allow_git_prefix_strip =
+        patch_headers_form_git_prefixed_pair(original_header, modified_header);
 
     for (label, header) in [("original", original_header), ("modified", modified_header)] {
-        if !patch_header_matches_path(header, requested_path) {
-            return Err(Error::Patch(format!(
-                "{}: patch {label} header '{header}' does not match target '{}'",
-                relative.display(),
-                requested_path.display()
-            )));
+        match patch_header_matches_path(header, requested_path, allow_git_prefix_strip) {
+            PatchHeaderMatchResult::Match => {}
+            PatchHeaderMatchResult::Mismatch => {
+                return Err(Error::Patch(format!(
+                    "{}: patch {label} header '{header}' does not match target '{}'",
+                    relative.display(),
+                    requested_path.display()
+                )));
+            }
+            PatchHeaderMatchResult::Invalid(kind) => {
+                return Err(Error::Patch(format!(
+                    "{}: patch {label} header '{header}' is invalid ({})",
+                    relative.display(),
+                    patch_header_path_error_message(kind)
+                )));
+            }
         }
     }
 
@@ -148,8 +173,8 @@ fn required_patch_header<'a>(
 }
 
 #[cfg(feature = "patch")]
-fn patch_uses_diffy_default_filenames(patch: &Patch<'_, str>) -> bool {
-    matches!(patch.original(), Some("original")) && matches!(patch.modified(), Some("modified"))
+fn patch_uses_diffy_default_filenames(original_header: &str, modified_header: &str) -> bool {
+    original_header == "original" && modified_header == "modified"
 }
 
 #[cfg(feature = "patch")]
@@ -175,12 +200,40 @@ fn estimate_patched_content_len(content_len: usize, patch: &Patch<'_, str>) -> O
 }
 
 #[cfg(feature = "patch")]
-fn patch_header_matches_path(header: &str, requested_path: &Path) -> bool {
-    let normalized_header = crate::path_utils_internal::normalize_path_lexical(Path::new(
-        strip_common_patch_prefix(header),
-    ));
+fn patch_header_matches_path(
+    header: &str,
+    requested_path: &Path,
+    allow_git_prefix_strip: bool,
+) -> PatchHeaderMatchResult {
     let normalized_requested = crate::path_utils_internal::normalize_path_lexical(requested_path);
-    normalized_paths_match(&normalized_header, &normalized_requested)
+    let mut invalid = None;
+
+    match normalized_patch_header_path(header, false) {
+        NormalizedPatchHeaderPath::Path(normalized_header) => {
+            if normalized_paths_match(&normalized_header, &normalized_requested) {
+                return PatchHeaderMatchResult::Match;
+            }
+        }
+        NormalizedPatchHeaderPath::Invalid(kind) => invalid = Some(kind),
+        NormalizedPatchHeaderPath::MissingGitPrefix => {}
+    }
+
+    if allow_git_prefix_strip {
+        match normalized_patch_header_path(header, true) {
+            NormalizedPatchHeaderPath::Path(normalized_header) => {
+                if normalized_paths_match(&normalized_header, &normalized_requested) {
+                    return PatchHeaderMatchResult::Match;
+                }
+            }
+            NormalizedPatchHeaderPath::Invalid(kind) => invalid = Some(kind),
+            NormalizedPatchHeaderPath::MissingGitPrefix => {}
+        }
+    }
+
+    if let Some(kind) = invalid {
+        return PatchHeaderMatchResult::Invalid(kind);
+    }
+    PatchHeaderMatchResult::Mismatch
 }
 
 #[cfg(feature = "patch")]
@@ -190,19 +243,84 @@ fn normalized_paths_match(a: &Path, b: &Path) -> bool {
 }
 
 #[cfg(feature = "patch")]
-fn strip_common_patch_prefix(header: &str) -> &str {
+fn patch_headers_form_git_prefixed_pair(original_header: &str, modified_header: &str) -> bool {
+    (strip_prefixed_non_empty(original_header, "a/").is_some()
+        && strip_prefixed_non_empty(modified_header, "b/").is_some())
+        || (strip_prefixed_non_empty(original_header, "b/").is_some()
+            && strip_prefixed_non_empty(modified_header, "a/").is_some())
+}
+
+#[cfg(feature = "patch")]
+enum NormalizedPatchHeaderPath {
+    Path(PathBuf),
+    Invalid(PatchHeaderPathError),
+    MissingGitPrefix,
+}
+
+#[cfg(feature = "patch")]
+fn normalized_patch_header_path(header: &str, strip_git_prefix: bool) -> NormalizedPatchHeaderPath {
     let mut value = header;
-    match value
-        .strip_prefix("a/")
-        .or_else(|| value.strip_prefix("b/"))
-    {
-        Some(stripped) if !stripped.is_empty() => value = stripped,
-        _ => {}
+    if strip_git_prefix {
+        value = match strip_git_patch_prefix(value) {
+            Some(stripped) => stripped,
+            None => return NormalizedPatchHeaderPath::MissingGitPrefix,
+        };
     }
+    value = strip_leading_current_dir_segments(value);
+    if value.is_empty() {
+        return NormalizedPatchHeaderPath::Invalid(PatchHeaderPathError::EmptyPath);
+    }
+
+    let header_path = Path::new(value);
+    if let Some(kind) = patch_header_path_error(header_path) {
+        return NormalizedPatchHeaderPath::Invalid(kind);
+    }
+
+    NormalizedPatchHeaderPath::Path(crate::path_utils_internal::normalize_path_lexical(
+        header_path,
+    ))
+}
+
+#[cfg(feature = "patch")]
+fn strip_git_patch_prefix(header: &str) -> Option<&str> {
+    strip_prefixed_non_empty(header, "a/").or_else(|| strip_prefixed_non_empty(header, "b/"))
+}
+
+#[cfg(feature = "patch")]
+fn strip_prefixed_non_empty<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    let stripped = value.strip_prefix(prefix)?;
+    (!stripped.is_empty()).then_some(stripped)
+}
+
+#[cfg(feature = "patch")]
+fn strip_leading_current_dir_segments(mut value: &str) -> &str {
     while let Some(stripped) = value.strip_prefix("./") {
         value = stripped;
     }
     value
+}
+
+#[cfg(feature = "patch")]
+fn patch_header_path_error(path: &Path) -> Option<PatchHeaderPathError> {
+    for component in path.components() {
+        match component {
+            Component::ParentDir => return Some(PatchHeaderPathError::ParentDir),
+            Component::RootDir => return Some(PatchHeaderPathError::AbsolutePath),
+            Component::Prefix(_) => return Some(PatchHeaderPathError::WindowsPrefix),
+            _ => {}
+        }
+    }
+    None
+}
+
+#[cfg(feature = "patch")]
+const fn patch_header_path_error_message(kind: PatchHeaderPathError) -> &'static str {
+    match kind {
+        PatchHeaderPathError::EmptyPath => "empty path",
+        PatchHeaderPathError::AbsolutePath => "absolute path",
+        PatchHeaderPathError::ParentDir => "parent-dir segment",
+        PatchHeaderPathError::WindowsPrefix => "windows path prefix",
+    }
 }
 
 #[cfg(all(test, feature = "patch"))]
@@ -224,14 +342,14 @@ mod tests {
 
     #[test]
     fn patch_header_prefixes_are_normalized_before_compare() {
-        assert!(patch_header_matches_path(
-            "a/./nested/file.txt",
-            Path::new("nested/file.txt")
-        ));
+        assert_eq!(
+            patch_header_matches_path("a/./nested/file.txt", Path::new("nested/file.txt"), true),
+            PatchHeaderMatchResult::Match
+        );
     }
 
     #[test]
-    fn diffy_default_headers_are_rejected() {
+    fn diffy_default_headers_are_accepted() {
         let patch = Patch::from_str(
             "\
 --- original
@@ -243,16 +361,8 @@ mod tests {
         )
         .expect("parse patch");
 
-        let err =
-            ensure_patch_headers_match_target(&patch, Path::new("file.txt"), Path::new("file.txt"))
-                .expect_err("default headers should be rejected");
-        match err {
-            Error::Patch(msg) => assert!(
-                msg.contains("default 'original'/'modified' headers are not allowed"),
-                "unexpected message: {msg}"
-            ),
-            other => panic!("unexpected error: {other:?}"),
-        }
+        ensure_patch_headers_match_target(&patch, Path::new("file.txt"), Path::new("file.txt"))
+            .expect("default headers should be accepted");
     }
 
     #[test]
@@ -277,6 +387,132 @@ mod tests {
     }
 
     #[test]
+    fn literal_a_prefixed_target_path_is_accepted_without_git_prefix_stripping() {
+        let patch = Patch::from_str(
+            "\
+--- a/file.txt
++++ a/file.txt
+@@ -1 +1 @@
+-one
++ONE
+",
+        )
+        .expect("parse patch");
+
+        ensure_patch_headers_match_target(&patch, Path::new("a/file.txt"), Path::new("a/file.txt"))
+            .expect("literal a/ path should match");
+    }
+
+    #[test]
+    fn literal_b_prefixed_target_path_is_accepted_without_git_prefix_stripping() {
+        let patch = Patch::from_str(
+            "\
+--- b/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-one
++ONE
+",
+        )
+        .expect("parse patch");
+
+        ensure_patch_headers_match_target(&patch, Path::new("b/file.txt"), Path::new("b/file.txt"))
+            .expect("literal b/ path should match");
+    }
+
+    #[test]
+    fn patch_headers_with_parent_dir_segments_are_rejected() {
+        let patch = Patch::from_str(
+            "\
+--- a/../file.txt
++++ b/../file.txt
+@@ -1 +1 @@
+-one
++ONE
+",
+        )
+        .expect("parse patch");
+
+        let err =
+            ensure_patch_headers_match_target(&patch, Path::new("file.txt"), Path::new("file.txt"))
+                .expect_err("parent-dir segments should be rejected");
+        match err {
+            Error::Patch(message) => {
+                assert!(
+                    message.contains("a/../file.txt"),
+                    "unexpected message: {message}"
+                );
+                assert!(
+                    message.contains("is invalid (parent-dir segment)"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn patch_headers_with_absolute_paths_are_rejected() {
+        let patch = Patch::from_str(
+            "\
+--- /abs/file.txt
++++ /abs/file.txt
+@@ -1 +1 @@
+-one
++ONE
+",
+        )
+        .expect("parse patch");
+
+        let err = ensure_patch_headers_match_target(
+            &patch,
+            Path::new("abs/file.txt"),
+            Path::new("abs/file.txt"),
+        )
+        .expect_err("absolute headers should be rejected");
+        match err {
+            Error::Patch(message) => {
+                assert!(
+                    message.contains("/abs/file.txt"),
+                    "unexpected message: {message}"
+                );
+                assert!(
+                    message.contains("is invalid (absolute path)"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn patch_headers_with_mismatched_target_are_rejected() {
+        let patch = Patch::from_str(
+            "\
+--- a/other.txt
++++ b/other.txt
+@@ -1 +1 @@
+-one
++ONE
+",
+        )
+        .expect("parse patch");
+
+        let err =
+            ensure_patch_headers_match_target(&patch, Path::new("file.txt"), Path::new("file.txt"))
+                .expect_err("mismatched headers should be rejected");
+        match err {
+            Error::Patch(message) => {
+                assert!(
+                    message.contains("does not match target"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn estimate_patched_content_len_tracks_insert_delete_delta() {
         let patch = Patch::from_str(
             "\
@@ -295,18 +531,18 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn patch_header_compare_is_case_insensitive_on_windows() {
-        assert!(patch_header_matches_path(
-            "a/file.txt",
-            Path::new("File.txt")
-        ));
+        assert_eq!(
+            patch_header_matches_path("a/file.txt", Path::new("File.txt"), true),
+            PatchHeaderMatchResult::Match
+        );
     }
 
     #[cfg(not(windows))]
     #[test]
     fn patch_header_compare_remains_case_sensitive_on_non_windows() {
-        assert!(!patch_header_matches_path(
-            "a/file.txt",
-            Path::new("File.txt")
-        ));
+        assert_eq!(
+            patch_header_matches_path("a/file.txt", Path::new("File.txt"), true),
+            PatchHeaderMatchResult::Mismatch
+        );
     }
 }

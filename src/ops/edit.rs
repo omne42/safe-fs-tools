@@ -34,47 +34,39 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
     if request.start_line == 0 || request.end_line == 0 || request.start_line > request.end_line {
-        return Err(invalid_edit_range(
-            &relative,
-            format!(
-                "invalid line range {}..{}",
-                request.start_line, request.end_line
-            ),
-        ));
+        return Err(invalid_edit_range(format!(
+            "invalid line range: {}..{}",
+            request.start_line, request.end_line
+        )));
     }
+
+    let start = usize::try_from(request.start_line - 1).map_err(|_| {
+        invalid_edit_range(format!(
+            "invalid line range: line number too large: {}",
+            request.start_line
+        ))
+    })?;
+    let end = usize::try_from(request.end_line - 1).map_err(|_| {
+        invalid_edit_range(format!(
+            "invalid line range: line number too large: {}",
+            request.end_line
+        ))
+    })?;
 
     let (content, identity) = super::io::read_string_limited_with_identity(
         &path,
         &relative,
         ctx.policy.limits.max_read_bytes,
     )?;
-    let lines: Vec<&str> = if content.is_empty() {
-        Vec::new()
-    } else {
-        content.split_inclusive('\n').collect()
-    };
-    let start = usize::try_from(request.start_line - 1).map_err(|_| {
-        invalid_edit_range(
-            &relative,
-            format!("line number too large: {}", request.start_line),
-        )
-    })?;
-    let end = usize::try_from(request.end_line - 1).map_err(|_| {
-        invalid_edit_range(
-            &relative,
-            format!("line number too large: {}", request.end_line),
-        )
-    })?;
+    let lines = split_lines_preserving_endings(&content);
+
     if start >= lines.len() || end >= lines.len() {
-        return Err(invalid_edit_range(
-            &relative,
-            format!(
-                "line range {}..{} out of bounds (file has {} lines)",
-                request.start_line,
-                request.end_line,
-                lines.len()
-            ),
-        ));
+        return Err(invalid_edit_range(format!(
+            "invalid line range: {}..{} out of bounds (file has {} lines)",
+            request.start_line,
+            request.end_line,
+            lines.len()
+        )));
     }
 
     let removed_bytes = lines[start..=end].iter().try_fold(0_u64, |total, line| {
@@ -87,13 +79,7 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         })
     })?;
 
-    let newline = if lines[end].ends_with("\r\n") {
-        "\r\n"
-    } else if lines[end].ends_with('\n') {
-        "\n"
-    } else {
-        ""
-    };
+    let newline = line_ending(lines[end]);
 
     let mut replacement = normalize_replacement_line_endings(&request.replacement, newline);
 
@@ -170,8 +156,54 @@ fn normalize_replacement_line_endings(replacement: &str, newline: &str) -> Strin
     out
 }
 
-fn invalid_edit_range(path: &Path, message: String) -> Error {
-    Error::InvalidPath(format!("{}: invalid edit range: {message}", path.display()))
+fn split_lines_preserving_endings(content: &str) -> Vec<&str> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+
+    let bytes = content.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0_usize;
+    let mut idx = 0_usize;
+
+    while idx < bytes.len() {
+        let end = match bytes[idx] {
+            b'\n' => Some(idx + 1),
+            b'\r' if idx + 1 < bytes.len() && bytes[idx + 1] == b'\n' => Some(idx + 2),
+            b'\r' => Some(idx + 1),
+            _ => None,
+        };
+
+        if let Some(line_end) = end {
+            lines.push(&content[start..line_end]);
+            start = line_end;
+            idx = line_end;
+        } else {
+            idx += 1;
+        }
+    }
+
+    if start < bytes.len() {
+        lines.push(&content[start..]);
+    }
+
+    lines
+}
+
+fn line_ending(line: &str) -> &str {
+    if line.ends_with("\r\n") {
+        "\r\n"
+    } else if line.ends_with('\n') {
+        "\n"
+    } else if line.ends_with('\r') {
+        "\r"
+    } else {
+        ""
+    }
+}
+
+fn invalid_edit_range(message: String) -> Error {
+    Error::Patch(format!("invalid edit range: {message}"))
 }
 
 fn usize_to_u64(value: usize, path: &Path, context: &str) -> Result<u64> {
@@ -181,4 +213,46 @@ fn usize_to_u64(value: usize, path: &Path, context: &str) -> Result<u64> {
             path.display()
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{line_ending, normalize_replacement_line_endings, split_lines_preserving_endings};
+
+    #[test]
+    fn normalize_replacement_converts_bare_cr() {
+        assert_eq!(
+            normalize_replacement_line_endings("one\rtwo\r", "\n"),
+            "one\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn normalize_replacement_converts_crlf() {
+        assert_eq!(
+            normalize_replacement_line_endings("one\r\ntwo\r\n", "\n"),
+            "one\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn normalize_replacement_converts_mixed_line_endings() {
+        assert_eq!(
+            normalize_replacement_line_endings("one\rtwo\r\nthree\nfour", "\r\n"),
+            "one\r\ntwo\r\nthree\r\nfour"
+        );
+    }
+
+    #[test]
+    fn split_lines_supports_bare_cr() {
+        assert_eq!(
+            split_lines_preserving_endings("one\rtwo\rthree\r"),
+            vec!["one\r", "two\r", "three\r"]
+        );
+    }
+
+    #[test]
+    fn line_ending_detects_bare_cr() {
+        assert_eq!(line_ending("value\r"), "\r");
+    }
 }
