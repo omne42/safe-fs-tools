@@ -133,6 +133,8 @@ fn delete_denies_requested_path_before_resolving_symlink_dirs() {
 #[test]
 fn delete_is_not_allowed_on_readonly_root() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("file.txt");
+    std::fs::write(&file, "keep\n").expect("write");
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
 
     let err = delete(
@@ -150,6 +152,11 @@ fn delete_is_not_allowed_on_readonly_root() {
         safe_fs_tools::Error::NotPermitted(_) => {}
         other => panic!("unexpected error: {other:?}"),
     }
+
+    assert!(
+        file.exists(),
+        "readonly-root delete rejection must not remove files"
+    );
 }
 
 #[test]

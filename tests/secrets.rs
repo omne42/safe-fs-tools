@@ -119,6 +119,41 @@ fn deny_glob_double_star_dot_git_cannot_be_bypassed_via_symlink_paths() {
 }
 
 #[test]
+#[cfg(unix)]
+fn deny_glob_blocks_regular_path_that_symlinks_into_git() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+    std::fs::write(dir.path().join(".git").join("config"), "secret\n").expect("write");
+    symlink(
+        dir.path().join(".git").join("config"),
+        dir.path().join("public-link.txt"),
+    )
+    .expect("symlink");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.deny_globs = vec![".git/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("public-link.txt"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(_) => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn deny_globs_match_after_lexical_normalization() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");

@@ -192,6 +192,7 @@ fn traversal_skip_globs_are_case_insensitive_on_windows() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
     std::fs::write(dir.path().join(".git").join("config"), "secret").expect("write");
+    std::fs::write(dir.path().join("keep.txt"), "ok").expect("write");
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
     policy.traversal.skip_globs = vec![".GIT/**".to_string()];
@@ -210,6 +211,13 @@ fn traversal_skip_globs_are_case_insensitive_on_windows() {
     assert!(
         !resp.matches.iter().any(|path| path == &blocked),
         "expected traversal.skip_globs to exclude .git/config: {:?}",
+        resp.matches
+    );
+    assert!(
+        resp.matches
+            .iter()
+            .any(|path| path == &PathBuf::from("keep.txt")),
+        "expected keep.txt to remain visible in traversal result: {:?}",
         resp.matches
     );
 }

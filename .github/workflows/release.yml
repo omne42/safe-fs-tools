@@ -104,14 +104,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo metadata --no-deps --format-version 1 | python3 - <<'PY'
+          metadata_json="$(mktemp)"
+          cargo metadata --no-deps --format-version 1 >"$metadata_json"
+          python3 - "$metadata_json" <<'PY'
           import json
           import os
           import sys
 
+          metadata_path = sys.argv[1]
           tag = os.environ.get("GITHUB_REF_NAME", "")
           version = tag[1:] if tag.startswith("v") else tag
-          m = json.load(sys.stdin)
+          with open(metadata_path, "r", encoding="utf-8") as f:
+            m = json.load(f)
           versions = {p["name"]: p["version"] for p in m.get("packages", [])}
           expected = ("safe-fs-tools", "safe-fs-tools-cli")
 
@@ -126,6 +130,7 @@ jobs:
               print(f"Tag version ({version}) does not match {name} version ({v})", file=sys.stderr)
             sys.exit(1)
           PY
+          rm -f "$metadata_json"
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4

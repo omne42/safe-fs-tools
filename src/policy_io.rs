@@ -123,7 +123,7 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
             "max policy bytes must be > 0".to_string(),
         ));
     }
-    if max_bytes > usize::MAX as u64 {
+    if max_bytes >= usize::MAX as u64 {
         return Err(Error::InvalidPolicy(
             "max policy bytes exceeds platform limits".to_string(),
         ));

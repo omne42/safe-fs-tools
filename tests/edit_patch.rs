@@ -306,6 +306,10 @@ fn patch_respects_max_read_bytes() {
         safe_fs_tools::Error::FileTooLarge { .. } => {}
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after reject"),
+        "line\n".repeat(50)
+    );
 }
 
 #[test]
@@ -381,7 +385,7 @@ fn patch_rejects_fifo_special_files() {
         PatchRequest {
             root_id: "root".to_string(),
             path: PathBuf::from("pipe"),
-            patch: "x".to_string(),
+            patch: diffy::create_patch("one\n", "two\n").to_string(),
         },
     )
     .expect_err("should reject");

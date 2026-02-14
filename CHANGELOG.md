@@ -86,6 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks/dev scripts: `scripts/gate.sh` now recognizes CI truthy values case-insensitively, fails by default when no workspace is found (with explicit local skip override), and runs cargo gates with `--locked`; `scripts/setup-githooks.sh` now preserves existing non-default `core.hooksPath` and emits success messages on stdout.
 - CLI/path guardrails: CLI line-range arguments now enforce `>=1` with early `start_line <= end_line` checks, JSON error fallback remains valid JSON, and text-input `ELOOP` diagnostics now use safer wording.
 - Policy/path consistency: `walkdir_root` now has a distinct programmatic error code, policy validation rejects `max_walk_files > max_walk_entries`, policy loading detects unsupported extensions before file reads, and write/copy/delete path checks fail closed more consistently.
+- CI/release workflow reliability: CI now has a job timeout, and release tag-version verification now reads `cargo metadata` from a temp file (fixes stdin/here-doc parsing breakage).
+- Redaction/policy/tests hardening: empty redaction regex patterns are rejected explicitly, policy byte-limit guard now rejects `>= usize::MAX`, and regression tests were strengthened for readonly delete side effects, FIFO patch input semantics, policy field parsing, symlink-to-secret denial, and Windows traversal skip-glob behavior.
 
 ## [0.1.0] - 2026-01-31
 

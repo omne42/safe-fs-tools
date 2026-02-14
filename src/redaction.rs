@@ -34,6 +34,12 @@ impl SecretRedactor {
 
         let mut redact = Vec::<Regex>::new();
         for pattern in &rules.redact_regexes {
+            if pattern.is_empty() {
+                return Err(Error::InvalidPolicy(
+                    "invalid secrets.redact_regexes regex \"\": empty patterns are not allowed"
+                        .to_string(),
+                ));
+            }
             let regex = Regex::new(pattern).map_err(|err| {
                 Error::InvalidPolicy(format!(
                     "invalid secrets.redact_regexes regex {pattern:?}: {err}"
@@ -173,5 +179,20 @@ mod tests {
         .expect("redactor");
 
         assert!(redactor.is_path_denied(Path::new("../.git/config")));
+    }
+
+    #[test]
+    fn empty_redaction_regex_is_rejected() {
+        let err = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: vec!["".to_string()],
+            replacement: "***".to_string(),
+        })
+        .expect_err("empty redact regex should be rejected");
+
+        match err {
+            Error::InvalidPolicy(msg) => assert!(msg.contains("empty patterns are not allowed")),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
