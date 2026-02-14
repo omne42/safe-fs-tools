@@ -130,9 +130,9 @@ pub(super) fn resolve_path_in_root_lexically(
 ) -> Result<ResolvedPath> {
     let resolved = ctx.policy.resolve_path_checked(root_id, path)?;
     let root = ctx.policy.root(root_id)?;
-    let canonical_root = ctx.canonical_root(root_id)?.to_path_buf();
+    let canonical_root = ctx.canonical_root(root_id)?;
     let normalized_requested = crate::path_utils_internal::normalize_path_lexical(path);
-    let requested_path = derive_requested_path(root_id, &root.path, &canonical_root, &resolved)
+    let requested_path = derive_requested_path(root_id, &root.path, canonical_root, &resolved)
         .map_err(|err| match err {
             Error::OutsideRoot { .. } => outside_root_error(root_id, &normalized_requested),
             other => other,
@@ -142,7 +142,7 @@ pub(super) fn resolve_path_in_root_lexically(
     Ok(ResolvedPath {
         resolved,
         requested_path,
-        canonical_root,
+        canonical_root: canonical_root.to_path_buf(),
     })
 }
 

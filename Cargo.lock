@@ -332,7 +332,7 @@ dependencies = [
 
 [[package]]
 name = "safe-fs-tools"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "diffy",
  "globset",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "safe-fs-tools-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "libc",

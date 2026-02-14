@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-14
+
 ### Added
 
 - New filesystem operations: `list_dir`, `stat`, `mkdir`, `write_file`, `move_path`, `copy_file` (all root-bounded and policy-gated).
@@ -22,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs/internal comments: align `ops` module notes with the current crate-root `glob`/`grep` export behavior.
 - Internal cleanup: `read` line-range scanning now uses a single reusable output buffer, and `Context::new` root-overlap checks reuse existing root runtime entries instead of maintaining a duplicate `(id, canonical_path)` side list.
 - API: `Context` now supports `Context::builder(policy).build()` as a forward-compatible construction entrypoint while keeping `Context::new(policy)` behavior unchanged.
+- Internal path-resolution cleanup: `resolve_path_in_root_lexically` now keeps `canonical_root` borrowed as `&Path` for intermediate checks and only materializes a `PathBuf` at the return boundary.
+- API docs: `ReadRequest.path` now documents the ownership rationale (`PathBuf` request boundary, borrowed hot path) to avoid unnecessary lifetime-driven API complexity.
 - Batch review/apply refresh (`10` 并发) across `cli`/`src/ops`/`tests`: tightened error-path consistency, reduced deeply nested control flow, and normalized formatting/readability in hot and boundary-sensitive paths.
 - Path-resolution contract hardening: internal lexical resolve flow now uses `resolve_path_checked` for explicit root-boundary validation semantics.
 - Batch review-driven maintenance sweep across core ops/CLI/tests: tightened path/permission/error handling contracts, reduced control-flow complexity, and aligned helper APIs with clearer ownership and typing boundaries.

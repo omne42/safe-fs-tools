@@ -16,6 +16,10 @@ enum ReadMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadRequest {
     pub root_id: String,
+    /// Keep `PathBuf` at the request boundary:
+    /// this preserves owned/serializable API ergonomics and avoids propagating
+    /// lifetimes through request structs. Runtime path resolution borrows
+    /// `&request.path`, so this does not add an extra clone in the hot path.
     pub path: PathBuf,
     #[serde(default)]
     pub start_line: Option<u64>,
