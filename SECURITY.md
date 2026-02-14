@@ -80,3 +80,9 @@ When reporting, include:
 - A minimal reproduction (commands / policy file / filesystem layout)
 - Expected vs actual behavior
 - Platform details (OS + Rust version)
+
+## Related Docs
+
+- `docs/index.md`
+- `docs/security-guide.md`
+- `docs/policy-reference.md`

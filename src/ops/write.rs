@@ -128,7 +128,7 @@ struct WriteCommitContext<'a> {
 }
 
 fn commit_write<F>(
-    context: &WriteCommitContext<'_>,
+    context: WriteCommitContext<'_>,
     overwrite: bool,
     map_rename_error: F,
 ) -> Result<()>
@@ -144,7 +144,7 @@ where
         context.canonical_parent,
         context.relative,
         context.bytes,
-        context.permissions.clone(),
+        context.permissions,
     )?;
     verify_parent_identity(
         context.canonical_parent,
@@ -355,7 +355,7 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
             bytes: request.content.as_bytes(),
             permissions: Some(meta.permissions()),
         };
-        commit_write(&commit_context, true, |err| {
+        commit_write(commit_context, true, |err| {
             Error::io_path("rename", &relative, err)
         })?;
         return Ok(WriteFileResponse {
@@ -375,7 +375,7 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         bytes: request.content.as_bytes(),
         permissions: None,
     };
-    commit_write(&commit_context, request.overwrite, |err| {
+    commit_write(commit_context, request.overwrite, |err| {
         if err.kind() == std::io::ErrorKind::AlreadyExists && !request.overwrite {
             return Error::InvalidPath("file exists".to_string());
         }

@@ -203,3 +203,9 @@ Even if the high-level operations look similar (`read/glob/grep/write/patch/dele
 
 - Do we want an append-only mode for crawlers (write new versions, never mutate)?
 - Do we want to standardize a cursor protocol for `grep` streaming?
+
+## Related
+
+- [`index.md`](index.md)
+- [`security-guide.md`](security-guide.md)
+- [`../SECURITY.md`](../SECURITY.md)

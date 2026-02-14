@@ -159,7 +159,17 @@ fn os_str_eq_case_insensitive_windows(a: &OsStr, b: &OsStr) -> bool {
     use std::os::windows::ffi::OsStrExt;
     use std::ptr;
 
-    // SAFETY: foreign function declaration for `CompareStringOrdinal`.
+    // DESIGN INVARIANT (Windows path comparison):
+    // - We must compare `OsStr` path components without lossy UTF-8 conversion.
+    // - Rust std currently does not provide a locale-independent, case-insensitive `OsStr`/`Path`
+    //   comparator for Windows path semantics.
+    // - `to_ascii_lowercase` is insufficient (non-ASCII), and string lowercasing would require a
+    //   lossy/transcoding step that can change semantics for non-UTF8-ish paths.
+    // - `CompareStringOrdinal(..., ignore_case=1)` gives us a UTF-16, ordinal, locale-invariant
+    //   case-insensitive compare directly on Windows-native code units, which is the intended
+    //   behavior for this crate's lexical boundary checks.
+    //
+    // SAFETY (declaration): foreign function declaration for `CompareStringOrdinal`.
     #[link(name = "Kernel32")]
     unsafe extern "system" {
         #[link_name = "CompareStringOrdinal"]
@@ -194,7 +204,7 @@ fn os_str_eq_case_insensitive_windows(a: &OsStr, b: &OsStr) -> bool {
         b_wide.as_ptr()
     };
 
-    // SAFETY:
+    // SAFETY (call):
     // - `a_ptr`/`b_ptr` are either null for empty strings or point to valid UTF-16 buffers owned
     //   by `a_wide`/`b_wide`.
     // - `a_len`/`b_len` are checked `usize -> i32` conversions that match those buffers.

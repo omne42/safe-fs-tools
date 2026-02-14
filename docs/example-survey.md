@@ -35,3 +35,9 @@ If this file disagrees with those documents, treat this file as stale and follow
 - Keep behavior explicit and policy-driven (`SandboxPolicy`, root bounds, secrets, limits).
 - Keep traversal deterministic and bounded; expose diagnostics for partial results.
 - Keep write/edit/patch semantics stable and predictable across library + CLI.
+
+## Related
+
+- [`index.md`](index.md)
+- [`../README.md`](../README.md)
+- [`../SECURITY.md`](../SECURITY.md)
