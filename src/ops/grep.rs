@@ -188,13 +188,13 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     diag.scan_limit_reason = Some(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
-                let line_truncated = line.len() > ctx.policy.limits.max_line_bytes;
-                let mut end = line.len().min(ctx.policy.limits.max_line_bytes);
-                while end > 0 && !line.is_char_boundary(end) {
+                let redacted = ctx.redactor.redact_text(line);
+                let line_truncated = redacted.len() > ctx.policy.limits.max_line_bytes;
+                let mut end = redacted.len().min(ctx.policy.limits.max_line_bytes);
+                while end > 0 && !redacted.is_char_boundary(end) {
                     end = end.saturating_sub(1);
                 }
-                let text = line[..end].to_string();
-                let text = ctx.redactor.redact_text(&text);
+                let text = redacted[..end].to_string();
                 matches.push(GrepMatch {
                     path: file.relative_path.clone(),
                     line: idx.saturating_add(1) as u64,

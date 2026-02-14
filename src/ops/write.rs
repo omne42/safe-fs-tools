@@ -131,9 +131,14 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         .map_err(|err| Error::io_path("sync", &relative, err))?;
     let tmp_path = tmp_file.into_temp_path();
 
-    super::io::rename_replace(tmp_path.as_ref(), &target, false).map_err(|err| {
-        if err.kind() == std::io::ErrorKind::AlreadyExists {
+    super::io::rename_replace(tmp_path.as_ref(), &target, request.overwrite).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::AlreadyExists && !request.overwrite {
             return Error::InvalidPath("file exists".to_string());
+        }
+        if err.kind() == std::io::ErrorKind::Unsupported && !request.overwrite {
+            return Error::InvalidPath(
+                "create without overwrite is unsupported on this platform".to_string(),
+            );
         }
         Error::io_path("rename", &relative, err)
     })?;

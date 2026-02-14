@@ -40,8 +40,11 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         )));
     }
 
-    let content =
-        super::io::read_string_limited(&path, &relative, ctx.policy.limits.max_read_bytes)?;
+    let (content, identity) = super::io::read_string_limited_with_identity(
+        &path,
+        &relative,
+        ctx.policy.limits.max_read_bytes,
+    )?;
     let lines: Vec<&str> = if content.is_empty() {
         Vec::new()
     } else {
@@ -101,11 +104,16 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         }
     }
 
-    super::io::write_bytes_atomic(&path, &relative, out.as_bytes())?;
+    let changed = out != content;
+    if changed {
+        super::io::write_bytes_atomic_checked(&path, &relative, out.as_bytes(), identity)?;
+    }
+
+    let output_len = u64::try_from(out.len()).unwrap_or(u64::MAX);
     Ok(EditResponse {
         path: relative,
         requested_path: Some(requested_path),
-        bytes_written: out.len() as u64,
+        bytes_written: if changed { output_len } else { 0 },
     })
 }
 

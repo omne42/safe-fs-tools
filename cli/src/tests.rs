@@ -84,11 +84,23 @@ fn load_text_limited_rejects_symlink_paths() {
 #[test]
 #[cfg(unix)]
 fn load_text_limited_rejects_fifo_special_files() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("pipe.diff");
     create_fifo(&path);
 
-    let err = super::input::load_text_limited(&path, 8).expect_err("should reject");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = super::input::load_text_limited(&path, 8);
+        let _ = tx.send(result);
+    });
+
+    let result = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("load_text_limited timed out on fifo path");
+    let err = result.expect_err("should reject");
     match err {
         safe_fs_tools::Error::InvalidPath(_) => {}
         other => panic!("unexpected error: {other:?}"),

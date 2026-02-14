@@ -12,12 +12,6 @@ use safe_fs_tools::policy::RootMode;
 use std::os::unix::fs::PermissionsExt;
 
 #[cfg(unix)]
-fn is_root_user() -> bool {
-    // Safety: libc call with no preconditions.
-    unsafe { libc::geteuid() == 0 }
-}
-
-#[cfg(unix)]
 struct PermissionRestoreGuard {
     path: PathBuf,
     mode: u32,
@@ -42,7 +36,14 @@ impl PermissionRestoreGuard {
 #[cfg(unix)]
 impl Drop for PermissionRestoreGuard {
     fn drop(&mut self) {
-        let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode));
+        if let Err(err) =
+            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode))
+        {
+            eprintln!(
+                "failed to restore permissions for {}: {err}",
+                self.path.display()
+            );
+        }
     }
 }
 
@@ -179,12 +180,8 @@ fn glob_does_not_follow_symlink_root_prefix() {
 
 #[test]
 #[cfg(unix)]
+#[ignore = "requires non-root"]
 fn glob_skips_walkdir_errors() {
-    if is_root_user() {
-        eprintln!("skipping: permission-based walkdir error tests do not work as root");
-        return;
-    }
-
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
 
@@ -212,12 +209,8 @@ fn glob_skips_walkdir_errors() {
 
 #[test]
 #[cfg(unix)]
+#[ignore = "requires non-root"]
 fn glob_root_walkdir_error_does_not_leak_absolute_paths() {
-    if is_root_user() {
-        eprintln!("skipping: permission-based walkdir error tests do not work as root");
-        return;
-    }
-
     let dir = tempfile::tempdir().expect("tempdir");
 
     let blocked = dir.path().join("blocked");

@@ -8,6 +8,23 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
+#[cfg(unix)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(windows)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CopyFileRequest {
     pub root_id: String,
@@ -84,8 +101,15 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
     let to_parent_rel = requested_to.parent().unwrap_or_else(|| Path::new(""));
 
     let from_parent = ctx.ensure_dir_under_root(&request.root_id, from_parent_rel, false)?;
-    let to_parent =
-        ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, request.create_parents)?;
+    let mut to_parent = match ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, false) {
+        Ok(path) => Some(path),
+        Err(Error::IoPath { source, .. })
+            if request.create_parents && source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            None
+        }
+        Err(err) => return Err(err),
+    };
 
     let from_relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&from_parent, &canonical_root)
@@ -93,16 +117,9 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
                 root_id: request.root_id.clone(),
                 path: requested_from.clone(),
             })?;
-    let to_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root).ok_or_else(
-            || Error::OutsideRoot {
-                root_id: request.root_id.clone(),
-                path: requested_to.clone(),
-            },
-        )?;
 
     let from_relative = from_relative_parent.join(from_name);
-    let to_relative = to_relative_parent.join(to_name);
+    let mut to_relative = requested_to.clone();
 
     if ctx.redactor.is_path_denied(&from_relative) {
         return Err(Error::SecretPathDenied(from_relative));
@@ -112,18 +129,11 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
     }
 
     let source = from_parent.join(from_name);
-    let destination = to_parent.join(to_name);
 
     if !crate::path_utils::starts_with_case_insensitive(&source, &canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_from,
-        });
-    }
-    if !crate::path_utils::starts_with_case_insensitive(&destination, &canonical_root) {
-        return Err(Error::OutsideRoot {
-            root_id: request.root_id.clone(),
-            path: requested_to,
         });
     }
 
@@ -135,6 +145,39 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         return Err(Error::InvalidPath("path is not a file".to_string()));
     }
 
+    if source_meta.len() > ctx.policy.limits.max_write_bytes {
+        return Err(Error::FileTooLarge {
+            path: from_relative.clone(),
+            size_bytes: source_meta.len(),
+            max_bytes: ctx.policy.limits.max_write_bytes,
+        });
+    }
+
+    if to_parent.is_none() {
+        to_parent = Some(ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, true)?);
+    }
+    let to_parent = to_parent.ok_or_else(|| {
+        Error::InvalidPath("failed to prepare destination parent directory".to_string())
+    })?;
+    let to_relative_parent =
+        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root).ok_or_else(
+            || Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_to.clone(),
+            },
+        )?;
+    to_relative = to_relative_parent.join(to_name);
+    if ctx.redactor.is_path_denied(&to_relative) {
+        return Err(Error::SecretPathDenied(to_relative));
+    }
+
+    let destination = to_parent.join(to_name);
+    if !crate::path_utils::starts_with_case_insensitive(&destination, &canonical_root) {
+        return Err(Error::OutsideRoot {
+            root_id: request.root_id.clone(),
+            path: requested_to.clone(),
+        });
+    }
     if source == destination {
         return Ok(CopyFileResponse {
             from: from_relative,
@@ -146,32 +189,35 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         });
     }
 
-    if source_meta.len() > ctx.policy.limits.max_write_bytes {
-        return Err(Error::FileTooLarge {
-            path: from_relative.clone(),
-            size_bytes: source_meta.len(),
-            max_bytes: ctx.policy.limits.max_write_bytes,
-        });
-    }
-
-    match fs::symlink_metadata(&destination) {
-        Ok(meta) => {
-            if meta.is_dir() {
-                return Err(Error::InvalidPath(
-                    "destination exists and is a directory".to_string(),
-                ));
-            }
-            if !meta.is_file() {
-                return Err(Error::InvalidPath(
-                    "destination exists and is not a regular file".to_string(),
-                ));
-            }
-            if !request.overwrite {
-                return Err(Error::InvalidPath("destination exists".to_string()));
-            }
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+    let destination_meta = match fs::symlink_metadata(&destination) {
+        Ok(meta) => Some(meta),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => return Err(Error::io_path("metadata", &to_relative, err)),
+    };
+    if let Some(meta) = &destination_meta {
+        if metadata_same_file(&source_meta, meta) {
+            return Ok(CopyFileResponse {
+                from: from_relative,
+                to: to_relative,
+                requested_from: Some(requested_from),
+                requested_to: Some(requested_to),
+                copied: false,
+                bytes: 0,
+            });
+        }
+        if meta.is_dir() {
+            return Err(Error::InvalidPath(
+                "destination exists and is a directory".to_string(),
+            ));
+        }
+        if !meta.is_file() {
+            return Err(Error::InvalidPath(
+                "destination exists and is not a regular file".to_string(),
+            ));
+        }
+        if !request.overwrite {
+            return Err(Error::InvalidPath("destination exists".to_string()));
+        }
     }
 
     let parent = destination.parent().ok_or_else(|| {

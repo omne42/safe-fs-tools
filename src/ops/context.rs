@@ -42,12 +42,11 @@ impl Context {
                     canonical.display()
                 )));
             }
-            if canonical_roots.insert(root.id.clone(), canonical).is_some() {
-                return Err(Error::InvalidPolicy(format!(
-                    "duplicate root id: {}",
-                    root.id
-                )));
-            }
+            let previous = canonical_roots.insert(root.id.clone(), canonical);
+            debug_assert!(
+                previous.is_none(),
+                "policy.validate() must reject duplicate root.id values"
+            );
         }
 
         #[cfg(any(feature = "glob", feature = "grep"))]
@@ -143,7 +142,14 @@ impl Context {
     }
 
     pub(super) fn ensure_can_write(&self, root_id: &str, op: &str) -> Result<()> {
-        let root = self.policy.root(root_id)?;
+        // Keep existence checks on the canonical root index (single source for root lookup here).
+        self.canonical_root(root_id)?;
+        let root = self
+            .policy
+            .roots
+            .iter()
+            .find(|root| root.id == root_id)
+            .ok_or_else(|| Error::RootNotFound(root_id.to_string()))?;
         if !matches!(root.mode, RootMode::ReadWrite) {
             return Err(Error::NotPermitted(format!(
                 "{op} is not allowed: root {root_id} is read_only"

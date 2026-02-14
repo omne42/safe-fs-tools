@@ -55,6 +55,7 @@ fn derive_safe_traversal_prefix_is_conservative() {
 #[test]
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn walk_traversal_files_rejects_walk_root_outside_root() {
+    use std::cell::Cell;
     use std::time::Instant;
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -63,6 +64,7 @@ fn walk_traversal_files_rejects_walk_root_outside_root() {
 
     let root_path = ctx.canonical_root("root").expect("root").to_path_buf();
     let walk_root = root_path.parent().expect("parent").to_path_buf();
+    let callback_count = Cell::new(0_u32);
 
     let err = traversal::walk_traversal_files(
         &ctx,
@@ -71,16 +73,26 @@ fn walk_traversal_files_rejects_walk_root_outside_root() {
         &walk_root,
         &Instant::now(),
         None,
-        |_file, _diag| Ok(std::ops::ControlFlow::Continue(())),
+        |_file, _diag| {
+            callback_count.set(callback_count.get().saturating_add(1));
+            Ok(std::ops::ControlFlow::Continue(()))
+        },
     )
     .unwrap_err();
 
     assert_eq!(err.code(), "invalid_path");
+    assert_eq!(
+        callback_count.get(),
+        0,
+        "walk callback must not run for invalid traversal roots"
+    );
 }
 
 #[test]
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn traversal_skip_globs_apply_to_directories_via_probe() {
+    use std::time::Instant;
+
     let dir = tempfile::tempdir().expect("tempdir");
     fs::create_dir_all(dir.path().join("node_modules").join("sub")).expect("mkdir");
     fs::write(dir.path().join("keep.txt"), "keep\n").expect("write");
@@ -109,17 +121,20 @@ fn traversal_skip_globs_apply_to_directories_via_probe() {
     );
 
     let root_path = ctx.canonical_root("root").expect("root").to_path_buf();
-    let seen = traversal::walkdir_traversal_iter(&ctx, &root_path, &root_path)
-        .map(|entry| entry.expect("walkdir entry"))
-        .filter(|entry| entry.depth() > 0)
-        .map(|entry| {
-            entry
-                .path()
-                .strip_prefix(&root_path)
-                .expect("walkdir entry escaped root")
-                .to_path_buf()
-        })
-        .collect::<Vec<_>>();
+    let mut seen = Vec::new();
+    let diag = traversal::walk_traversal_files(
+        &ctx,
+        "root",
+        &root_path,
+        &root_path,
+        &Instant::now(),
+        None,
+        |file, _diag| {
+            seen.push(file.relative_path);
+            Ok(std::ops::ControlFlow::Continue(()))
+        },
+    )
+    .expect("walk");
 
     assert!(
         seen.iter().any(|path| path == Path::new("keep.txt")),
@@ -130,6 +145,11 @@ fn traversal_skip_globs_apply_to_directories_via_probe() {
             .iter()
             .any(|path| path.starts_with(Path::new("node_modules"))),
         "expected node_modules to be excluded via probe semantics, saw: {seen:?}"
+    );
+    assert_eq!(diag.scanned_files, 1, "unexpected scanned files: {diag:?}");
+    assert!(
+        (1..=2).contains(&diag.scanned_entries),
+        "unexpected scanned entries: {diag:?}"
     );
 }
 
@@ -214,11 +234,15 @@ fn rename_replace_honors_replace_existing_flag_windows() {
 
     let err = io::rename_replace(&src, &dest, false).expect_err("should not overwrite");
     assert!(
-        err.kind() == std::io::ErrorKind::AlreadyExists
-            || err.raw_os_error() == Some(80)
-            || err.raw_os_error() == Some(183),
+        err.kind() == std::io::ErrorKind::AlreadyExists || err.raw_os_error().is_some(),
         "unexpected error: {err:?}"
     );
+    assert!(
+        src.exists(),
+        "source should remain when overwrite is disabled"
+    );
+    let out = fs::read_to_string(&dest).expect("read dest after failed overwrite");
+    assert_eq!(out, "old", "destination should not be replaced");
 
     io::rename_replace(&src, &dest, true).expect("overwrite");
     let out = fs::read_to_string(&dest).expect("read dest");

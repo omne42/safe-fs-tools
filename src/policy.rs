@@ -276,7 +276,7 @@ impl SandboxPolicy {
                 "limits.max_line_bytes must be > 0".to_string(),
             ));
         }
-        let mut seen_ids = std::collections::HashSet::<String>::new();
+        let mut seen_ids = std::collections::HashSet::<&str>::new();
         for root in &self.roots {
             let normalized_id = root.id.trim();
             if normalized_id.is_empty() {
@@ -288,7 +288,7 @@ impl SandboxPolicy {
                     root.id
                 )));
             }
-            if !seen_ids.insert(normalized_id.to_string()) {
+            if !seen_ids.insert(normalized_id) {
                 return Err(Error::InvalidPolicy(format!(
                     "duplicate root.id: {:?}",
                     root.id
@@ -318,7 +318,7 @@ impl SandboxPolicy {
             .ok_or_else(|| Error::RootNotFound(id.to_string()))
     }
 
-    /// Resolve a path against the selected root.
+    /// Resolve a path against the selected root without enforcing root-boundary checks.
     ///
     /// This does **not** enforce any root boundary checks; it only joins paths.
     /// Use `ops::Context` (or equivalent checks) to ensure the resolved path
@@ -331,7 +331,7 @@ impl SandboxPolicy {
     /// This function is purely lexical: it does not touch the filesystem and does not attempt to
     /// detect Windows reparse points / junctions. Root boundary enforcement is best-effort and
     /// happens in `ops::Context` (and is not TOCTOU-hardened).
-    pub fn resolve_path(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
+    pub fn resolve_path_unchecked(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
         let root = self.root(root_id)?;
         if path.as_os_str().is_empty() {
             return Err(Error::InvalidPath("path is empty".to_string()));
@@ -367,5 +367,13 @@ impl SandboxPolicy {
             return Ok(path.to_path_buf());
         }
         Ok(root.path.join(path))
+    }
+
+    /// Compatibility alias for unchecked lexical path resolution.
+    ///
+    /// Prefer [`SandboxPolicy::resolve_path_unchecked`] at new callsites so API semantics are
+    /// explicit.
+    pub fn resolve_path(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
+        self.resolve_path_unchecked(root_id, path)
     }
 }

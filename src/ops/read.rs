@@ -24,6 +24,7 @@ pub struct ReadResponse {
     pub requested_path: Option<PathBuf>,
     /// Always `false`: `read` fails instead of truncating.
     pub truncated: bool,
+    /// Number of bytes scanned from disk before returning.
     pub bytes_read: u64,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,7 +55,7 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
         (Some(start_line), Some(end_line)) => {
             if start_line == 0 || end_line == 0 || start_line > end_line {
                 return Err(Error::InvalidPath(format!(
-                    "invalid line range {}..{}",
+                    "invalid read range: line range {}..{}",
                     start_line, end_line
                 )));
             }
@@ -89,34 +90,31 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
                 }
 
                 current_line += 1;
+                std::str::from_utf8(&buf).map_err(|_| Error::InvalidUtf8(relative.clone()))?;
+
                 if current_line < start_line {
                     continue;
                 }
-                if current_line > end_line {
-                    break;
-                }
-
-                out.extend_from_slice(&buf);
-                if current_line == end_line {
-                    break;
+                if current_line <= end_line {
+                    out.extend_from_slice(&buf);
                 }
             }
 
             if current_line < end_line {
                 return Err(Error::InvalidPath(format!(
-                    "line range {}..{} out of bounds (file has {} lines)",
+                    "invalid read range: line range {}..{} out of bounds (file has {} lines)",
                     start_line, end_line, current_line
                 )));
             }
 
-            let bytes_read = u64::try_from(out.len()).unwrap_or(u64::MAX);
+            let bytes_read = scanned_bytes;
             let content =
                 String::from_utf8(out).map_err(|_| Error::InvalidUtf8(relative.clone()))?;
             (bytes_read, content)
         }
         _ => {
             return Err(Error::InvalidPath(
-                "start_line and end_line must be provided together".to_string(),
+                "invalid read range: start_line and end_line must be provided together".to_string(),
             ));
         }
     };

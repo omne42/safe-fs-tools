@@ -191,7 +191,9 @@ fn run() -> ExitCode {
 
     if let Err(err) = result {
         match error_format {
-            ErrorFormat::Text => eprintln!("{err}"),
+            ErrorFormat::Text => {
+                let _ = write_stderr_line(&err.to_string());
+            }
             ErrorFormat::Json => {
                 let mut error = serde_json::Map::new();
                 error.insert(
@@ -222,7 +224,9 @@ fn run() -> ExitCode {
 
                 let out = serde_json::json!({ "error": error });
                 match serialize_json(&out, cli.pretty) {
-                    Ok(text) => eprintln!("{text}"),
+                    Ok(text) => {
+                        let _ = write_stderr_line(&text);
+                    }
                     Err(_) => {
                         const FALLBACK: &str = r#"{"error":{"code":"json","message":"failed to serialize json error output"}}"#;
                         let fallback = serde_json::json!({
@@ -232,8 +236,12 @@ fn run() -> ExitCode {
                             }
                         });
                         match serde_json::to_string(&fallback) {
-                            Ok(text) => eprintln!("{text}"),
-                            Err(_) => eprintln!("{FALLBACK}"),
+                            Ok(text) => {
+                                let _ = write_stderr_line(&text);
+                            }
+                            Err(_) => {
+                                let _ = write_stderr_line(FALLBACK);
+                            }
                         }
                     }
                 }
@@ -268,6 +276,15 @@ fn write_stdout_line(line: &str) -> Result<(), CliError> {
     map_broken_pipe(stdout.write_all(line.as_bytes()))?;
     map_broken_pipe(stdout.write_all(b"\n"))?;
     map_broken_pipe(stdout.flush())
+}
+
+fn write_stderr_line(line: &str) -> Result<(), CliError> {
+    use std::io::Write;
+
+    let mut stderr = std::io::stderr().lock();
+    map_broken_pipe(stderr.write_all(line.as_bytes()))?;
+    map_broken_pipe(stderr.write_all(b"\n"))?;
+    map_broken_pipe(stderr.flush())
 }
 
 #[cfg(test)]

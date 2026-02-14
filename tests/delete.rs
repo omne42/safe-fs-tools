@@ -7,7 +7,7 @@ use safe_fs_tools::ops::{Context, DeleteRequest, delete};
 use safe_fs_tools::policy::RootMode;
 
 #[test]
-fn delete_absolute_paths_report_relative_requested_path_on_errors() {
+fn delete_absolute_paths_report_relative_requested_path_when_parent_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
@@ -27,6 +27,33 @@ fn delete_absolute_paths_report_relative_requested_path_on_errors() {
         safe_fs_tools::Error::IoPath { op, path, .. } => {
             assert_eq!(op, "metadata");
             assert_eq!(path, PathBuf::from("missing"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn delete_absolute_paths_report_relative_requested_path_when_leaf_is_missing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("parent")).expect("mkdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let abs = dir.path().join("parent").join("missing.txt");
+    let err = delete(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: abs,
+            recursive: false,
+            ignore_missing: false,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::IoPath { op, path, .. } => {
+            assert_eq!(op, "metadata");
+            assert_eq!(path, PathBuf::from("parent").join("missing.txt"));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -54,6 +81,7 @@ fn delete_unlinks_symlink_without_deleting_target() {
         },
     )
     .expect("delete");
+    assert_eq!(resp.path, PathBuf::from("link.txt"));
     assert_eq!(resp.requested_path, Some(PathBuf::from("link.txt")));
     assert!(resp.deleted);
     assert_eq!(resp.kind, "symlink");
@@ -84,6 +112,7 @@ fn delete_unlinks_symlink_even_if_target_is_outside_root() {
         },
     )
     .expect("delete");
+    assert_eq!(resp.path, PathBuf::from("outside-link.txt"));
     assert_eq!(resp.requested_path, Some(PathBuf::from("outside-link.txt")));
     assert!(resp.deleted);
     assert_eq!(resp.kind, "symlink");
@@ -225,4 +254,29 @@ fn delete_rejects_directories_without_recursive() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn delete_ignore_missing_returns_missing_when_parent_directory_is_absent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let resp = delete(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("missing").join("file.txt"),
+            recursive: false,
+            ignore_missing: true,
+        },
+    )
+    .expect("ignore_missing should return missing response");
+
+    assert_eq!(resp.path, PathBuf::from("missing").join("file.txt"));
+    assert_eq!(
+        resp.requested_path,
+        Some(PathBuf::from("missing").join("file.txt"))
+    );
+    assert!(!resp.deleted);
+    assert_eq!(resp.kind, "missing");
 }

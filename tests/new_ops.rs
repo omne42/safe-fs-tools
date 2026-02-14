@@ -27,6 +27,9 @@ fn list_dir_lists_entries_in_sorted_order_and_truncates() {
     )
     .expect("list");
 
+    assert_eq!(resp.path, PathBuf::from("."));
+    assert_eq!(resp.requested_path, Some(PathBuf::from(".")));
+    assert_eq!(resp.skipped_io_errors, 0);
     assert!(resp.truncated);
     assert_eq!(resp.entries.len(), 2);
     assert_eq!(resp.entries[0].name, "a.txt");
@@ -49,6 +52,9 @@ fn list_dir_allows_zero_max_entries() {
     )
     .expect("list");
 
+    assert_eq!(resp.path, PathBuf::from("."));
+    assert_eq!(resp.requested_path, Some(PathBuf::from(".")));
+    assert_eq!(resp.skipped_io_errors, 0);
     assert!(resp.entries.is_empty());
     assert!(resp.truncated);
 }
@@ -71,9 +77,16 @@ fn stat_reports_file_metadata() {
     assert!(matches!(resp.kind, safe_fs_tools::ops::StatKind::File));
     assert_eq!(resp.size_bytes, 2);
     assert!(!resp.readonly);
-    let _ = resp.modified_ms;
-    let _ = resp.accessed_ms;
-    let _ = resp.created_ms;
+    let modified_ms = resp
+        .modified_ms
+        .expect("modified_ms should be available for regular files");
+    assert!(modified_ms > 0);
+    if let Some(accessed_ms) = resp.accessed_ms {
+        assert!(accessed_ms > 0);
+    }
+    if let Some(created_ms) = resp.created_ms {
+        assert!(created_ms > 0);
+    }
 }
 
 #[test]
@@ -91,6 +104,8 @@ fn mkdir_creates_directories_and_can_ignore_existing() {
         },
     )
     .expect("mkdir");
+    assert_eq!(resp.path, PathBuf::from("sub"));
+    assert_eq!(resp.requested_path, Some(PathBuf::from("sub")));
     assert!(resp.created);
     assert!(dir.path().join("sub").is_dir());
 
@@ -104,6 +119,8 @@ fn mkdir_creates_directories_and_can_ignore_existing() {
         },
     )
     .expect("mkdir");
+    assert_eq!(resp.path, PathBuf::from("sub"));
+    assert_eq!(resp.requested_path, Some(PathBuf::from("sub")));
     assert!(!resp.created);
 }
 
@@ -123,6 +140,9 @@ fn write_file_creates_new_files_and_respects_overwrite() {
         },
     )
     .expect("write");
+    assert_eq!(resp.path, PathBuf::from("sub/file.txt"));
+    assert_eq!(resp.requested_path, Some(PathBuf::from("sub/file.txt")));
+    assert_eq!(resp.bytes_written, 2);
     assert!(resp.created);
     assert_eq!(
         std::fs::read_to_string(dir.path().join("sub").join("file.txt"))
@@ -141,7 +161,12 @@ fn write_file_creates_new_files_and_respects_overwrite() {
         },
     )
     .expect_err("should reject");
-    assert_eq!(err.code(), "invalid_path");
+    match err {
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("file exists"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
     assert_eq!(
         std::fs::read_to_string(dir.path().join("sub").join("file.txt"))
             .expect("read unchanged file"),
@@ -159,6 +184,9 @@ fn write_file_creates_new_files_and_respects_overwrite() {
         },
     )
     .expect("write");
+    assert_eq!(resp.path, PathBuf::from("sub/file.txt"));
+    assert_eq!(resp.requested_path, Some(PathBuf::from("sub/file.txt")));
+    assert_eq!(resp.bytes_written, 3);
     assert!(!resp.created);
     assert_eq!(
         std::fs::read_to_string(dir.path().join("sub").join("file.txt"))
@@ -185,7 +213,12 @@ fn move_path_renames_entries() {
     )
     .expect("move");
 
+    assert_eq!(resp.from, PathBuf::from("a.txt"));
+    assert_eq!(resp.to, PathBuf::from("b.txt"));
+    assert_eq!(resp.requested_from, Some(PathBuf::from("a.txt")));
+    assert_eq!(resp.requested_to, Some(PathBuf::from("b.txt")));
     assert!(resp.moved);
+    assert_eq!(resp.kind, "file");
     assert!(!dir.path().join("a.txt").exists());
     assert_eq!(
         std::fs::read_to_string(dir.path().join("b.txt")).expect("read moved file"),
@@ -211,7 +244,12 @@ fn move_path_rejects_moving_directory_into_descendant() {
     )
     .expect_err("should reject");
 
-    assert_eq!(err.code(), "invalid_path");
+    match err {
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("own subdirectory"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
     assert!(dir.path().join("a").is_dir());
     assert!(dir.path().join("a").join("sub").is_dir());
 }
@@ -234,6 +272,10 @@ fn copy_file_copies_regular_files() {
     )
     .expect("copy");
 
+    assert_eq!(resp.from, PathBuf::from("a.txt"));
+    assert_eq!(resp.to, PathBuf::from("b.txt"));
+    assert_eq!(resp.requested_from, Some(PathBuf::from("a.txt")));
+    assert_eq!(resp.requested_to, Some(PathBuf::from("b.txt")));
     assert!(resp.copied);
     assert_eq!(resp.bytes, 2);
     assert_eq!(
@@ -268,6 +310,36 @@ fn copy_file_same_path_still_validates_source_exists() {
 }
 
 #[test]
+fn copy_file_same_path_is_a_noop_when_source_exists() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("same.txt"), "hi").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let resp = copy_file(
+        &ctx,
+        CopyFileRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("same.txt"),
+            to: PathBuf::from("same.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect("same-path copy should be a no-op");
+
+    assert_eq!(resp.from, PathBuf::from("same.txt"));
+    assert_eq!(resp.to, PathBuf::from("same.txt"));
+    assert_eq!(resp.requested_from, Some(PathBuf::from("same.txt")));
+    assert_eq!(resp.requested_to, Some(PathBuf::from("same.txt")));
+    assert!(!resp.copied);
+    assert_eq!(resp.bytes, 0);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("same.txt")).expect("read original file"),
+        "hi"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn copy_file_rejects_symlink_sources() {
     use std::os::unix::fs::symlink;
@@ -289,7 +361,12 @@ fn copy_file_rejects_symlink_sources() {
     )
     .expect_err("copy should reject symlink source");
 
-    assert_eq!(err.code(), "invalid_path");
+    match err {
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("symlink"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
     assert!(!dir.path().join("out.txt").exists());
 }
 
@@ -311,6 +388,8 @@ fn delete_deletes_dirs_recursively_and_ignores_missing() {
     )
     .expect("delete");
 
+    assert_eq!(resp.path, PathBuf::from("sub"));
+    assert_eq!(resp.requested_path, Some(PathBuf::from("sub")));
     assert!(resp.deleted);
     assert_eq!(resp.kind, "dir");
     assert!(!dir.path().join("sub").exists());
@@ -325,6 +404,8 @@ fn delete_deletes_dirs_recursively_and_ignores_missing() {
         },
     )
     .expect("delete");
+    assert_eq!(resp.path, PathBuf::from("missing"));
+    assert_eq!(resp.requested_path, Some(PathBuf::from("missing")));
     assert!(!resp.deleted);
     assert_eq!(resp.kind, "missing");
 }

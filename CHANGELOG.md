@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Review follow-up refactor/hardening sweep: strengthened root-relative path contract validation for mutating ops, tightened IO/path error typing and redaction plumbing, and expanded cross-op regression coverage in `tests/*`.
 - Internal refactor: flattened traversal walk error/symlink handling into focused helpers in `src/ops/traversal/walk.rs` to reduce nested control flow.
 - `list_dir` now uses a dedicated count-only fast path for `max_entries=0`, avoiding unnecessary entry materialization.
 - `stat` responses now include optional `accessed_ms`/`created_ms` timestamps and a `readonly` flag.

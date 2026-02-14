@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::error::{Error, Result};
 
@@ -48,6 +48,65 @@ pub(super) struct ResolvedPath {
     pub(super) resolved: PathBuf,
     pub(super) requested_path: PathBuf,
     pub(super) canonical_root: PathBuf,
+}
+
+fn outside_root_error(root_id: &str, requested_path: &Path) -> Error {
+    Error::OutsideRoot {
+        root_id: root_id.to_string(),
+        path: requested_path.to_path_buf(),
+    }
+}
+
+fn classify_notfound_escape(
+    root_id: &str,
+    canonical_root: &Path,
+    requested_path: &Path,
+) -> Result<()> {
+    let mut current = canonical_root.to_path_buf();
+    for component in requested_path.components() {
+        let segment = match component {
+            Component::CurDir => continue,
+            Component::Normal(segment) => segment,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(outside_root_error(root_id, requested_path));
+            }
+        };
+
+        let next = current.join(segment);
+        let metadata = match fs::symlink_metadata(&next) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(Error::io_path("symlink_metadata", requested_path, err)),
+        };
+
+        if metadata.file_type().is_symlink() {
+            let symlink_target = fs::read_link(&next)
+                .map_err(|err| Error::io_path("read_link", requested_path, err))?;
+            let resolved_target = if symlink_target.is_absolute() {
+                symlink_target
+            } else {
+                current.join(symlink_target)
+            };
+            let resolved_target = crate::path_utils::normalize_path_lexical(&resolved_target);
+            if !crate::path_utils::starts_with_case_insensitive(&resolved_target, canonical_root) {
+                return Err(outside_root_error(root_id, requested_path));
+            }
+
+            current = match resolved_target.canonicalize() {
+                Ok(canonical) => canonical,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(_) => return Err(outside_root_error(root_id, requested_path)),
+            };
+            if !crate::path_utils::starts_with_case_insensitive(&current, canonical_root) {
+                return Err(outside_root_error(root_id, requested_path));
+            }
+            continue;
+        }
+
+        current = next;
+    }
+
+    Ok(())
 }
 
 // IMPORTANT DESIGN NOTE:
@@ -134,33 +193,8 @@ impl super::Context {
         let canonical = match resolved.canonicalize() {
             Ok(canonical) => canonical,
             Err(err) => {
-                if err.kind() == std::io::ErrorKind::NotFound
-                    && let Ok(meta) = fs::symlink_metadata(&resolved)
-                    && meta.file_type().is_symlink()
-                {
-                    let symlink_target = fs::read_link(&resolved).ok();
-                    let parent = resolved.parent();
-                    let canonical_parent = parent.and_then(|path| path.canonicalize().ok());
-                    if let (Some(symlink_target), Some(canonical_parent)) =
-                        (symlink_target, canonical_parent)
-                    {
-                        let resolved_target = if symlink_target.is_absolute() {
-                            symlink_target
-                        } else {
-                            canonical_parent.join(symlink_target)
-                        };
-                        let resolved_target =
-                            crate::path_utils::normalize_path_lexical(&resolved_target);
-                        if !crate::path_utils::starts_with_case_insensitive(
-                            &resolved_target,
-                            &canonical_root,
-                        ) {
-                            return Err(Error::OutsideRoot {
-                                root_id: root_id.to_string(),
-                                path: requested_path,
-                            });
-                        }
-                    }
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    classify_notfound_escape(root_id, &canonical_root, &requested_path)?;
                 }
                 return Err(Error::io_path("canonicalize", requested_path, err));
             }

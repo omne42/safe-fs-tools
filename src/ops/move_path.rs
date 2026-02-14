@@ -239,6 +239,11 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         if !replace_existing && err.kind() == std::io::ErrorKind::AlreadyExists {
             return Error::InvalidPath("destination exists".to_string());
         }
+        if !replace_existing && err.kind() == std::io::ErrorKind::Unsupported {
+            return Error::InvalidPath(
+                "overwrite=false move is unsupported on this platform".to_string(),
+            );
+        }
         Error::io_path("rename", &to_relative, err)
     })?;
 

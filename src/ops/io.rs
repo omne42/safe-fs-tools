@@ -76,6 +76,7 @@ pub(super) fn open_regular_file_for_read(
     let meta = file
         .metadata()
         .map_err(|err| Error::io_path("metadata", relative, err))?;
+    reject_symlink_metadata(&meta, relative)?;
     if !meta.is_file() {
         return Err(Error::InvalidPath(format!(
             "path {} is not a regular file",
@@ -95,6 +96,7 @@ fn open_regular_file_for_write(path: &Path, relative: &Path) -> Result<(fs::File
     let meta = file
         .metadata()
         .map_err(|err| Error::io_path("metadata", relative, err))?;
+    reject_symlink_metadata(&meta, relative)?;
     if !meta.is_file() {
         return Err(Error::InvalidPath(format!(
             "path {} is not a regular file",
@@ -102,6 +104,40 @@ fn open_regular_file_for_write(path: &Path, relative: &Path) -> Result<(fs::File
         )));
     }
     Ok((file, meta))
+}
+
+#[cfg(windows)]
+fn reject_symlink_metadata(meta: &fs::Metadata, relative: &Path) -> Result<()> {
+    if meta.file_type().is_symlink() {
+        return Err(Error::InvalidPath(format!(
+            "path {} is a symlink",
+            relative.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn reject_symlink_metadata(_meta: &fs::Metadata, _relative: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn verify_expected_identity(
+    relative: &Path,
+    expected_identity: Option<FileIdentity>,
+    actual_identity: Option<FileIdentity>,
+) -> Result<()> {
+    match (expected_identity, actual_identity) {
+        (Some(expected), Some(actual)) if expected != actual => Err(Error::InvalidPath(format!(
+            "path {} changed during operation",
+            relative.display()
+        ))),
+        (Some(_), None) => Err(Error::InvalidPath(format!(
+            "cannot verify identity for path {} on this platform",
+            relative.display()
+        ))),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -182,21 +218,11 @@ pub(super) fn write_bytes_atomic_checked(
 ) -> Result<()> {
     // Preserve prior behavior: fail if the original file isn't writable.
     let (_existing_file, meta) = open_regular_file_for_write(path, relative)?;
-    match (expected_identity, FileIdentity::from_metadata(&meta)) {
-        (Some(expected), Some(actual)) if expected != actual => {
-            return Err(Error::InvalidPath(format!(
-                "path {} changed during operation",
-                relative.display()
-            )));
-        }
-        (Some(_), None) => {
-            return Err(Error::InvalidPath(format!(
-                "cannot verify identity for path {} on this platform",
-                relative.display()
-            )));
-        }
-        _ => {}
-    }
+    verify_expected_identity(
+        relative,
+        expected_identity,
+        FileIdentity::from_metadata(&meta),
+    )?;
 
     let perms = meta.permissions();
 
@@ -232,6 +258,17 @@ pub(super) fn write_bytes_atomic_checked(
 
     fs::set_permissions(&tmp_path, perms)
         .map_err(|err| Error::io_path("set_permissions", relative, err))?;
+
+    if expected_identity.is_some() {
+        // Best-effort conflict detection: re-open with no-follow and re-check identity
+        // right before commit to narrow the TOCTOU window between read and replace.
+        let (_recheck_file, recheck_meta) = open_regular_file_for_write(path, relative)?;
+        verify_expected_identity(
+            relative,
+            expected_identity,
+            FileIdentity::from_metadata(&recheck_meta),
+        )?;
+    }
 
     rename_replace(tmp_path.as_ref(), path, true)
         .map_err(|err| Error::io_path("replace_file", relative, err))?;
@@ -335,7 +372,12 @@ pub(super) fn rename_replace(
     } else {
         rename_no_replace(src_path, dest_path)?;
     }
-    sync_rename_parents(src_path, dest_path)
+    sync_rename_parents(src_path, dest_path).map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!("rename already applied, but failed to sync parent directories: {err}"),
+        )
+    })
 }
 
 #[cfg(all(unix, not(windows), any(target_os = "linux", target_os = "android")))]
@@ -375,7 +417,51 @@ fn rename_no_replace(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
 #[cfg(all(
     unix,
     not(windows),
-    not(any(target_os = "linux", target_os = "android"))
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos"
+    )
+))]
+fn rename_no_replace(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let src = CString::new(src_path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "source path contains interior NUL byte",
+        )
+    })?;
+    let dest = CString::new(dest_path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination path contains interior NUL byte",
+        )
+    })?;
+
+    // Safety: both C strings are NUL-terminated and valid for the duration of this call.
+    let rc = unsafe { libc::renamex_np(src.as_ptr(), dest.as_ptr(), libc::RENAME_EXCL) };
+    if rc == 0 {
+        return Ok(());
+    }
+    Err(std::io::Error::last_os_error())
+}
+
+#[cfg(all(
+    unix,
+    not(windows),
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos"
+    ))
 ))]
 fn rename_no_replace(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
     let _ = src_path;

@@ -4,12 +4,25 @@ use globset::{GlobSet, GlobSetBuilder};
 
 use crate::error::{Error, Result};
 
-pub(super) fn compile_glob(pattern: &str) -> Result<GlobSet> {
+fn compile_validated_glob(
+    pattern: &str,
+    invalid_err: impl Fn(String) -> Error,
+) -> Result<globset::Glob> {
+    if pattern.trim().is_empty() {
+        return Err(invalid_err("glob pattern must not be empty".to_string()));
+    }
+
     let normalized = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
     crate::path_utils::validate_root_relative_glob_pattern(&normalized)
-        .map_err(|msg| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {msg}")))?;
-    let glob = crate::path_utils::build_glob_from_normalized(&normalized)
-        .map_err(|err| Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {err}")))?;
+        .map_err(|msg| invalid_err(msg.to_string()))?;
+    crate::path_utils::build_glob_from_normalized(&normalized)
+        .map_err(|err| invalid_err(err.to_string()))
+}
+
+pub(super) fn compile_glob(pattern: &str) -> Result<GlobSet> {
+    let glob = compile_validated_glob(pattern, |msg| {
+        Error::InvalidPath(format!("invalid glob pattern {pattern:?}: {msg}"))
+    })?;
     let mut builder = GlobSetBuilder::new();
     builder.add(glob);
     builder
@@ -24,15 +37,9 @@ pub(super) fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option
 
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
-        let normalized = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
-        crate::path_utils::validate_root_relative_glob_pattern(&normalized).map_err(|msg| {
+        let glob = compile_validated_glob(pattern, |msg| {
             Error::InvalidPolicy(format!(
                 "invalid traversal.skip_globs glob {pattern:?}: {msg}"
-            ))
-        })?;
-        let glob = crate::path_utils::build_glob_from_normalized(&normalized).map_err(|err| {
-            Error::InvalidPolicy(format!(
-                "invalid traversal.skip_globs glob {pattern:?}: {err}"
             ))
         })?;
         builder.add(glob);
@@ -45,8 +52,16 @@ pub(super) fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option
 }
 
 pub(super) fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
-    let pattern = crate::path_utils::normalize_glob_pattern(pattern);
-    let pattern = pattern.as_ref();
+    if pattern.trim().is_empty() {
+        return None;
+    }
+
+    let pattern = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
+    if crate::path_utils::validate_root_relative_glob_pattern(&pattern).is_err() {
+        return None;
+    }
+
+    let pattern = pattern.as_str();
     if pattern.starts_with('/') {
         return None;
     }
@@ -78,9 +93,6 @@ pub(super) fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
                 // to discard prior components, allowing traversal outside the selected root.
                 return None;
             }
-        }
-        if segment == ".." {
-            return None;
         }
         if segment
             .chars()

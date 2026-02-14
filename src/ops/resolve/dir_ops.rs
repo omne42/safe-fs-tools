@@ -110,14 +110,41 @@ pub(super) fn ensure_dir_under_root(
             )?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 if !create_missing {
-                    return Err(Error::io_path("metadata", &current_relative, err));
+                    return Err(Error::io_path("symlink_metadata", &current_relative, err));
                 }
-                fs::create_dir(&next).map_err(|create_err| {
-                    Error::io_path("create_dir", &current_relative, create_err)
-                })?;
-                canonicalize_checked(&next, &current_relative, &canonical_root, root_id)?
+                let created_now = match fs::create_dir(&next) {
+                    Ok(()) => true,
+                    Err(create_err) if create_err.kind() == std::io::ErrorKind::AlreadyExists => {
+                        false
+                    }
+                    Err(create_err) => {
+                        return Err(Error::io_path("create_dir", &current_relative, create_err));
+                    }
+                };
+
+                match fs::symlink_metadata(&next)
+                    .map_err(|meta_err| {
+                        Error::io_path("symlink_metadata", &current_relative, meta_err)
+                    })
+                    .and_then(|meta| {
+                        handle_existing_component(
+                            &next,
+                            &meta,
+                            &current_relative,
+                            &canonical_root,
+                            root_id,
+                        )
+                    }) {
+                    Ok(canonical) => canonical,
+                    Err(err) => {
+                        if created_now {
+                            let _ = fs::remove_dir(&next);
+                        }
+                        return Err(err);
+                    }
+                }
             }
-            Err(err) => return Err(Error::io_path("metadata", &current_relative, err)),
+            Err(err) => return Err(Error::io_path("symlink_metadata", &current_relative, err)),
         };
     }
 

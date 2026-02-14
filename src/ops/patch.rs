@@ -1,3 +1,5 @@
+#[cfg(feature = "patch")]
+use std::path::Path;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -21,6 +23,7 @@ pub struct PatchResponse {
     pub path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_path: Option<PathBuf>,
+    /// Final on-disk file size when the patch changes content; `0` for a no-op patch.
     pub bytes_written: u64,
 }
 
@@ -57,13 +60,15 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         });
     }
 
+    let parsed = Patch::from_str(&request.patch)
+        .map_err(|err| Error::Patch(format!("{}: {err}", relative.display())))?;
+    ensure_patch_headers_match_target(&parsed, &requested_path, &relative)?;
+
     let (content, identity) = super::io::read_string_limited_with_identity(
         &path,
         &relative,
         ctx.policy.limits.max_read_bytes,
     )?;
-    let parsed = Patch::from_str(&request.patch)
-        .map_err(|err| Error::Patch(format!("{}: {err}", relative.display())))?;
     let updated = apply(&content, &parsed)
         .map_err(|err| Error::Patch(format!("{}: {err}", relative.display())))?;
 
@@ -85,4 +90,62 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         requested_path: Some(requested_path),
         bytes_written: if changed { updated_len } else { 0 },
     })
+}
+
+#[cfg(feature = "patch")]
+fn ensure_patch_headers_match_target(
+    patch: &Patch<'_, str>,
+    requested_path: &Path,
+    relative: &Path,
+) -> Result<()> {
+    if patch_uses_diffy_default_filenames(patch) {
+        return Ok(());
+    }
+
+    for (label, header) in [
+        ("original", patch.original()),
+        ("modified", patch.modified()),
+    ] {
+        let Some(header) = header else {
+            continue;
+        };
+        if !patch_header_matches_path(header, requested_path) {
+            return Err(Error::Patch(format!(
+                "{}: patch {label} header '{header}' does not match target '{}'",
+                relative.display(),
+                requested_path.display()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "patch")]
+fn patch_uses_diffy_default_filenames(patch: &Patch<'_, str>) -> bool {
+    matches!(patch.original(), Some("original")) && matches!(patch.modified(), Some("modified"))
+}
+
+#[cfg(feature = "patch")]
+fn patch_header_matches_path(header: &str, requested_path: &Path) -> bool {
+    let normalized_header =
+        crate::path_utils::normalize_path_lexical(Path::new(strip_common_patch_prefix(header)));
+    let normalized_requested = crate::path_utils::normalize_path_lexical(requested_path);
+    normalized_header == normalized_requested
+}
+
+#[cfg(feature = "patch")]
+fn strip_common_patch_prefix(header: &str) -> &str {
+    let mut value = header;
+    match value
+        .strip_prefix("a/")
+        .or_else(|| value.strip_prefix("b/"))
+    {
+        Some(stripped) if !stripped.is_empty() => value = stripped,
+        _ => {}
+    }
+    while let Some(stripped) = value.strip_prefix("./") {
+        value = stripped;
+    }
+    value
 }

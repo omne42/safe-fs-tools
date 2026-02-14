@@ -61,38 +61,57 @@ impl Ord for Candidate {
     }
 }
 
-fn scan_dir_entry_counts(
-    ctx: &Context,
-    dir: &std::path::Path,
-    relative_dir: &std::path::Path,
-    root_path: &std::path::Path,
-) -> Result<(usize, u64)> {
-    let mut matched_entries: usize = 0;
-    let mut skipped_io_errors: u64 = 0;
+enum EntryOutcome {
+    Accepted(ListDirEntry),
+    Denied,
+    SkippedIoError,
+}
 
-    for entry in fs::read_dir(dir).map_err(|err| Error::io_path("read_dir", relative_dir, err))? {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                skipped_io_errors = skipped_io_errors.saturating_add(1);
-                continue;
-            }
-        };
-        let path = entry.path();
-        let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, root_path) {
-            Some(relative) => relative,
-            None => {
-                skipped_io_errors = skipped_io_errors.saturating_add(1);
-                continue;
-            }
-        };
-        if ctx.redactor.is_path_denied(&relative) {
-            continue;
-        }
-        matched_entries = matched_entries.saturating_add(1);
+fn process_dir_entry(
+    ctx: &Context,
+    entry: fs::DirEntry,
+    root_path: &std::path::Path,
+) -> EntryOutcome {
+    let path = entry.path();
+    let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, root_path) {
+        Some(relative) => relative,
+        None => return EntryOutcome::SkippedIoError,
+    };
+
+    if ctx.redactor.is_path_denied(&relative) {
+        return EntryOutcome::Denied;
     }
 
-    Ok((matched_entries, skipped_io_errors))
+    let file_type = match entry.file_type() {
+        Ok(value) => value,
+        Err(_) => return EntryOutcome::SkippedIoError,
+    };
+
+    let kind = if file_type.is_file() {
+        "file"
+    } else if file_type.is_dir() {
+        "dir"
+    } else if file_type.is_symlink() {
+        "symlink"
+    } else {
+        "other"
+    };
+
+    let size_bytes = if file_type.is_file() {
+        match entry.metadata() {
+            Ok(meta) => meta.len(),
+            Err(_) => return EntryOutcome::SkippedIoError,
+        }
+    } else {
+        0
+    };
+
+    EntryOutcome::Accepted(ListDirEntry {
+        path: relative,
+        name: entry.file_name().to_string_lossy().into_owned(),
+        kind: kind.to_string(),
+        size_bytes,
+    })
 }
 
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
@@ -119,19 +138,6 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     }
 
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
-
-    if max_entries == 0 {
-        let (matched_entries, skipped_io_errors) =
-            scan_dir_entry_counts(ctx, &dir, &relative_dir, &root_path)?;
-        return Ok(ListDirResponse {
-            path: relative_dir,
-            requested_path: Some(requested_path),
-            entries: Vec::new(),
-            truncated: matched_entries > 0,
-            skipped_io_errors,
-        });
-    }
-
     let mut heap = BinaryHeap::<Candidate>::new();
     let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;
@@ -144,71 +150,43 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 continue;
             }
         };
-        let path = entry.path();
-        let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, &root_path) {
-            Some(relative) => relative,
-            None => {
+        match process_dir_entry(ctx, entry, &root_path) {
+            EntryOutcome::Accepted(entry) => {
+                matched_entries = matched_entries.saturating_add(1);
+                if max_entries == 0 {
+                    continue;
+                }
+
+                let candidate = Candidate(entry);
+                if heap.len() < max_entries {
+                    heap.push(candidate);
+                    continue;
+                }
+
+                let should_replace = heap
+                    .peek()
+                    .is_some_and(|top| candidate.cmp(top) == std::cmp::Ordering::Less);
+                if should_replace {
+                    let _ = heap.pop();
+                    heap.push(candidate);
+                }
+            }
+            EntryOutcome::Denied => {}
+            EntryOutcome::SkippedIoError => {
                 skipped_io_errors = skipped_io_errors.saturating_add(1);
-                continue;
             }
-        };
-
-        if ctx.redactor.is_path_denied(&relative) {
-            continue;
-        }
-
-        let file_type = match entry.file_type() {
-            Ok(value) => value,
-            Err(_) => {
-                skipped_io_errors = skipped_io_errors.saturating_add(1);
-                continue;
-            }
-        };
-
-        let kind = if file_type.is_file() {
-            "file"
-        } else if file_type.is_dir() {
-            "dir"
-        } else if file_type.is_symlink() {
-            "symlink"
-        } else {
-            "other"
-        };
-
-        let mut size_bytes: u64 = 0;
-        if file_type.is_file() {
-            match entry.metadata() {
-                Ok(meta) => size_bytes = meta.len(),
-                Err(_) => skipped_io_errors = skipped_io_errors.saturating_add(1),
-            }
-        }
-
-        let candidate = Candidate(ListDirEntry {
-            path: relative,
-            name: entry.file_name().to_string_lossy().into_owned(),
-            kind: kind.to_string(),
-            size_bytes,
-        });
-
-        matched_entries = matched_entries.saturating_add(1);
-        if heap.len() < max_entries {
-            heap.push(candidate);
-            continue;
-        }
-
-        let should_replace = heap
-            .peek()
-            .is_some_and(|top| candidate.cmp(top) == std::cmp::Ordering::Less);
-        if should_replace {
-            let _ = heap.pop();
-            heap.push(candidate);
         }
     }
 
     let truncated = matched_entries > max_entries;
 
-    let mut entries = heap.into_vec().into_iter().map(|c| c.0).collect::<Vec<_>>();
-    entries.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
+    let entries = if max_entries == 0 {
+        Vec::new()
+    } else {
+        let mut entries = heap.into_vec().into_iter().map(|c| c.0).collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
+        entries
+    };
 
     Ok(ListDirResponse {
         path: relative_dir,

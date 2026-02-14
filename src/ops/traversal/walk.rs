@@ -13,14 +13,14 @@ fn walkdir_root_error(root_path: &Path, walk_root: &Path, err: walkdir::Error) -
         .filter(|relative| !relative.as_os_str().is_empty())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let source = match err.io_error().and_then(|io| io.raw_os_error()) {
-        Some(raw_os_error) => std::io::Error::from_raw_os_error(raw_os_error),
-        None => std::io::Error::new(
-            err.io_error()
-                .map(|io| io.kind())
-                .unwrap_or(std::io::ErrorKind::Other),
-            "walkdir error",
-        ),
+    let source = if let Some(io) = err.io_error() {
+        if let Some(raw_os_error) = io.raw_os_error() {
+            std::io::Error::from_raw_os_error(raw_os_error)
+        } else {
+            std::io::Error::new(io.kind(), err.to_string())
+        }
+    } else {
+        std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
     };
 
     Error::WalkDirRoot {
@@ -173,7 +173,10 @@ fn resolve_symlink_traversal_file(
                 diag.skipped_dangling_symlink_targets.saturating_add(1);
             Ok(None)
         }
-        Err(Error::InvalidPath(_)) => Ok(None),
+        Err(Error::InvalidPath(_)) => {
+            diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
+            Ok(None)
+        }
         Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
             diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
             Ok(None)
@@ -218,7 +221,13 @@ pub(super) fn walk_traversal_files(
         &mut TraversalDiagnostics,
     ) -> Result<std::ops::ControlFlow<()>>,
 ) -> Result<TraversalDiagnostics> {
-    if !crate::path_utils::starts_with_case_insensitive(walk_root, root_path) {
+    let normalized_root_path = crate::path_utils::normalize_path_lexical(root_path);
+    let normalized_walk_root = crate::path_utils::normalize_path_lexical(walk_root);
+
+    if !crate::path_utils::starts_with_case_insensitive(
+        &normalized_walk_root,
+        &normalized_root_path,
+    ) {
         return Err(Error::InvalidPath(
             "derived traversal root escapes selected root".to_string(),
         ));

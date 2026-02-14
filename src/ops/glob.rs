@@ -112,9 +112,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         |file, diag| {
             if globset_is_match(&matcher, &file.relative_path) {
                 if matches.len() >= ctx.policy.limits.max_results {
-                    diag.truncated = true;
-                    diag.scan_limit_reached = true;
-                    diag.scan_limit_reason = Some(ScanLimitReason::Results);
+                    diag.mark_limit_reached(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
                 matches.push(file.relative_path);

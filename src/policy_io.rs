@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::{Error, Result, SandboxPolicy};
 
 const DEFAULT_MAX_POLICY_BYTES: u64 = 4 * 1024 * 1024;
+const HARD_MAX_POLICY_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyFormat {
@@ -92,6 +93,11 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
             "max policy bytes must be > 0".to_string(),
         ));
     }
+    if max_bytes > HARD_MAX_POLICY_BYTES {
+        return Err(Error::InvalidPolicy(format!(
+            "max policy bytes exceeds hard limit ({HARD_MAX_POLICY_BYTES} bytes)"
+        )));
+    }
     if max_bytes >= usize::MAX as u64 {
         return Err(Error::InvalidPolicy(
             "max policy bytes exceeds platform limits".to_string(),
@@ -109,6 +115,13 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
             "path {} is not a regular file",
             path.display()
         )));
+    }
+    let meta_len = meta.len();
+    if meta_len > max_bytes {
+        return Err(Error::InputTooLarge {
+            size_bytes: meta_len,
+            max_bytes,
+        });
     }
 
     let limit = max_bytes.saturating_add(1);

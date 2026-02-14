@@ -132,13 +132,57 @@ pub(crate) fn normalize_path_lexical(path: &Path) -> PathBuf {
             }
         }
     }
-    out
+    if out.as_os_str().is_empty() && path.is_relative() {
+        PathBuf::from(".")
+    } else {
+        out
+    }
 }
 
 #[cfg(windows)]
 #[inline]
-fn lower(s: &OsStr) -> String {
-    s.to_string_lossy().to_lowercase()
+fn os_str_eq_case_insensitive_windows(a: &OsStr, b: &OsStr) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+
+    // SAFETY: `CompareStringOrdinal` is called with valid pointers into stack-owned UTF-16
+    // buffers, explicit lengths, and no pointers escape the call.
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        #[link_name = "CompareStringOrdinal"]
+        fn compare_string_ordinal(
+            string1: *const u16,
+            count1: i32,
+            string2: *const u16,
+            count2: i32,
+            ignore_case: i32,
+        ) -> i32;
+    }
+
+    const CSTR_EQUAL: i32 = 2;
+
+    let a_wide: Vec<u16> = a.encode_wide().collect();
+    let b_wide: Vec<u16> = b.encode_wide().collect();
+    let Ok(a_len) = i32::try_from(a_wide.len()) else {
+        return false;
+    };
+    let Ok(b_len) = i32::try_from(b_wide.len()) else {
+        return false;
+    };
+
+    let a_ptr = if a_wide.is_empty() {
+        ptr::null()
+    } else {
+        a_wide.as_ptr()
+    };
+    let b_ptr = if b_wide.is_empty() {
+        ptr::null()
+    } else {
+        b_wide.as_ptr()
+    };
+
+    // SAFETY: pointers and lengths describe valid UTF-16 buffers for the duration of the call.
+    unsafe { compare_string_ordinal(a_ptr, a_len, b_ptr, b_len, 1) == CSTR_EQUAL }
 }
 
 #[cfg(windows)]
@@ -155,10 +199,11 @@ fn prefixes_eq(a: std::path::Prefix<'_>, b: std::path::Prefix<'_>) -> bool {
         | (UNC(a_server, a_share), VerbatimUNC(b_server, b_share))
         | (VerbatimUNC(a_server, a_share), UNC(b_server, b_share))
         | (VerbatimUNC(a_server, a_share), VerbatimUNC(b_server, b_share)) => {
-            lower(a_server) == lower(b_server) && lower(a_share) == lower(b_share)
+            os_str_eq_case_insensitive_windows(a_server, b_server)
+                && os_str_eq_case_insensitive_windows(a_share, b_share)
         }
-        (Verbatim(a), Verbatim(b)) => lower(a) == lower(b),
-        (DeviceNS(a), DeviceNS(b)) => lower(a) == lower(b),
+        (Verbatim(a), Verbatim(b)) => os_str_eq_case_insensitive_windows(a, b),
+        (DeviceNS(a), DeviceNS(b)) => os_str_eq_case_insensitive_windows(a, b),
         _ => false,
     }
 }
@@ -169,7 +214,7 @@ fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
     match (a, b) {
         (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
         (Component::RootDir, Component::RootDir) => true,
-        (Component::Normal(a), Component::Normal(b)) => lower(a) == lower(b),
+        (Component::Normal(a), Component::Normal(b)) => os_str_eq_case_insensitive_windows(a, b),
         (Component::CurDir, Component::CurDir) => true,
         (Component::ParentDir, Component::ParentDir) => true,
         _ => false,
@@ -213,6 +258,10 @@ pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathB
     {
         use std::path::Component;
 
+        if prefix.as_os_str().is_empty() {
+            return Some(path.to_path_buf());
+        }
+
         let mut path_components = path.components();
         for prefix_comp in prefix.components() {
             let path_comp = path_components.next()?;
@@ -243,6 +292,20 @@ pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_path_lexical_dot_is_stable() {
+        assert_eq!(normalize_path_lexical(Path::new(".")), PathBuf::from("."));
+        assert_eq!(
+            normalize_path_lexical(Path::new("././")),
+            PathBuf::from(".")
+        );
+        assert_eq!(
+            normalize_path_lexical(Path::new("a/..")),
+            PathBuf::from(".")
+        );
+        assert_eq!(normalize_path_lexical(Path::new("")), PathBuf::from("."));
+    }
 
     #[test]
     fn strip_prefix_case_insensitive_handles_relative_paths() {
@@ -300,5 +363,15 @@ mod tests {
             Path::new(r"\\?\C:\Foo\Bar"),
             Path::new(r"c:\foo")
         ));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn strip_prefix_case_insensitive_empty_prefix_matches_std() {
+        let path = Path::new(r"C:\Foo\Bar");
+        assert_eq!(
+            strip_prefix_case_insensitive(path, Path::new("")),
+            path.strip_prefix(Path::new("")).ok().map(PathBuf::from)
+        );
     }
 }

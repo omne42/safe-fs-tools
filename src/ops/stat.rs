@@ -55,7 +55,14 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
     let (path, relative, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
-    let meta = fs::metadata(&path).map_err(|err| Error::io_path("metadata", &relative, err))?;
+    let meta =
+        fs::symlink_metadata(&path).map_err(|err| Error::io_path("metadata", &relative, err))?;
+    if meta.file_type().is_symlink() {
+        return Err(Error::InvalidPath(format!(
+            "path {} changed during operation",
+            relative.display()
+        )));
+    }
     let kind = if meta.is_file() {
         StatKind::File
     } else if meta.is_dir() {

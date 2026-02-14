@@ -44,8 +44,20 @@ pub(crate) fn load_text_limited(
     path: &Path,
     max_bytes: u64,
 ) -> Result<String, safe_fs_tools::Error> {
+    if max_bytes == 0 {
+        return Err(safe_fs_tools::Error::InvalidPath(
+            "max input bytes must be > 0".to_string(),
+        ));
+    }
+    if max_bytes >= usize::MAX as u64 {
+        return Err(safe_fs_tools::Error::InvalidPath(
+            "max input bytes exceeds platform limits".to_string(),
+        ));
+    }
+
     let limit = max_bytes.saturating_add(1);
     let mut bytes = Vec::<u8>::new();
+    let mut known_size = None;
 
     if path.as_os_str() == "-" {
         std::io::stdin()
@@ -71,6 +83,14 @@ pub(crate) fn load_text_limited(
                 path.display()
             )));
         }
+        let file_size = meta.len();
+        if file_size > max_bytes {
+            return Err(safe_fs_tools::Error::InputTooLarge {
+                size_bytes: file_size,
+                max_bytes,
+            });
+        }
+        known_size = Some(file_size);
 
         file.take(limit)
             .read_to_end(&mut bytes)
@@ -83,8 +103,9 @@ pub(crate) fn load_text_limited(
 
     let read_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     if read_size > max_bytes {
+        let size_bytes = known_size.map_or(read_size, |size| size.max(read_size));
         return Err(safe_fs_tools::Error::InputTooLarge {
-            size_bytes: read_size,
+            size_bytes,
             max_bytes,
         });
     }

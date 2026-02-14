@@ -13,8 +13,16 @@ use safe_fs_tools::policy::RootMode;
 #[cfg(feature = "patch")]
 use safe_fs_tools::ops::{PatchRequest, apply_unified_patch};
 
-fn assert_not_permitted(err: safe_fs_tools::Error) {
-    assert!(matches!(err, safe_fs_tools::Error::NotPermitted(_)));
+fn assert_not_permitted(err: safe_fs_tools::Error, expected_reason: &str) {
+    match err {
+        safe_fs_tools::Error::NotPermitted(message) => {
+            assert!(
+                message.contains(expected_reason),
+                "expected not_permitted reason to contain '{expected_reason}', got '{message}'"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -36,7 +44,7 @@ fn read_is_disabled_by_policy() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err);
+    assert_not_permitted(err, "read is disabled by policy");
 }
 
 #[test]
@@ -57,7 +65,7 @@ fn glob_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "glob is disabled by policy");
 }
 
 #[test]
@@ -80,7 +88,7 @@ fn grep_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "grep is disabled by policy");
 }
 
 #[test]
@@ -102,7 +110,7 @@ fn list_dir_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "list_dir is disabled by policy");
 }
 
 #[test]
@@ -123,7 +131,7 @@ fn stat_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "stat is disabled by policy");
 }
 
 #[test]
@@ -147,7 +155,7 @@ fn edit_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "edit is disabled by policy");
 }
 
 #[test]
@@ -170,7 +178,7 @@ fn patch_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "patch is disabled by policy");
 }
 
 #[test]
@@ -192,12 +200,20 @@ fn mkdir_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "mkdir is disabled by policy");
+    assert!(
+        !dir.path().join("sub").exists(),
+        "mkdir deny must not create target directory"
+    );
 }
 
 #[test]
 fn write_is_disabled_by_policy() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let file_path = dir.path().join("file.txt");
+    std::fs::write(&file_path, "baseline\n").expect("write baseline");
+    let before = std::fs::read_to_string(&file_path).expect("read baseline");
+    let before_meta = std::fs::metadata(&file_path).expect("metadata baseline");
 
     let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
     policy.permissions.write = false;
@@ -209,13 +225,21 @@ fn write_is_disabled_by_policy() {
             root_id: "root".to_string(),
             path: PathBuf::from("file.txt"),
             content: "hello\n".to_string(),
-            overwrite: false,
+            overwrite: true,
             create_parents: false,
         },
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "write is disabled by policy");
+    let after = std::fs::read_to_string(&file_path).expect("read after deny");
+    let after_meta = std::fs::metadata(&file_path).expect("metadata after deny");
+    assert_eq!(after, before, "write deny must not change file content");
+    assert_eq!(
+        after_meta.len(),
+        before_meta.len(),
+        "write deny must not change file metadata length"
+    );
 }
 
 #[test]
@@ -238,12 +262,23 @@ fn delete_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "delete is disabled by policy");
+    let file_path = dir.path().join("file.txt");
+    assert!(file_path.exists(), "delete deny must keep source file");
+    assert_eq!(
+        std::fs::read_to_string(&file_path).expect("read after deny"),
+        "hello\n",
+        "delete deny must not change file content"
+    );
 }
 
 #[test]
 fn move_is_disabled_by_policy() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let from = dir.path().join("a.txt");
+    let to = dir.path().join("b.txt");
+    std::fs::write(&from, "from\n").expect("write from");
+    std::fs::write(&to, "to\n").expect("write to");
 
     let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
     policy.permissions.move_path = false;
@@ -261,12 +296,26 @@ fn move_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "move is disabled by policy");
+    assert_eq!(
+        std::fs::read_to_string(&from).expect("read from after deny"),
+        "from\n",
+        "move deny must keep source content"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&to).expect("read to after deny"),
+        "to\n",
+        "move deny must not overwrite destination"
+    );
 }
 
 #[test]
 fn copy_is_disabled_by_policy() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let from = dir.path().join("a.txt");
+    let to = dir.path().join("b.txt");
+    std::fs::write(&from, "from\n").expect("write from");
+    std::fs::write(&to, "to\n").expect("write to");
 
     let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
     policy.permissions.copy_file = false;
@@ -284,7 +333,17 @@ fn copy_is_disabled_by_policy() {
     )
     .expect_err("should reject");
 
-    assert_not_permitted(err);
+    assert_not_permitted(err, "copy_file is disabled by policy");
+    assert_eq!(
+        std::fs::read_to_string(&from).expect("read from after deny"),
+        "from\n",
+        "copy deny must keep source content"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&to).expect("read to after deny"),
+        "to\n",
+        "copy deny must not overwrite destination"
+    );
 }
 
 #[test]
@@ -303,7 +362,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err);
+    assert_not_permitted(err, "edit is not allowed: root root is read_only");
 
     #[cfg(feature = "patch")]
     {
@@ -316,7 +375,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
             },
         )
         .expect_err("should reject");
-        assert_not_permitted(err);
+        assert_not_permitted(err, "patch is not allowed: root root is read_only");
     }
 
     let err = delete(
@@ -329,7 +388,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err);
+    assert_not_permitted(err, "delete is not allowed: root root is read_only");
 
     let err = delete(
         &ctx,
@@ -341,7 +400,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err);
+    assert_not_permitted(err, "delete is not allowed: root root is read_only");
 
     let err = mkdir(
         &ctx,
@@ -353,7 +412,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err);
+    assert_not_permitted(err, "mkdir is not allowed: root root is read_only");
 
     let err = write_file(
         &ctx,
@@ -366,7 +425,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err);
+    assert_not_permitted(err, "write is not allowed: root root is read_only");
 
     let err = move_path(
         &ctx,
@@ -379,7 +438,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err);
+    assert_not_permitted(err, "move is not allowed: root root is read_only");
 
     let err = copy_file(
         &ctx,
@@ -392,7 +451,7 @@ fn write_ops_are_disallowed_on_readonly_root() {
         },
     )
     .expect_err("should reject");
-    assert_not_permitted(err);
+    assert_not_permitted(err, "copy_file is not allowed: root root is read_only");
 
     assert!(
         !dir.path().join("file.txt").exists(),

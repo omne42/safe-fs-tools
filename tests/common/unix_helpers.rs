@@ -1,5 +1,6 @@
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::FileTypeExt;
 
 pub fn create_fifo(path: &std::path::Path) {
     let c_path = CString::new(path.as_os_str().as_bytes())
@@ -10,7 +11,13 @@ pub fn create_fifo(path: &std::path::Path) {
     if rc != 0 {
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() == Some(libc::EEXIST) {
-            return;
+            let metadata = std::fs::symlink_metadata(path).unwrap_or_else(|meta_err| {
+                panic!("stat failed for {}: {}", path.display(), meta_err)
+            });
+            if metadata.file_type().is_fifo() {
+                return;
+            }
+            panic!("mkfifo target exists but is not a fifo: {}", path.display());
         }
         panic!("mkfifo failed for {}: {}", path.display(), err);
     }

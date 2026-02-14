@@ -58,27 +58,13 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
     let canonical_root = resolved.canonical_root;
     let requested_path = resolved.requested_path;
 
-    let requested_is_root = requested_path
-        .components()
-        .all(|component| matches!(component, std::path::Component::CurDir));
-    if requested_is_root {
-        return Err(Error::InvalidPath(
-            "refusing to create the root directory".to_string(),
-        ));
-    }
-
-    let dir_name = requested_path.file_name().ok_or_else(|| {
-        Error::InvalidPath(format!(
-            "invalid mkdir path {:?}: missing final directory name",
-            request.path
-        ))
-    })?;
-    if dir_name == std::ffi::OsStr::new(".") || dir_name == std::ffi::OsStr::new("..") {
-        return Err(Error::InvalidPath(format!(
-            "invalid mkdir path {:?}",
-            request.path
-        )));
-    }
+    let dir_name = super::path_validation::ensure_non_root_leaf(
+        &requested_path,
+        &request.path,
+        "mkdir",
+        "directory name",
+        "refusing to create the root directory",
+    )?;
 
     let requested_parent = requested_path
         .parent()
@@ -96,11 +82,9 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
 
     let relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, &canonical_root)
-            .ok_or_else(|| {
-                Error::InvalidPath(format!(
-                    "failed to derive root-relative parent for {}",
-                    requested_path.display()
-                ))
+            .ok_or_else(|| Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_path.clone(),
             })?;
     let relative = relative_parent.join(dir_name);
 
@@ -177,16 +161,24 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 }
                 return Err(Error::io_path("create_dir", &relative, err));
             }
-            ensure_target_dir_within_root(
+            if let Err(validation_err) = ensure_target_dir_within_root(
                 &request.root_id,
                 &canonical_root,
                 &target,
                 &relative,
                 &requested_path,
-            )
-            .inspect_err(|_err| {
-                let _ = fs::remove_dir(&target);
-            })?;
+            ) {
+                if let Err(cleanup_err) = fs::remove_dir(&target) {
+                    let cleanup_context = std::io::Error::new(
+                        cleanup_err.kind(),
+                        format!(
+                            "mkdir post-create validation failed ({validation_err}); cleanup failed: {cleanup_err}"
+                        ),
+                    );
+                    return Err(Error::io_path("remove_dir", &relative, cleanup_context));
+                }
+                return Err(validation_err);
+            }
             Ok(MkdirResponse {
                 path: relative,
                 requested_path: Some(requested_path),

@@ -11,8 +11,6 @@ pub(crate) fn run_with_policy(
     cli: &Cli,
     policy: safe_fs_tools::SandboxPolicy,
 ) -> Result<(), CliError> {
-    validate_command_inputs(&cli.command)?;
-
     let max_patch_bytes = effective_max_patch_bytes(cli, &policy);
     let max_write_bytes = policy.limits.max_write_bytes;
     let ctx = Context::new(policy)?;
@@ -31,22 +29,6 @@ fn effective_max_patch_bytes(cli: &Cli, policy: &safe_fs_tools::SandboxPolicy) -
     cli.max_patch_bytes
         .map(|bytes| bytes.min(policy_patch_limit))
         .unwrap_or(policy_patch_limit)
-}
-
-fn validate_command_inputs(command: &Command) -> Result<(), CliError> {
-    match command {
-        Command::Read {
-            start_line,
-            end_line,
-            ..
-        } => validate_optional_line_range(*start_line, *end_line),
-        Command::Edit {
-            start_line,
-            end_line,
-            ..
-        } => validate_required_line_range(*start_line, *end_line),
-        _ => Ok(()),
-    }
 }
 
 fn execute_command(
@@ -227,30 +209,4 @@ fn execute_command(
         )?)
         .map_err(CliError::from),
     }
-}
-
-fn validate_optional_line_range(
-    start_line: Option<u64>,
-    end_line: Option<u64>,
-) -> Result<(), CliError> {
-    match (start_line, end_line) {
-        (Some(start), Some(end)) if start > end => Err(CliError::Tool(
-            safe_fs_tools::Error::InvalidPath("start_line must be <= end_line".to_string()),
-        )),
-        (Some(_), None) | (None, Some(_)) => {
-            Err(CliError::Tool(safe_fs_tools::Error::InvalidPath(
-                "start_line and end_line must be provided together".to_string(),
-            )))
-        }
-        _ => Ok(()),
-    }
-}
-
-fn validate_required_line_range(start_line: u64, end_line: u64) -> Result<(), CliError> {
-    if start_line > end_line {
-        return Err(CliError::Tool(safe_fs_tools::Error::InvalidPath(
-            "start_line must be <= end_line".to_string(),
-        )));
-    }
-    Ok(())
 }

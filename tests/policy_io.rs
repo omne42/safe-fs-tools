@@ -5,6 +5,8 @@ mod unix_helpers;
 
 #[cfg(feature = "policy-io")]
 mod policy_io {
+    const DUPLICATE_ROOT_ID_FRAGMENT: &str = "duplicate root.id";
+
     use safe_fs_tools::ops::Context;
     use safe_fs_tools::policy::{Permissions, Root, RootMode, SandboxPolicy};
     use serde::Serialize;
@@ -41,15 +43,30 @@ mod policy_io {
     }
 
     #[test]
-    fn load_policy_toml_and_json() {
+    fn load_policy_toml_ok() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root_path = dir.path().join("root");
         std::fs::create_dir_all(&root_path).expect("mkdir");
 
         let toml_path = dir.path().join("policy.toml");
-        let json_path = dir.path().join("policy.json");
 
         write_readonly_toml_policy(&toml_path, &root_path);
+
+        let toml_policy = safe_fs_tools::policy_io::load_policy(&toml_path).expect("load toml");
+        assert_eq!(toml_policy.roots.len(), 1);
+        assert_eq!(toml_policy.roots[0].id, "workspace");
+        assert_eq!(toml_policy.roots[0].path, root_path.clone());
+        assert_eq!(toml_policy.roots[0].mode, RootMode::ReadOnly);
+        assert!(toml_policy.permissions.read);
+        assert!(toml_policy.paths.allow_absolute);
+    }
+
+    #[test]
+    fn load_policy_json_ok() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+        let json_path = dir.path().join("policy.json");
 
         std::fs::write(
             &json_path,
@@ -72,14 +89,6 @@ mod policy_io {
         )
         .expect("write json");
 
-        let toml_policy = safe_fs_tools::policy_io::load_policy(&toml_path).expect("load toml");
-        assert_eq!(toml_policy.roots.len(), 1);
-        assert_eq!(toml_policy.roots[0].id, "workspace");
-        assert_eq!(toml_policy.roots[0].path, root_path.clone());
-        assert_eq!(toml_policy.roots[0].mode, RootMode::ReadOnly);
-        assert!(toml_policy.permissions.read);
-        assert!(toml_policy.paths.allow_absolute);
-
         let json_policy = safe_fs_tools::policy_io::load_policy(&json_path).expect("load json");
         assert_eq!(json_policy.roots.len(), 1);
         assert_eq!(json_policy.roots[0].id, "workspace");
@@ -87,6 +96,15 @@ mod policy_io {
         assert_eq!(json_policy.roots[0].mode, RootMode::ReadOnly);
         assert!(json_policy.permissions.read);
         assert!(json_policy.paths.allow_absolute);
+    }
+
+    #[test]
+    fn context_from_policy_path_uses_loaded_policy() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_path = dir.path().join("root");
+        std::fs::create_dir_all(&root_path).expect("mkdir");
+        let toml_path = dir.path().join("policy.toml");
+        write_readonly_toml_policy(&toml_path, &root_path);
 
         let ctx = Context::from_policy_path(&toml_path).expect("ctx");
         assert!(ctx.policy().permissions.read);
@@ -170,7 +188,9 @@ mode = "read_only"
 
         let err = safe_fs_tools::policy_io::load_policy(&policy_path).expect_err("reject");
         match err {
-            safe_fs_tools::Error::InvalidPolicy(msg) => assert!(msg.contains("duplicate root.id")),
+            safe_fs_tools::Error::InvalidPolicy(msg) => {
+                assert!(msg.contains(DUPLICATE_ROOT_ID_FRAGMENT))
+            }
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -198,7 +218,9 @@ mode = "read_only"
         )
         .expect_err("should validate");
         match err {
-            safe_fs_tools::Error::InvalidPolicy(msg) => assert!(msg.contains("duplicate root.id")),
+            safe_fs_tools::Error::InvalidPolicy(msg) => {
+                assert!(msg.contains(DUPLICATE_ROOT_ID_FRAGMENT))
+            }
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -224,5 +246,11 @@ mode = "read_only"
         )
         .expect("raw parse");
         assert_eq!(parsed.roots.len(), 2);
+        assert_eq!(parsed.roots[0].id, "dup");
+        assert_eq!(parsed.roots[1].id, "dup");
+        assert_eq!(parsed.roots[0].path, root_path);
+        assert_eq!(parsed.roots[1].path, dir.path().join("other"));
+        assert_eq!(parsed.roots[0].mode, RootMode::ReadOnly);
+        assert_eq!(parsed.roots[1].mode, RootMode::ReadOnly);
     }
 }

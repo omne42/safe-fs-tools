@@ -69,6 +69,10 @@ impl SecretRedactor {
     }
 
     pub fn redact_text(&self, input: &str) -> String {
+        self.redact_text_cow(input).into_owned()
+    }
+
+    pub fn redact_text_cow<'a>(&self, input: &'a str) -> Cow<'a, str> {
         let mut current: Cow<'_, str> = Cow::Borrowed(input);
         for regex in &self.redact {
             let replaced = regex.replace_all(current.as_ref(), NoExpand(&self.replacement));
@@ -77,7 +81,7 @@ impl SecretRedactor {
             }
             current = Cow::Owned(replaced.into_owned());
         }
-        current.into_owned()
+        current
     }
 }
 
@@ -194,5 +198,33 @@ mod tests {
             Error::InvalidPolicy(msg) => assert!(msg.contains("empty patterns are not allowed")),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn redact_text_cow_returns_borrowed_when_no_regex_configured() {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: Vec::new(),
+            replacement: "***".to_string(),
+        })
+        .expect("redactor");
+
+        let input = "no secrets here";
+        let redacted = redactor.redact_text_cow(input);
+        assert!(matches!(&redacted, Cow::Borrowed(_)));
+        assert_eq!(redacted.as_ref(), input);
+    }
+
+    #[test]
+    fn redact_text_cow_applies_regexes_in_order() {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: vec!["ab".to_string(), "b.".to_string()],
+            replacement: "X".to_string(),
+        })
+        .expect("redactor");
+
+        let redacted = redactor.redact_text_cow("abc");
+        assert_eq!(redacted.as_ref(), "Xc");
     }
 }

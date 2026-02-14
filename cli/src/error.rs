@@ -92,6 +92,7 @@ pub(crate) fn format_path_for_error(
     }
 
     if let Some(redaction) = redaction {
+        let mut best_match: Option<(usize, PathBuf)> = None;
         for root in redaction
             .roots
             .iter()
@@ -100,11 +101,22 @@ pub(crate) fn format_path_for_error(
             if let Some(relative) =
                 safe_fs_tools::path_utils::strip_prefix_case_insensitive(path, root)
             {
-                if relative.as_os_str().is_empty() {
-                    return ".".to_string();
+                let prefix_len = root.components().count();
+                let should_replace = best_match
+                    .as_ref()
+                    .map(|(best_len, _)| prefix_len > *best_len)
+                    .unwrap_or(true);
+                if should_replace {
+                    best_match = Some((prefix_len, relative));
                 }
-                return relative.display().to_string();
             }
+        }
+
+        if let Some((_, relative)) = best_match {
+            if relative.as_os_str().is_empty() {
+                return ".".to_string();
+            }
+            return relative.display().to_string();
         }
     }
 
@@ -248,10 +260,18 @@ pub(crate) fn tool_error_details_with(
                 })
             }
         }
-        safe_fs_tools::Error::InvalidRegex(message) => serde_json::json!({
-            "kind": "invalid_regex",
-            "message": message,
-        }),
+        safe_fs_tools::Error::InvalidRegex(message) => {
+            let mut out = details_map("invalid_regex");
+            out.insert(
+                "message".to_string(),
+                serde_json::Value::String(if redact_paths {
+                    "invalid regex".to_string()
+                } else {
+                    message.clone()
+                }),
+            );
+            serde_json::Value::Object(out)
+        }
         safe_fs_tools::Error::InputTooLarge {
             size_bytes,
             max_bytes,
@@ -261,7 +281,7 @@ pub(crate) fn tool_error_details_with(
             "max_bytes": max_bytes,
         }),
         safe_fs_tools::Error::WalkDirRoot { path, source } => {
-            let mut out = details_map("walkdir");
+            let mut out = details_map("walkdir_root");
             out.insert(
                 "path".to_string(),
                 serde_json::Value::String(format_path_for_error(
@@ -372,7 +392,7 @@ pub(crate) fn tool_public_message(
             format!("invalid utf-8 in file: {path}")
         }
         safe_fs_tools::Error::Patch(_) => "failed to apply patch".to_string(),
-        safe_fs_tools::Error::InvalidRegex(_) => tool.to_string(),
+        safe_fs_tools::Error::InvalidRegex(_) => "invalid regex".to_string(),
         safe_fs_tools::Error::InputTooLarge { .. } => tool.to_string(),
         safe_fs_tools::Error::WalkDirRoot { .. } | safe_fs_tools::Error::WalkDir(_) => {
             "walkdir error".to_string()

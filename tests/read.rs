@@ -31,6 +31,7 @@ fn read_redacts_matches() {
     assert_eq!(response.requested_path, Some(PathBuf::from("hello.txt")));
     assert!(response.content.contains("***REDACTED***"));
     assert!(!response.content.contains("abc123"));
+    assert!(response.content.contains("hello"));
 }
 
 #[test]
@@ -51,6 +52,7 @@ fn read_absolute_paths_return_root_relative_requested_path() {
     )
     .expect("read");
 
+    assert_eq!(response.path, PathBuf::from("hello.txt"));
     assert_eq!(response.requested_path, Some(PathBuf::from("hello.txt")));
 }
 
@@ -75,7 +77,9 @@ fn absolute_paths_can_be_disabled_by_policy() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("absolute request paths"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -104,6 +108,7 @@ fn read_redacts_literal_replacement_without_expanding_capture_groups() {
 
     assert!(response.content.contains("***$1***"));
     assert!(!response.content.contains("abc123"));
+    assert!(response.content.contains("hello"));
 }
 
 #[test]
@@ -335,7 +340,9 @@ fn read_rejects_incomplete_line_ranges() {
     )
     .expect_err("should reject");
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("must be provided together"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 
@@ -350,7 +357,9 @@ fn read_rejects_incomplete_line_ranges() {
     )
     .expect_err("should reject");
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("must be provided together"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -373,7 +382,9 @@ fn read_rejects_invalid_line_ranges() {
     )
     .expect_err("should reject");
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("invalid line range"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 
@@ -388,7 +399,9 @@ fn read_rejects_invalid_line_ranges() {
     )
     .expect_err("should reject");
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("invalid line range"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -411,7 +424,10 @@ fn read_line_ranges_reject_out_of_bounds_requests() {
     )
     .expect_err("should reject");
     match err {
-        safe_fs_tools::Error::InvalidPath(message) => assert!(message.contains("out of bounds")),
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("line range"));
+            assert!(message.contains("out of bounds"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }

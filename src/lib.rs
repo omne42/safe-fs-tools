@@ -6,8 +6,7 @@
 mod error;
 pub mod ops;
 pub mod path_utils;
-#[doc(hidden)]
-pub mod platform_open;
+mod platform_open;
 pub mod policy;
 #[cfg(feature = "policy-io")]
 pub mod policy_io;

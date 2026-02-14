@@ -11,6 +11,30 @@ use safe_fs_tools::policy::{RootMode, SandboxPolicy};
 #[cfg(feature = "glob")]
 use safe_fs_tools::ops::{GlobRequest, glob_paths};
 
+fn toggle_drive_letter_case(path: &std::path::Path) -> Option<PathBuf> {
+    let mut raw = path.to_string_lossy().into_owned();
+    let idx = if raw.starts_with(r"\\?\") && raw.len() >= 5 {
+        Some(4)
+    } else if raw.len() >= 2 && raw.as_bytes()[1] == b':' {
+        Some(0)
+    } else {
+        None
+    }?;
+
+    let ch = raw.as_bytes().get(idx).copied().map(char::from)?;
+    if !ch.is_ascii_alphabetic() {
+        return None;
+    }
+
+    let toggled = if ch.is_ascii_lowercase() {
+        ch.to_ascii_uppercase()
+    } else {
+        ch.to_ascii_lowercase()
+    };
+    raw.replace_range(idx..idx + 1, &toggled.to_string());
+    Some(PathBuf::from(raw))
+}
+
 #[test]
 fn deny_globs_apply_to_absolute_paths_even_when_parent_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -19,51 +43,14 @@ fn deny_globs_apply_to_absolute_paths_even_when_parent_is_missing() {
     policy.secrets.deny_globs = vec!["missing/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
-    let mut root = dir.path().to_string_lossy().into_owned();
-    let original_root = root.clone();
-    let mut did_toggle = false;
-    let drive_letter_index = if root.starts_with(r"\\?\") && root.len() >= 5 {
-        Some(4)
-    } else if root.len() >= 2 && root.as_bytes()[1] == b':' {
-        Some(0)
-    } else if root.starts_with(r"\\") && root.len() >= 3 {
-        Some(2)
-    } else {
-        None
+    let Some(root) = toggle_drive_letter_case(dir.path()) else {
+        eprintln!(
+            "skip: unable to toggle drive-letter case for root {}",
+            dir.path().display()
+        );
+        return;
     };
-
-    if let Some(idx) = drive_letter_index {
-        if let Some(ch) = root.as_bytes().get(idx).copied().map(|b| b as char)
-            && ch.is_ascii_alphabetic()
-        {
-            let new_ch = if ch.is_ascii_lowercase() {
-                ch.to_ascii_uppercase()
-            } else {
-                ch.to_ascii_lowercase()
-            };
-            root.replace_range(idx..idx + 1, &new_ch.to_string());
-            did_toggle = true;
-        }
-    }
-
-    if !did_toggle {
-        if let Some((idx, ch)) = root
-            .char_indices()
-            .find(|(_idx, ch)| ch.is_ascii_alphabetic())
-        {
-            let new_ch = if ch.is_ascii_lowercase() {
-                ch.to_ascii_uppercase()
-            } else {
-                ch.to_ascii_lowercase()
-            };
-            root.replace_range(idx..idx + 1, &new_ch.to_string());
-            did_toggle = true;
-        }
-    }
-
-    assert_ne!(root, original_root, "expected to toggle root path casing");
-
-    let abs = PathBuf::from(root).join("missing").join("file.txt");
+    let abs = root.join("missing").join("file.txt");
     let err = read_file(
         &ctx,
         ReadRequest {
@@ -94,7 +81,9 @@ fn resolve_path_rejects_drive_relative_paths() {
         .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("drive-relative"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -110,7 +99,9 @@ fn resolve_path_rejects_colon_paths_on_windows() {
         .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("':' is not allowed"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -136,7 +127,9 @@ fn deny_globs_match_backslash_separators() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::SecretPathDenied(_) => {}
+        safe_fs_tools::Error::SecretPathDenied(path) => {
+            assert_eq!(path, PathBuf::from(".git").join("config"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -162,8 +155,45 @@ fn deny_globs_are_case_insensitive_on_windows() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::SecretPathDenied(_) => {}
+        safe_fs_tools::Error::SecretPathDenied(path) => {
+            assert_eq!(path, PathBuf::from(".git").join("config"));
+        }
         other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn windows_prefix_matching_matrix_is_case_insensitive() {
+    use std::path::Path;
+
+    let cases = [
+        ("drive", r"C:\Root\Missing\file.txt", r"c:\root"),
+        (
+            "verbatim-drive",
+            r"\\?\C:\Root\Missing\file.txt",
+            r"c:\root",
+        ),
+        (
+            "unc",
+            r"\\server\share\Root\Missing\file.txt",
+            r"\\SERVER\SHARE\root",
+        ),
+    ];
+
+    for (name, full, prefix) in cases {
+        let full = Path::new(full);
+        let prefix = Path::new(prefix);
+        let expected = PathBuf::from("Missing").join("file.txt");
+
+        assert!(
+            safe_fs_tools::path_utils::starts_with_case_insensitive(full, prefix),
+            "starts_with_case_insensitive failed for case {name}"
+        );
+        assert_eq!(
+            safe_fs_tools::path_utils::strip_prefix_case_insensitive(full, prefix),
+            Some(expected),
+            "strip_prefix_case_insensitive failed for case {name}"
+        );
     }
 }
 

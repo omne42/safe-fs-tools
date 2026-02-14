@@ -28,6 +28,11 @@ fn list_dir_handles_large_directory_with_small_limit() {
     assert!(resp.truncated);
     assert_eq!(resp.entries.len(), 10);
     assert_eq!(resp.skipped_io_errors, 0);
+    for (idx, entry) in resp.entries.iter().enumerate() {
+        assert_eq!(entry.name, format!("file-{idx:04}.txt"));
+    }
+    assert_eq!(resp.entries.first().expect("entry").name, "file-0000.txt");
+    assert_eq!(resp.entries.last().expect("entry").name, "file-0009.txt");
 }
 
 #[test]
@@ -49,6 +54,10 @@ fn read_handles_large_file_within_limit() {
     )
     .expect("read");
 
-    assert_eq!(resp.bytes_read as usize, content.len());
+    assert_eq!(
+        resp.bytes_read,
+        u64::try_from(content.len()).expect("content len fits u64")
+    );
     assert_eq!(resp.content.len(), content.len());
+    assert!(!resp.truncated);
 }

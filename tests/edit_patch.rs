@@ -104,8 +104,7 @@ fn edit_rejects_symlink_escape_via_ancestor_dir() {
 }
 
 #[test]
-#[cfg(feature = "patch")]
-fn edit_patch_delete_roundtrip() {
+fn edit_happy_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("file.txt");
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
@@ -127,11 +126,20 @@ fn edit_patch_delete_roundtrip() {
 
     let after_edit = std::fs::read_to_string(&path).expect("read");
     assert_eq!(after_edit, "one\nTWO\nthree\n");
+}
 
+#[test]
+#[cfg(feature = "patch")]
+fn patch_happy_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let updated = "one\nTWO\nTHREE\n";
-    let patch = diffy::create_patch(&after_edit, updated);
+    let patch = diffy::create_patch("one\ntwo\nthree\n", updated);
 
-    let patch_resp = apply_unified_patch(
+    let patch = apply_unified_patch(
         &ctx,
         PatchRequest {
             root_id: "root".to_string(),
@@ -140,10 +148,20 @@ fn edit_patch_delete_roundtrip() {
         },
     )
     .expect("patch");
-    assert_eq!(patch_resp.requested_path, Some(PathBuf::from("file.txt")));
+    assert_eq!(patch.requested_path, Some(PathBuf::from("file.txt")));
 
     let after_patch = std::fs::read_to_string(&path).expect("read");
     assert_eq!(after_patch, updated);
+}
+
+#[test]
+#[cfg(feature = "patch")]
+fn delete_happy_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let delete = delete(
         &ctx,
@@ -156,6 +174,50 @@ fn edit_patch_delete_roundtrip() {
     )
     .expect("delete");
     assert_eq!(delete.requested_path, Some(PathBuf::from("file.txt")));
+
+    assert!(!path.exists());
+}
+
+#[test]
+#[cfg(feature = "patch")]
+fn edit_patch_delete_roundtrip_smoke() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: 2,
+            end_line: 2,
+            replacement: "TWO".to_string(),
+        },
+    )
+    .expect("edit");
+
+    apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            patch: diffy::create_patch("one\nTWO\nthree\n", "one\nTWO\nTHREE\n").to_string(),
+        },
+    )
+    .expect("patch");
+
+    delete(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            recursive: false,
+            ignore_missing: false,
+        },
+    )
+    .expect("delete");
 
     assert!(!path.exists());
 }
@@ -360,6 +422,10 @@ fn patch_rejects_too_large_patch_input() {
         safe_fs_tools::Error::InputTooLarge { .. } => {}
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read after reject"),
+        "one\n"
+    );
 }
 
 #[test]
@@ -571,7 +637,10 @@ fn patch_rejects_invalid_patch_text() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::Patch(message) => assert!(message.contains("file.txt")),
+        safe_fs_tools::Error::Patch(message) => {
+            assert!(message.contains("file.txt"));
+            assert!(message.contains("error parsing patch"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
     assert_eq!(
@@ -601,7 +670,10 @@ fn patch_rejects_patches_that_do_not_apply() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::Patch(message) => assert!(message.contains("file.txt")),
+        safe_fs_tools::Error::Patch(message) => {
+            assert!(message.contains("file.txt"));
+            assert!(message.contains("error applying hunk"));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
     assert_eq!(
