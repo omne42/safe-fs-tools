@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Regression cleanup after bulk review apply: restored `mkdir` leaf-validation contract, restored default test redaction/permission baseline, aligned read-range error wording back to `invalid line range`, and normalized missing-parent metadata error tagging in directory resolution.
 - Tests: expanded `glob` edge coverage for missing derived prefixes and `.` pattern stability.
 - CLI tests: Unix FIFO helper now treats `EEXIST` as success, reducing flaky failures in retry/parallel test scenarios.
 - `write_file` overwrite path now re-checks canonicalized relative paths against `secrets.deny_globs`, and size conversions avoid lossy `as u64` casts.

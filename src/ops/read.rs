@@ -55,7 +55,7 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
         (Some(start_line), Some(end_line)) => {
             if start_line == 0 || end_line == 0 || start_line > end_line {
                 return Err(Error::InvalidPath(format!(
-                    "invalid read range: line range {}..{}",
+                    "invalid line range: {}..{}",
                     start_line, end_line
                 )));
             }
@@ -102,7 +102,7 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
 
             if current_line < end_line {
                 return Err(Error::InvalidPath(format!(
-                    "invalid read range: line range {}..{} out of bounds (file has {} lines)",
+                    "invalid line range: {}..{} out of bounds (file has {} lines)",
                     start_line, end_line, current_line
                 )));
             }
@@ -114,7 +114,7 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
         }
         _ => {
             return Err(Error::InvalidPath(
-                "invalid read range: start_line and end_line must be provided together".to_string(),
+                "invalid line range: start_line and end_line must be provided together".to_string(),
             ));
         }
     };

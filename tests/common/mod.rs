@@ -2,27 +2,21 @@ use safe_fs_tools::policy::{
     Limits, PathRules, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules,
 };
 
-fn base_permissions(mode: RootMode) -> Permissions {
-    let mut permissions = Permissions {
+fn base_permissions(_mode: RootMode) -> Permissions {
+    Permissions {
         read: true,
         glob: true,
         grep: true,
         list_dir: true,
         stat: true,
-        ..Permissions::default()
-    };
-
-    if matches!(mode, RootMode::ReadWrite) {
-        permissions.edit = true;
-        permissions.patch = true;
-        permissions.delete = true;
-        permissions.mkdir = true;
-        permissions.write = true;
-        permissions.move_path = true;
-        permissions.copy_file = true;
+        edit: true,
+        patch: true,
+        delete: true,
+        mkdir: true,
+        write: true,
+        move_path: true,
+        copy_file: true,
     }
-
-    permissions
 }
 
 fn all_permissions() -> Permissions {
@@ -45,7 +39,7 @@ fn all_permissions() -> Permissions {
 fn base_secret_rules() -> SecretRules {
     SecretRules {
         deny_globs: Vec::new(),
-        redact_regexes: Vec::new(),
+        redact_regexes: vec!["API_KEY=[A-Za-z0-9_]+".to_string()],
         replacement: "***REDACTED***".to_string(),
     }
 }

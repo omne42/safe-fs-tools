@@ -23,6 +23,12 @@ impl LeafValidationSpec {
         root_rejection_message: "refusing to delete the root directory",
     };
 
+    const MKDIR: Self = Self {
+        op_name: "mkdir",
+        missing_segment_label: "directory name",
+        root_rejection_message: "refusing to create the root directory",
+    };
+
     fn from_parts(
         op_name: &'static str,
         missing_segment_label: &'static str,
@@ -42,6 +48,13 @@ impl LeafValidationSpec {
                     && root == Self::DELETE.root_rejection_message =>
             {
                 Ok(Self::DELETE)
+            }
+            (op, missing, root)
+                if op == Self::MKDIR.op_name
+                    && missing == Self::MKDIR.missing_segment_label
+                    && root == Self::MKDIR.root_rejection_message =>
+            {
+                Ok(Self::MKDIR)
             }
             _ => Err(Error::InvalidPath(format!(
                 "invalid leaf validation contract: op={op_name}, missing_segment_label={missing_segment_label}, root_rejection_message={root_rejection_message}"

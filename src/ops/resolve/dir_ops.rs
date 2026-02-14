@@ -110,7 +110,7 @@ pub(super) fn ensure_dir_under_root(
             )?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 if !create_missing {
-                    return Err(Error::io_path("symlink_metadata", &current_relative, err));
+                    return Err(Error::io_path("metadata", &current_relative, err));
                 }
                 let created_now = match fs::create_dir(&next) {
                     Ok(()) => true,
@@ -123,9 +123,7 @@ pub(super) fn ensure_dir_under_root(
                 };
 
                 match fs::symlink_metadata(&next)
-                    .map_err(|meta_err| {
-                        Error::io_path("symlink_metadata", &current_relative, meta_err)
-                    })
+                    .map_err(|meta_err| Error::io_path("metadata", &current_relative, meta_err))
                     .and_then(|meta| {
                         handle_existing_component(
                             &next,
@@ -144,7 +142,7 @@ pub(super) fn ensure_dir_under_root(
                     }
                 }
             }
-            Err(err) => return Err(Error::io_path("symlink_metadata", &current_relative, err)),
+            Err(err) => return Err(Error::io_path("metadata", &current_relative, err)),
         };
     }
 
