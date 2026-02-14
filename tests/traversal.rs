@@ -3,8 +3,11 @@ mod common;
 #[cfg(any(feature = "glob", feature = "grep"))]
 use std::path::PathBuf;
 
+#[cfg(any(feature = "glob", feature = "grep"))]
 use common::test_policy;
+#[cfg(any(feature = "glob", feature = "grep"))]
 use safe_fs_tools::ops::Context;
+#[cfg(any(feature = "glob", feature = "grep"))]
 use safe_fs_tools::policy::RootMode;
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -124,6 +127,7 @@ fn traversal_skip_globs_support_leading_dot_slash() {
     assert_skip_glob_applies_to_grep_but_not_direct_read("./node_modules/**");
 }
 
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn assert_skip_glob_pattern_rejected(pattern: &str, expected_message_fragment: &str) {
     let dir = tempfile::tempdir().expect("tempdir");
 
@@ -147,33 +151,39 @@ fn assert_skip_glob_pattern_rejected(pattern: &str, expected_message_fragment: &
 }
 
 #[test]
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn traversal_skip_globs_reject_absolute_pattern() {
     assert_skip_glob_pattern_rejected("/node_modules/**", "must not start with '/'");
 }
 
 #[test]
 #[cfg(windows)]
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn traversal_skip_globs_reject_windows_drive_absolute_pattern() {
     assert_skip_glob_pattern_rejected(r"C:\node_modules\**", "drive letter prefixes");
 }
 
 #[test]
 #[cfg(windows)]
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn traversal_skip_globs_reject_windows_unc_absolute_pattern() {
     assert_skip_glob_pattern_rejected(r"\\server\share\**", "must not start with '/'");
 }
 
 #[test]
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn traversal_skip_globs_reject_parent_prefix_pattern() {
     assert_skip_glob_pattern_rejected("../**/*.txt", "must not contain '..' segments");
 }
 
 #[test]
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn traversal_skip_globs_reject_parent_segment_pattern() {
     assert_skip_glob_pattern_rejected("src/../*.txt", "must not contain '..' segments");
 }
 
 #[test]
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn traversal_skip_globs_reject_empty_or_whitespace_pattern() {
     for pattern in ["", "   "] {
         assert_skip_glob_pattern_rejected(pattern, "glob pattern must not be empty");
