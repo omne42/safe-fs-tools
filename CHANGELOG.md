@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CLI internals now reuse the library's shared no-follow regular-file open helper (`open_regular_readonly_nofollow`) instead of maintaining a separate platform-specific opener implementation.
+- Docs/internal comments: align `ops` module notes with the current crate-root `glob`/`grep` export behavior.
 - Batch review/apply refresh (`10` 并发) across `cli`/`src/ops`/`tests`: tightened error-path consistency, reduced deeply nested control flow, and normalized formatting/readability in hot and boundary-sensitive paths.
 - Path-resolution contract hardening: internal lexical resolve flow now uses `resolve_path_checked` for explicit root-boundary validation semantics.
 - Batch review-driven maintenance sweep across core ops/CLI/tests: tightened path/permission/error handling contracts, reduced control-flow complexity, and aligned helper APIs with clearer ownership and typing boundaries.
@@ -61,6 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `glob`/`grep` traversal now preserves requested file/symlink-file aliases for file-root walks, so exact patterns like `link.txt` continue matching symlink entries instead of being silently canonicalized to target names.
+- `stat` unsupported-platform identity errors now explicitly document that identity revalidation is currently Unix/Windows-only.
 - `copy_file` replacement commit path handling now avoids `TempPath::as_ref()` type ambiguity by using an explicit `&Path` binding, restoring clean `cargo check` on current toolchain.
 - Regression cleanup after bulk review apply: restored `mkdir` leaf-validation contract, restored default test redaction/permission baseline, aligned read-range error wording back to `invalid line range`, and normalized missing-parent metadata error tagging in directory resolution.
 - Tests: expanded `glob` edge coverage for missing derived prefixes and `.` pattern stability.

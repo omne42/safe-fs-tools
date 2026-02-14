@@ -803,7 +803,7 @@ fn tool_error_details_strict_redacts_outside_root_path() {
     assert_kind(&details, "outside_root");
     assert_eq!(
         details.get("root_id").and_then(|v| v.as_str()),
-        Some("root")
+        Some("<redacted>")
     );
     assert_eq!(
         details.get("path").and_then(|v| v.as_str()),
@@ -816,7 +816,7 @@ fn tool_error_details_strict_redacts_outside_root_path() {
     assert_no_abs_path_leak(&details, &blocked);
 
     let message = tool_public_message(&err, Some(&redaction), true, true);
-    assert_eq!(message, "path resolves outside root 'root'");
+    assert_eq!(message, "path resolves outside root '<redacted>'");
 }
 
 #[test]

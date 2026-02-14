@@ -2,7 +2,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{permissive_test_policy, test_policy};
+use common::{all_permissions_test_policy, test_policy};
 use safe_fs_tools::ops::{Context, ReadRequest, read_file};
 use safe_fs_tools::policy::RootMode;
 
@@ -31,7 +31,7 @@ fn assert_secret_path_denied(
             panic!(
                 "unexpected NotPermitted: {msg}. \
                  assert_secret_path_denied requires policy.permissions.read=true; \
-                 use permissive_test_policy(...)"
+                 use all_permissions_test_policy(...)"
             );
         }
         other => panic!("unexpected error: {other:?}"),
@@ -105,7 +105,7 @@ fn deny_globs_support_leading_dot_slash() {
     std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
     std::fs::write(dir.path().join(".git").join("config"), "secret").expect("write");
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec!["./.git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -166,7 +166,7 @@ fn deny_glob_dot_git_cannot_be_bypassed_via_symlink_paths() {
         return;
     }
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -185,7 +185,7 @@ fn deny_glob_double_star_dot_git_cannot_be_bypassed_via_symlink_paths() {
         return;
     }
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec!["**/.git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -204,7 +204,7 @@ fn deny_glob_blocks_regular_path_that_symlinks_into_git() {
         return;
     }
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -223,7 +223,7 @@ fn deny_glob_blocks_regular_dir_path_that_symlinks_into_git() {
         return;
     }
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -237,7 +237,7 @@ fn deny_globs_match_after_lexical_normalization() {
     std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
     std::fs::write(dir.path().join(".git").join("config"), "secret\n").expect("write");
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -251,7 +251,7 @@ fn deny_globs_allow_non_secret_paths() {
     std::fs::write(dir.path().join(".git").join("config"), "secret\n").expect("write");
     std::fs::write(dir.path().join("public.txt"), "hello\n").expect("write");
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.secrets.deny_globs = vec![".git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 

@@ -29,9 +29,18 @@ fn resolve_walk_root_for_traversal(
     } else {
         relative_walk_root
     };
+    let requested_walk_root = ctx.canonical_root(root_id)?.join(&relative_walk_root);
 
     match ctx.canonical_path_in_root(root_id, &relative_walk_root) {
-        Ok((canonical, _, _)) => Ok(canonical),
+        Ok((canonical, _, _)) => {
+            // Preserve alias paths for file/symlink roots so pattern matching sees the
+            // requested path (e.g. "link.txt"), not only the canonical target path.
+            match std::fs::symlink_metadata(&requested_walk_root) {
+                Ok(meta) if !meta.is_dir() => Ok(requested_walk_root),
+                Ok(_) => Ok(canonical),
+                Err(_) => Ok(canonical),
+            }
+        }
         Err(Error::IoPath {
             op: "canonicalize",
             source,
@@ -58,10 +67,7 @@ fn walkdir_root_error(root_path: &Path, walk_root: &Path, err: walkdir::Error) -
             std::io::Error::from(io.kind())
         }
     } else {
-        std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "walkdir root traversal failed without io error detail",
-        )
+        std::io::Error::other("walkdir root traversal failed without io error detail")
     };
 
     Error::WalkDirRoot {

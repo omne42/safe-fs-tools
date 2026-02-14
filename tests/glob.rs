@@ -2,9 +2,9 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use common::permissive_test_policy;
+use common::all_permissions_test_policy;
 use safe_fs_tools::ops::{Context, GlobRequest, glob_paths};
 use safe_fs_tools::policy::RootMode;
 
@@ -68,7 +68,8 @@ fn glob_patterns_support_leading_dot_slash() {
     std::fs::create_dir_all(dir.path().join("src")).expect("mkdir");
     std::fs::write(dir.path().join("src").join("a.txt"), "a\n").expect("write");
 
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = glob_paths(
         &ctx,
         GlobRequest {
@@ -84,7 +85,8 @@ fn glob_patterns_support_leading_dot_slash() {
 #[test]
 fn glob_patterns_reject_absolute_and_parent_segments() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
 
     for pattern in ["/src/*.txt", "../**/*.txt", "src/../*.txt"] {
         let err = glob_paths(
@@ -111,7 +113,8 @@ fn glob_patterns_reject_absolute_and_parent_segments() {
 #[test]
 fn glob_patterns_reject_empty_and_whitespace() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
 
     for pattern in ["", "   "] {
         let err = glob_paths(
@@ -140,7 +143,8 @@ fn glob_missing_prefix_returns_empty_without_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
 
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = glob_paths(
         &ctx,
         GlobRequest {
@@ -161,7 +165,8 @@ fn glob_dot_pattern_is_stable() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
 
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = glob_paths(
         &ctx,
         GlobRequest {
@@ -187,7 +192,8 @@ fn glob_skips_dangling_symlink_targets() {
     let missing = dir.path().join("missing.txt");
     symlink(&missing, dir.path().join("b.txt")).expect("symlink");
 
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = glob_paths(
         &ctx,
         GlobRequest {
@@ -211,7 +217,8 @@ fn glob_does_not_follow_symlink_root_prefix() {
     std::fs::write(outside.path().join("a.txt"), "a\n").expect("write");
     symlink(outside.path(), dir.path().join("sub")).expect("symlink dir");
 
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let err = glob_paths(
         &ctx,
         GlobRequest {
@@ -226,6 +233,12 @@ fn glob_does_not_follow_symlink_root_prefix() {
             assert_eq!(root_id, "root");
             assert!(!path.is_absolute());
             assert_eq!(path.as_path(), Path::new("sub"));
+        }
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(
+                message.contains("escapes selected root"),
+                "unexpected: {message}"
+            );
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -256,7 +269,8 @@ fn glob_skips_walkdir_errors() {
     std::fs::write(blocked.join("b.txt"), "b\n").expect("write");
     let _chmod_guard = PermissionRestoreGuard::set(&blocked, 0o000);
 
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = glob_paths(
         &ctx,
         GlobRequest {
@@ -287,7 +301,8 @@ fn glob_root_walkdir_error_does_not_leak_absolute_paths() {
     std::fs::write(blocked.join("b.txt"), "b\n").expect("write");
     let _chmod_guard = PermissionRestoreGuard::set(&blocked, 0o000);
 
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let err = glob_paths(
         &ctx,
         GlobRequest {
@@ -317,7 +332,7 @@ fn glob_respects_max_walk_ms_time_budget() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.limits.max_walk_ms = Some(0);
 
     let ctx = Context::new(policy).expect("ctx");
@@ -345,7 +360,7 @@ fn glob_truncation_is_deterministic_under_max_results() {
     std::fs::write(dir.path().join("b.txt"), "b\n").expect("write");
     std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.limits.max_results = 1;
     let ctx = Context::new(policy).expect("ctx");
 

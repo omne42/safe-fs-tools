@@ -117,24 +117,42 @@ fn write_temp_file(
     Ok(tmp_file.into_temp_path())
 }
 
-fn commit_write<F>(
-    canonical_parent: &Path,
-    relative_parent: &Path,
-    expected_parent_identity: &ParentIdentity,
-    relative: &Path,
-    target: &Path,
-    bytes: &[u8],
+struct WriteCommitContext<'a> {
+    canonical_parent: &'a Path,
+    relative_parent: &'a Path,
+    expected_parent_identity: &'a ParentIdentity,
+    relative: &'a Path,
+    target: &'a Path,
+    bytes: &'a [u8],
     permissions: Option<fs::Permissions>,
+}
+
+fn commit_write<F>(
+    context: &WriteCommitContext<'_>,
     overwrite: bool,
     map_rename_error: F,
 ) -> Result<()>
 where
     F: FnOnce(std::io::Error) -> Error,
 {
-    verify_parent_identity(canonical_parent, relative_parent, expected_parent_identity)?;
-    let tmp_path = write_temp_file(canonical_parent, relative, bytes, permissions)?;
-    verify_parent_identity(canonical_parent, relative_parent, expected_parent_identity)?;
-    super::io::rename_replace(tmp_path.as_ref(), target, overwrite).map_err(map_rename_error)?;
+    verify_parent_identity(
+        context.canonical_parent,
+        context.relative_parent,
+        context.expected_parent_identity,
+    )?;
+    let tmp_path = write_temp_file(
+        context.canonical_parent,
+        context.relative,
+        context.bytes,
+        context.permissions.clone(),
+    )?;
+    verify_parent_identity(
+        context.canonical_parent,
+        context.relative_parent,
+        context.expected_parent_identity,
+    )?;
+    super::io::rename_replace(tmp_path.as_ref(), context.target, overwrite)
+        .map_err(map_rename_error)?;
     Ok(())
 }
 
@@ -328,17 +346,18 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         }
         ensure_existing_target_writable(&target, &relative)?;
 
-        commit_write(
-            &canonical_parent,
-            &relative_parent,
-            &parent_identity,
-            &relative,
-            &target,
-            request.content.as_bytes(),
-            Some(meta.permissions()),
-            true,
-            |err| Error::io_path("rename", &relative, err),
-        )?;
+        let commit_context = WriteCommitContext {
+            canonical_parent: &canonical_parent,
+            relative_parent: &relative_parent,
+            expected_parent_identity: &parent_identity,
+            relative: &relative,
+            target: &target,
+            bytes: request.content.as_bytes(),
+            permissions: Some(meta.permissions()),
+        };
+        commit_write(&commit_context, true, |err| {
+            Error::io_path("rename", &relative, err)
+        })?;
         return Ok(WriteFileResponse {
             path: relative,
             requested_path: Some(requested_path),
@@ -347,27 +366,26 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         });
     }
 
-    commit_write(
-        &canonical_parent,
-        &relative_parent,
-        &parent_identity,
-        &relative,
-        &target,
-        request.content.as_bytes(),
-        None,
-        request.overwrite,
-        |err| {
-            if err.kind() == std::io::ErrorKind::AlreadyExists && !request.overwrite {
-                return Error::InvalidPath("file exists".to_string());
-            }
-            if err.kind() == std::io::ErrorKind::Unsupported && !request.overwrite {
-                return Error::InvalidPath(
-                    "create without overwrite is unsupported on this platform".to_string(),
-                );
-            }
-            Error::io_path("rename", &relative, err)
-        },
-    )?;
+    let commit_context = WriteCommitContext {
+        canonical_parent: &canonical_parent,
+        relative_parent: &relative_parent,
+        expected_parent_identity: &parent_identity,
+        relative: &relative,
+        target: &target,
+        bytes: request.content.as_bytes(),
+        permissions: None,
+    };
+    commit_write(&commit_context, request.overwrite, |err| {
+        if err.kind() == std::io::ErrorKind::AlreadyExists && !request.overwrite {
+            return Error::InvalidPath("file exists".to_string());
+        }
+        if err.kind() == std::io::ErrorKind::Unsupported && !request.overwrite {
+            return Error::InvalidPath(
+                "create without overwrite is unsupported on this platform".to_string(),
+            );
+        }
+        Error::io_path("rename", &relative, err)
+    })?;
 
     Ok(WriteFileResponse {
         path: relative,

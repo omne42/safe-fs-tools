@@ -60,9 +60,8 @@ impl PathRedaction {
 
         for root in &policy.roots {
             roots.push(root.path.clone());
-            match root.path.canonicalize() {
-                Ok(canonical) => canonical_roots.push(canonical),
-                Err(_) => {}
+            if let Ok(canonical) = root.path.canonicalize() {
+                canonical_roots.push(canonical);
             }
         }
 
@@ -96,6 +95,7 @@ impl RedactionMode {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn format_path_for_error(
     path: &Path,
     redaction: Option<&PathRedaction>,

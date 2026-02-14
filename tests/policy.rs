@@ -8,6 +8,8 @@ use safe_fs_tools::policy::{
     Limits, PathRules, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules,
 };
 
+type LimitCase = (&'static str, fn(&mut Limits), &'static str);
+
 fn assert_invalid_policy_contains_all(err: safe_fs_tools::Error, expected_parts: &[&str]) {
     match err {
         safe_fs_tools::Error::InvalidPolicy(msg) => {
@@ -227,7 +229,7 @@ fn policy_rejects_empty_root_path() {
 #[test]
 fn policy_rejects_zero_required_limits() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let cases: [(&str, fn(&mut Limits), &str); 6] = [
+    let cases: [LimitCase; 6] = [
         (
             "max_read_bytes",
             |limits| limits.max_read_bytes = 0,

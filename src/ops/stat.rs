@@ -40,30 +40,6 @@ pub struct StatResponse {
     pub readonly: bool,
 }
 
-impl StatResponse {
-    fn new(
-        path: PathBuf,
-        requested_path: PathBuf,
-        kind: StatKind,
-        size_bytes: u64,
-        modified_ms: Option<u64>,
-        accessed_ms: Option<u64>,
-        created_ms: Option<u64>,
-        readonly: bool,
-    ) -> Self {
-        Self {
-            path,
-            requested_path: Some(requested_path),
-            kind,
-            size_bytes,
-            modified_ms,
-            accessed_ms,
-            created_ms,
-            readonly,
-        }
-    }
-}
-
 fn system_time_to_millis(value: std::time::SystemTime) -> Option<u64> {
     value
         .duration_since(std::time::UNIX_EPOCH)
@@ -97,6 +73,7 @@ fn file_identity_from_metadata(meta: &fs::Metadata) -> Option<FileIdentity> {
     #[cfg(all(not(unix), not(windows)))]
     {
         let _ = meta;
+        // Fail-closed: identity revalidation is currently supported only on Unix/Windows.
         None
     }
 }
@@ -172,7 +149,7 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
 
     let expected_identity = file_identity_from_metadata(&meta).ok_or_else(|| {
         Error::InvalidPath(format!(
-            "cannot verify identity for path {} on this platform",
+            "cannot verify identity for path {} on this platform (stat identity revalidation is only supported on Unix/Windows)",
             relative.display()
         ))
     })?;
@@ -203,14 +180,14 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
     let created_ms = metadata_time_to_millis(meta.created());
     let readonly = meta.permissions().readonly();
 
-    Ok(StatResponse::new(
-        relative,
-        requested_path,
+    Ok(StatResponse {
+        path: relative,
+        requested_path: Some(requested_path),
         kind,
         size_bytes,
         modified_ms,
         accessed_ms,
         created_ms,
         readonly,
-    ))
+    })
 }

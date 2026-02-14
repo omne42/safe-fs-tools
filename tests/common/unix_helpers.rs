@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use std::ffi::CString;
 use std::io::{self, ErrorKind};
 use std::os::unix::ffi::OsStrExt;

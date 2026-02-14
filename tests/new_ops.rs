@@ -2,7 +2,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::permissive_test_policy as test_policy;
+use common::all_permissions_test_policy as test_policy;
 use safe_fs_tools::ops::{
     Context, CopyFileRequest, DeleteKind, DeleteRequest, ListDirRequest, MkdirRequest,
     MovePathRequest, StatRequest, WriteFileRequest, copy_file, delete, list_dir, mkdir, move_path,
@@ -90,6 +90,18 @@ fn assert_secret_path_denied(err: safe_fs_tools::Error, expected_path: impl Into
     match err {
         safe_fs_tools::Error::SecretPathDenied(path) => {
             assert_eq!(path, expected_path);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+fn assert_secret_path_denied_any(err: safe_fs_tools::Error, expected_paths: &[PathBuf]) {
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(path) => {
+            assert!(
+                expected_paths.iter().any(|expected| expected == &path),
+                "unexpected denied path: {path:?}, expected one of {expected_paths:?}"
+            );
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -1042,7 +1054,10 @@ fn mkdir_denies_after_canonicalization_through_symlink_parent() {
         },
     )
     .expect_err("mkdir should reject denied canonical path");
-    assert_secret_path_denied(err, PathBuf::from("deny").join("new_dir"));
+    assert_secret_path_denied_any(
+        err,
+        &[PathBuf::from("deny"), PathBuf::from("deny").join("new_dir")],
+    );
 }
 
 #[test]
@@ -1086,7 +1101,10 @@ fn write_file_denies_after_canonicalization_through_symlink_parent() {
         },
     )
     .expect_err("write_file should reject denied canonical path");
-    assert_secret_path_denied(err, PathBuf::from("deny").join("new.txt"));
+    assert_secret_path_denied_any(
+        err,
+        &[PathBuf::from("deny"), PathBuf::from("deny").join("new.txt")],
+    );
 }
 
 #[test]
@@ -1107,7 +1125,10 @@ fn move_path_denies_secret_requested_destination_path() {
         },
     )
     .expect_err("move_path should reject denied requested destination");
-    assert_secret_path_denied(err, PathBuf::from("deny").join("out.txt"));
+    assert_secret_path_denied_any(
+        err,
+        &[PathBuf::from("deny"), PathBuf::from("deny").join("out.txt")],
+    );
     assert!(dir.path().join("from.txt").exists());
 }
 
@@ -1133,7 +1154,10 @@ fn move_path_denies_after_canonicalization_through_symlink_parent() {
         },
     )
     .expect_err("move_path should reject denied canonical destination");
-    assert_secret_path_denied(err, PathBuf::from("deny").join("out.txt"));
+    assert_secret_path_denied_any(
+        err,
+        &[PathBuf::from("deny"), PathBuf::from("deny").join("out.txt")],
+    );
     assert!(dir.path().join("from.txt").exists());
 }
 
@@ -1181,7 +1205,10 @@ fn copy_file_denies_after_canonicalization_through_symlink_parent() {
         },
     )
     .expect_err("copy_file should reject denied canonical destination");
-    assert_secret_path_denied(err, PathBuf::from("deny").join("out.txt"));
+    assert_secret_path_denied_any(
+        err,
+        &[PathBuf::from("deny"), PathBuf::from("deny").join("out.txt")],
+    );
     assert!(dir.path().join("from.txt").exists());
 }
 

@@ -166,12 +166,6 @@ pub(super) fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -
     read_open_file_limited(file, relative, max_bytes, meta.len())
 }
 
-pub(super) fn read_string_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<String> {
-    let (file, meta) = open_regular_file_for_read(path, relative)?;
-    let bytes = read_open_file_limited(file, relative, max_bytes, meta.len())?;
-    decode_utf8(relative, bytes)
-}
-
 pub(super) fn read_string_limited_with_identity(
     path: &Path,
     relative: &Path,
@@ -220,10 +214,6 @@ fn read_open_file_limited(
         return Err(file_too_large(relative, read_size, max_bytes));
     }
     Ok(bytes)
-}
-
-pub(super) fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
-    write_bytes_atomic_impl(path, relative, bytes, None, false)
 }
 
 pub(super) fn write_bytes_atomic_checked(
@@ -442,10 +432,10 @@ fn preserve_unix_security_metadata(
     }
 
     let tmp_meta = tmp_file.metadata()?;
-    let src_uid: libc::uid_t = src_meta.uid().into();
-    let src_gid: libc::gid_t = src_meta.gid().into();
-    let tmp_uid: libc::uid_t = tmp_meta.uid().into();
-    let tmp_gid: libc::gid_t = tmp_meta.gid().into();
+    let src_uid: libc::uid_t = src_meta.uid();
+    let src_gid: libc::gid_t = src_meta.gid();
+    let tmp_uid: libc::uid_t = tmp_meta.uid();
+    let tmp_gid: libc::gid_t = tmp_meta.gid();
     if src_uid != tmp_uid || src_gid != tmp_gid {
         let uid: libc::uid_t = if src_uid == tmp_uid {
             libc::uid_t::MAX

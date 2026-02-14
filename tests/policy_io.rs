@@ -268,10 +268,12 @@ mod policy_io {
 
         let err = safe_fs_tools::policy_io::load_policy_limited(&path, 10).expect_err("reject");
         match err {
-            safe_fs_tools::Error::InputTooLarge {
+            safe_fs_tools::Error::FileTooLarge {
+                path: actual_path,
                 size_bytes,
                 max_bytes,
             } => {
+                assert_eq!(actual_path, path);
                 assert_eq!(max_bytes, 10);
                 assert!(size_bytes >= 100, "unexpected size_bytes: {size_bytes}");
             }

@@ -12,8 +12,8 @@ fn compile_validated_glob(
     pattern: &str,
     invalid_err: impl Fn(String) -> Error,
 ) -> Result<globset::Glob> {
-    let normalized = normalize_and_validate_root_relative_glob_pattern(pattern)
-        .map_err(|msg| invalid_err(msg))?;
+    let normalized =
+        normalize_and_validate_root_relative_glob_pattern(pattern).map_err(&invalid_err)?;
     crate::path_utils_internal::build_glob_from_normalized(&normalized)
         .map_err(|err| invalid_err(err.to_string()))
 }

@@ -22,6 +22,8 @@ pub mod policy_io;
 pub mod redaction;
 
 pub use error::{Error, Result};
+#[doc(hidden)]
+pub use platform_open::{is_symlink_or_reparse_open_error, open_regular_readonly_nofollow};
 
 pub use ops::{
     Context, CopyFileRequest, CopyFileResponse, DeleteKind, DeleteRequest, DeleteResponse,

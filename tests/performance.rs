@@ -2,7 +2,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::permissive_test_policy;
+use common::all_permissions_test_policy;
 use safe_fs_tools::ops::{Context, ListDirRequest, ReadRequest, list_dir, read_file};
 use safe_fs_tools::policy::RootMode;
 
@@ -23,7 +23,7 @@ fn prepare_large_file_fixture() -> (tempfile::TempDir, String) {
 }
 
 fn build_read_context(dir: &tempfile::TempDir, max_read_bytes: u64) -> Context {
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.limits.max_read_bytes = max_read_bytes;
     Context::new(policy).expect("ctx")
 }
@@ -36,7 +36,8 @@ fn list_dir_handles_large_directory_with_small_limit() {
         std::fs::write(dir.path().join(name), "x").expect("write");
     }
 
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = list_dir(
         &ctx,
         ListDirRequest {

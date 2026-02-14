@@ -8,25 +8,14 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SameFileCheck {
-    Same,
-    Different,
-    Unsupported,
-}
-
 #[cfg(unix)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> SameFileCheck {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
-    if a.dev() == b.dev() && a.ino() == b.ino() {
-        SameFileCheck::Same
-    } else {
-        SameFileCheck::Different
-    }
+    Some(a.dev() == b.dev() && a.ino() == b.ino())
 }
 
 #[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> SameFileCheck {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::windows::fs::MetadataExt;
     match (
         a.volume_serial_number(),
@@ -35,19 +24,15 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> SameFileCheck {
         b.file_index(),
     ) {
         (Some(a_serial), Some(b_serial), Some(a_index), Some(b_index)) => {
-            if a_serial == b_serial && a_index == b_index {
-                SameFileCheck::Same
-            } else {
-                SameFileCheck::Different
-            }
+            Some(a_serial == b_serial && a_index == b_index)
         }
-        _ => SameFileCheck::Unsupported,
+        _ => None,
     }
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> SameFileCheck {
-    SameFileCheck::Unsupported
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
+    None
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,9 +112,9 @@ fn ensure_directory_identity_unchanged(
         return Err(directory_changed_during_list_error(relative_dir));
     }
     match metadata_same_file(expected_meta, &current_meta) {
-        SameFileCheck::Same => Ok(()),
-        SameFileCheck::Different => Err(directory_changed_during_list_error(relative_dir)),
-        SameFileCheck::Unsupported => {
+        Some(true) => Ok(()),
+        Some(false) => Err(directory_changed_during_list_error(relative_dir)),
+        None => {
             #[cfg(windows)]
             {
                 // Some Windows filesystems do not provide stable file IDs.

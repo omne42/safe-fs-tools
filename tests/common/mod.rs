@@ -23,7 +23,12 @@ pub fn test_policy_with_root_id(
     root: &std::path::Path,
     mode: RootMode,
 ) -> SandboxPolicy {
-    SandboxPolicy::single_root(root_id, root.to_path_buf(), mode)
+    let mut policy = SandboxPolicy::single_root(root_id, root.to_path_buf(), mode);
+    policy.permissions = permissive_permissions();
+    policy.secrets.deny_globs = Vec::new();
+    policy.secrets.redact_regexes = vec!["API_KEY=[A-Za-z0-9_]+".to_string()];
+    policy.secrets.replacement = "***REDACTED***".to_string();
+    policy
 }
 
 /// Build a default single-root test policy using root id "root".
@@ -35,14 +40,7 @@ pub fn test_policy(root: &std::path::Path, mode: RootMode) -> SandboxPolicy {
 /// This only changes `permissions`; `secrets`, `paths`, `limits`, and `traversal`
 /// remain at their default values from `test_policy`.
 pub fn all_permissions_test_policy(root: &std::path::Path, mode: RootMode) -> SandboxPolicy {
-    let mut policy = test_policy(root, mode);
-    policy.permissions = permissive_permissions();
-    policy
-}
-
-/// Backward-compatible alias kept for existing integration tests.
-pub fn permissive_test_policy(root: &std::path::Path, mode: RootMode) -> SandboxPolicy {
-    all_permissions_test_policy(root, mode)
+    test_policy(root, mode)
 }
 
 #[cfg(test)]

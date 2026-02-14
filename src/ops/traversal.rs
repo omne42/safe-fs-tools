@@ -6,9 +6,6 @@ use std::time::Instant;
 #[cfg(any(feature = "glob", feature = "grep"))]
 use globset::GlobSet;
 
-#[cfg(all(any(feature = "glob", feature = "grep"), test))]
-use walkdir::DirEntry;
-
 #[cfg(any(feature = "glob", feature = "grep"))]
 use crate::error::Result;
 
@@ -35,16 +32,6 @@ pub(super) fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option
 #[cfg(any(feature = "glob", feature = "grep"))]
 pub(super) fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
     compile::derive_safe_traversal_prefix(pattern)
-}
-
-#[cfg(any(feature = "glob", feature = "grep"))]
-#[cfg(test)]
-pub(super) fn walkdir_traversal_iter<'a>(
-    ctx: &'a Context,
-    root_path: &'a Path,
-    walk_root: &'a Path,
-) -> impl Iterator<Item = walkdir::Result<DirEntry>> + 'a {
-    walk::walkdir_traversal_iter(ctx, root_path, walk_root)
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]

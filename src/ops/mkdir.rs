@@ -112,15 +112,19 @@ fn cleanup_created_target_dir(
     })
 }
 
+struct MkdirPathContext<'a> {
+    canonical_parent: &'a Path,
+    relative_parent: &'a Path,
+    expected_parent_meta: &'a fs::Metadata,
+    root_id: &'a str,
+    canonical_root: &'a Path,
+    target: &'a Path,
+    relative: &'a Path,
+    requested_path: &'a Path,
+}
+
 fn handle_existing_target_dir(
-    canonical_parent: &Path,
-    relative_parent: &Path,
-    expected_parent_meta: &fs::Metadata,
-    root_id: &str,
-    canonical_root: &Path,
-    target: &Path,
-    relative: &Path,
-    requested_path: &Path,
+    context: &MkdirPathContext<'_>,
     existing_meta: &fs::Metadata,
     ignore_existing: bool,
 ) -> Result<MkdirResponse> {
@@ -130,12 +134,22 @@ fn handle_existing_target_dir(
         ));
     }
     if existing_meta.is_dir() {
-        ensure_parent_dir_unchanged(canonical_parent, relative_parent, expected_parent_meta)?;
-        ensure_target_dir_within_root(root_id, canonical_root, target, relative, requested_path)?;
+        ensure_parent_dir_unchanged(
+            context.canonical_parent,
+            context.relative_parent,
+            context.expected_parent_meta,
+        )?;
+        ensure_target_dir_within_root(
+            context.root_id,
+            context.canonical_root,
+            context.target,
+            context.relative,
+            context.requested_path,
+        )?;
         if ignore_existing {
             return Ok(MkdirResponse {
-                path: relative.to_path_buf(),
-                requested_path: Some(requested_path.to_path_buf()),
+                path: context.relative.to_path_buf(),
+                requested_path: Some(context.requested_path.to_path_buf()),
                 created: false,
             });
         }
@@ -226,20 +240,19 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
     }
 
     ensure_parent_dir_unchanged(&canonical_parent, &relative_parent, &canonical_parent_meta)?;
+    let path_context = MkdirPathContext {
+        canonical_parent: &canonical_parent,
+        relative_parent: &relative_parent,
+        expected_parent_meta: &canonical_parent_meta,
+        root_id: &request.root_id,
+        canonical_root: &canonical_root,
+        target: &target,
+        relative: &relative,
+        requested_path: &requested_path,
+    };
 
     match fs::symlink_metadata(&target) {
-        Ok(meta) => handle_existing_target_dir(
-            &canonical_parent,
-            &relative_parent,
-            &canonical_parent_meta,
-            &request.root_id,
-            &canonical_root,
-            &target,
-            &relative,
-            &requested_path,
-            &meta,
-            request.ignore_existing,
-        ),
+        Ok(meta) => handle_existing_target_dir(&path_context, &meta, request.ignore_existing),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             ensure_parent_dir_unchanged(
                 &canonical_parent,
@@ -257,14 +270,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                         Error::io_path("symlink_metadata", &relative, meta_err)
                     })?;
                     return handle_existing_target_dir(
-                        &canonical_parent,
-                        &relative_parent,
-                        &canonical_parent_meta,
-                        &request.root_id,
-                        &canonical_root,
-                        &target,
-                        &relative,
-                        &requested_path,
+                        &path_context,
                         &existing,
                         request.ignore_existing,
                     );
@@ -291,7 +297,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 &relative,
                 &requested_path,
             ) {
-                if let Err(cleanup_err) = cleanup_created_target_dir(
+                cleanup_created_target_dir(
                     &canonical_parent,
                     &relative_parent,
                     &canonical_parent_meta,
@@ -299,9 +305,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                     &relative,
                     &created_target_meta,
                     &validation_err,
-                ) {
-                    return Err(cleanup_err);
-                }
+                )?;
                 return Err(validation_err);
             }
             Ok(MkdirResponse {

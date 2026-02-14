@@ -125,6 +125,7 @@ impl Error {
         }
     }
 
+    #[cfg(any(feature = "grep", test))]
     pub(crate) fn invalid_regex(pattern: impl Into<String>, source: regex::Error) -> Self {
         Self::InvalidRegex {
             pattern: pattern.into(),
@@ -176,7 +177,8 @@ mod tests {
     }
 
     fn sample_utf8_error() -> std::str::Utf8Error {
-        std::str::from_utf8(b"\xFF").expect_err("invalid utf8")
+        let bytes = vec![0xFF_u8];
+        std::str::from_utf8(&bytes).expect_err("invalid utf8")
     }
 
     fn sample_from_utf8_error() -> std::string::FromUtf8Error {
@@ -184,7 +186,8 @@ mod tests {
     }
 
     fn sample_regex_error() -> regex::Error {
-        regex::Regex::new("[").expect_err("invalid regex")
+        let invalid = String::from("[");
+        regex::Regex::new(&invalid).expect_err("invalid regex")
     }
 
     #[test]
@@ -284,7 +287,7 @@ mod tests {
     fn invalid_utf8_source_does_not_expose_from_utf8_error() {
         let error = Error::invalid_utf8(PathBuf::from("x.txt"), sample_from_utf8_error());
         let source = error.source().expect("utf8 source");
-        assert!(source.downcast_ref::<std::str::Utf8Error>().is_some());
+        assert!(source.downcast_ref::<Utf8Source>().is_some());
         assert!(
             source
                 .downcast_ref::<std::string::FromUtf8Error>()

@@ -1,9 +1,7 @@
 //! Internal operation modules and request/response API surface.
 //!
 //! `glob` / `grep` request and response types, plus their entrypoints, are always
-//! exported from this internal `crate::ops` module so internal call sites can
-//! compile under any feature set.
-//! Crate-root public exports remain controlled by feature gates in `src/lib.rs`.
+//! available from this module and re-exported at crate root.
 //! When a corresponding crate feature is disabled, the function returns a
 //! deterministic `Error::NotPermitted` from its fallback implementation.
 

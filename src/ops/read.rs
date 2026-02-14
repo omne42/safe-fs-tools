@@ -93,17 +93,17 @@ fn parse_read_mode(start_line: Option<u64>, end_line: Option<u64>) -> Result<Rea
     }
 }
 
-fn read_full(path: &std::path::Path, relative: &PathBuf, ctx: &Context) -> Result<(u64, String)> {
+fn read_full(path: &std::path::Path, relative: &Path, ctx: &Context) -> Result<(u64, String)> {
     let bytes = super::io::read_bytes_limited(path, relative, ctx.policy.limits.max_read_bytes)?;
     let bytes_read = usize_to_u64(bytes.len(), relative, "file size")?;
     let content =
-        String::from_utf8(bytes).map_err(|err| Error::invalid_utf8(relative.clone(), err))?;
+        String::from_utf8(bytes).map_err(|err| Error::invalid_utf8(relative.to_path_buf(), err))?;
     Ok((bytes_read, content))
 }
 
 fn read_line_range(
     path: &std::path::Path,
-    relative: &PathBuf,
+    relative: &Path,
     ctx: &Context,
     start_line: u64,
     end_line: u64,
@@ -131,7 +131,7 @@ fn read_line_range(
         if scanned_bytes > ctx.policy.limits.max_read_bytes {
             let size_bytes = file_size_bytes.max(scanned_bytes);
             return Err(Error::FileTooLarge {
-                path: relative.clone(),
+                path: relative.to_path_buf(),
                 size_bytes,
                 max_bytes: ctx.policy.limits.max_read_bytes,
             });
@@ -159,7 +159,7 @@ fn read_line_range(
 
     let bytes_read = scanned_bytes;
     let content =
-        String::from_utf8(out).map_err(|err| Error::invalid_utf8(relative.clone(), err))?;
+        String::from_utf8(out).map_err(|err| Error::invalid_utf8(relative.to_path_buf(), err))?;
     Ok((bytes_read, content))
 }
 

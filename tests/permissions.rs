@@ -2,7 +2,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{permissive_test_policy, test_policy};
+use common::{all_permissions_test_policy, test_policy};
 use safe_fs_tools::ops::{
     Context, CopyFileRequest, DeleteRequest, EditRequest, GlobRequest, GrepRequest, ListDirRequest,
     MkdirRequest, MovePathRequest, ReadRequest, StatRequest, WriteFileRequest, copy_file, delete,
@@ -29,6 +29,10 @@ impl NotPermittedReason {
 }
 
 fn assert_not_permitted(err: safe_fs_tools::Error, op: &str, reason: NotPermittedReason) {
+    assert_not_permitted_with_tokens(err, op, reason.stable_tokens());
+}
+
+fn assert_not_permitted_with_tokens(err: safe_fs_tools::Error, op: &str, stable_tokens: &[&str]) {
     match err {
         safe_fs_tools::Error::NotPermitted(message) => {
             let expected_prefix = format!("{op} ");
@@ -36,10 +40,9 @@ fn assert_not_permitted(err: safe_fs_tools::Error, op: &str, reason: NotPermitte
                 message.starts_with(&expected_prefix),
                 "expected not_permitted reason to start with '{expected_prefix}', got '{message}'"
             );
-            let stable_tokens = reason.stable_tokens();
             assert!(
                 stable_tokens.iter().all(|token| message.contains(token)),
-                "expected not_permitted reason to contain all of {stable_tokens:?} for {reason:?}, got '{message}'"
+                "expected not_permitted reason to contain all of {stable_tokens:?}, got '{message}'"
             );
         }
         other => panic!("unexpected error: {other:?}"),
@@ -69,6 +72,7 @@ fn read_is_disabled_by_policy() {
 }
 
 #[test]
+#[cfg(feature = "glob")]
 fn glob_is_disabled_by_policy() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("file.txt"), "hello\n").expect("write");
@@ -90,6 +94,33 @@ fn glob_is_disabled_by_policy() {
 }
 
 #[test]
+#[cfg(not(feature = "glob"))]
+fn glob_is_disabled_by_policy() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("file.txt"), "hello\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.permissions.glob = false;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "**/*.txt".to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    assert_not_permitted_with_tokens(
+        err,
+        "glob",
+        &["not supported", "feature 'glob' is disabled"],
+    );
+}
+
+#[test]
+#[cfg(feature = "grep")]
 fn grep_is_disabled_by_policy() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("file.txt"), "hello\n").expect("write");
@@ -110,6 +141,34 @@ fn grep_is_disabled_by_policy() {
     .expect_err("should reject");
 
     assert_not_permitted(err, "grep", NotPermittedReason::DisabledByPolicy);
+}
+
+#[test]
+#[cfg(not(feature = "grep"))]
+fn grep_is_disabled_by_policy() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("file.txt"), "hello\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.permissions.grep = false;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "hello".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect_err("should reject");
+
+    assert_not_permitted_with_tokens(
+        err,
+        "grep",
+        &["not supported", "feature 'grep' is disabled"],
+    );
 }
 
 #[test]
@@ -633,7 +692,8 @@ fn setup_missing_root_fixture() -> MissingRootFixture {
     std::fs::write(&file_path, "hello\n").expect("write file");
     std::fs::write(&from, "from\n").expect("write from");
     std::fs::write(&to, "to\n").expect("write to");
-    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx =
+        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     MissingRootFixture {
         _dir: dir,
@@ -674,7 +734,7 @@ fn missing_root_with_disabled_write_permission_reports_not_permitted() {
     let file_path = dir.path().join("file.txt");
     std::fs::write(&file_path, "hello\n").expect("write baseline");
 
-    let mut policy = permissive_test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadWrite);
     policy.permissions.write = false;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -704,7 +764,7 @@ fn missing_root_with_readonly_root_reports_root_not_found() {
     let file_path = dir.path().join("file.txt");
     std::fs::write(&file_path, "hello\n").expect("write baseline");
 
-    let policy = permissive_test_policy(dir.path(), RootMode::ReadOnly);
+    let policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     let ctx = Context::new(policy).expect("ctx");
 
     assert_missing_root(
@@ -765,6 +825,7 @@ fn root_not_found_is_reported_for_write() {
 }
 
 #[test]
+#[cfg(feature = "glob")]
 fn root_not_found_is_reported_for_glob() {
     let fixture = setup_missing_root_fixture();
     assert_missing_root(
@@ -781,6 +842,27 @@ fn root_not_found_is_reported_for_glob() {
 }
 
 #[test]
+#[cfg(not(feature = "glob"))]
+fn root_not_found_is_reported_for_glob() {
+    let fixture = setup_missing_root_fixture();
+    let err = glob_paths(
+        &fixture.ctx,
+        GlobRequest {
+            root_id: MISSING_ROOT_ID.to_string(),
+            pattern: "**/*.txt".to_string(),
+        },
+    )
+    .expect_err("glob should reject missing root");
+    assert_not_permitted_with_tokens(
+        err,
+        "glob",
+        &["not supported", "feature 'glob' is disabled"],
+    );
+    assert_missing_root_side_effects(&fixture);
+}
+
+#[test]
+#[cfg(feature = "grep")]
 fn root_not_found_is_reported_for_grep() {
     let fixture = setup_missing_root_fixture();
     assert_missing_root(
@@ -794,6 +876,28 @@ fn root_not_found_is_reported_for_grep() {
             },
         ),
         "grep",
+    );
+    assert_missing_root_side_effects(&fixture);
+}
+
+#[test]
+#[cfg(not(feature = "grep"))]
+fn root_not_found_is_reported_for_grep() {
+    let fixture = setup_missing_root_fixture();
+    let err = grep(
+        &fixture.ctx,
+        GrepRequest {
+            root_id: MISSING_ROOT_ID.to_string(),
+            query: "hello".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect_err("grep should reject missing root");
+    assert_not_permitted_with_tokens(
+        err,
+        "grep",
+        &["not supported", "feature 'grep' is disabled"],
     );
     assert_missing_root_side_effects(&fixture);
 }
