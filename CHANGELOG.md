@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CLI internals now reuse the library's shared no-follow regular-file open helper (`open_regular_readonly_nofollow`) instead of maintaining a separate platform-specific opener implementation.
 - Docs/internal comments: align `ops` module notes with the current crate-root `glob`/`grep` export behavior.
+- Internal cleanup: `read` line-range scanning now uses a single reusable output buffer, and `Context::new` root-overlap checks reuse existing root runtime entries instead of maintaining a duplicate `(id, canonical_path)` side list.
 - Batch review/apply refresh (`10` 并发) across `cli`/`src/ops`/`tests`: tightened error-path consistency, reduced deeply nested control flow, and normalized formatting/readability in hot and boundary-sensitive paths.
 - Path-resolution contract hardening: internal lexical resolve flow now uses `resolve_path_checked` for explicit root-boundary validation semantics.
 - Batch review-driven maintenance sweep across core ops/CLI/tests: tightened path/permission/error handling contracts, reduced control-flow complexity, and aligned helper APIs with clearer ownership and typing boundaries.

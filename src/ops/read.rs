@@ -112,16 +112,15 @@ fn read_line_range(
     let file_size_bytes = meta.len();
     let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
     let mut reader = std::io::BufReader::new(file.take(limit));
-    let mut buf = Vec::<u8>::new();
     let mut out = Vec::<u8>::new();
 
     let mut scanned_bytes: u64 = 0;
     let mut current_line: u64 = 0;
 
     loop {
-        buf.clear();
+        let line_start = out.len();
         let n = reader
-            .read_until(b'\n', &mut buf)
+            .read_until(b'\n', &mut out)
             .map_err(|err| Error::io_path("read", relative, err))?;
         if n == 0 {
             break;
@@ -140,13 +139,11 @@ fn read_line_range(
         current_line += 1;
 
         if current_line < start_line {
+            out.truncate(line_start);
             continue;
         }
-        if current_line <= end_line {
-            out.extend_from_slice(&buf);
-            if current_line == end_line {
-                break;
-            }
+        if current_line == end_line {
+            break;
         }
     }
 

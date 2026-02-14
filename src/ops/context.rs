@@ -24,7 +24,6 @@ impl Context {
         let redactor = SecretRedactor::from_rules(&policy.secrets)?;
 
         let mut roots = HashMap::<String, RootRuntime>::new();
-        let mut seen_canonical_roots = Vec::<(String, PathBuf)>::new();
         for root in &policy.roots {
             let canonical = root.path.canonicalize().map_err(|err| {
                 Error::InvalidPolicy(format!(
@@ -48,7 +47,8 @@ impl Context {
                 )));
             }
 
-            for (existing_id, existing_canonical) in &seen_canonical_roots {
+            for (existing_id, existing_root) in &roots {
+                let existing_canonical = &existing_root.canonical_path;
                 if canonical_paths_equal(&canonical, existing_canonical) {
                     return Err(Error::InvalidPolicy(format!(
                         "root {} ({}) resolves to the same canonical directory as root {} ({})",
@@ -73,10 +73,9 @@ impl Context {
             match roots.entry(root.id.clone()) {
                 Entry::Vacant(slot) => {
                     slot.insert(RootRuntime {
-                        canonical_path: canonical.clone(),
+                        canonical_path: canonical,
                         mode: root.mode,
                     });
-                    seen_canonical_roots.push((root.id.clone(), canonical));
                 }
                 Entry::Occupied(_) => {
                     return Err(Error::InvalidPolicy(format!(
