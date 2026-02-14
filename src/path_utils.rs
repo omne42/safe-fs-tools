@@ -223,6 +223,9 @@ fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
 
 /// A case-insensitive `Path::starts_with` for Windows paths.
 ///
+/// This function is purely lexical and does not resolve `.`/`..` or symlinks.
+/// For boundary/security checks, callers must pass canonicalized or otherwise normalized paths.
+///
 /// On non-Windows platforms this is equivalent to `Path::starts_with`.
 #[inline]
 pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
@@ -251,17 +254,14 @@ pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
 
 /// A case-insensitive `Path::strip_prefix` for Windows paths.
 ///
+/// This function is purely lexical and does not resolve `.`/`..` or symlinks.
+/// For boundary/security checks, callers must pass canonicalized or otherwise normalized paths.
+///
 /// On non-Windows platforms this is equivalent to `Path::strip_prefix`.
 #[inline]
 pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        use std::path::Component;
-
-        if prefix.as_os_str().is_empty() {
-            return Some(path.to_path_buf());
-        }
-
         let mut path_components = path.components();
         for prefix_comp in prefix.components() {
             let path_comp = path_components.next()?;
@@ -271,16 +271,7 @@ pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathB
             }
         }
 
-        let mut out = PathBuf::new();
-        for comp in path_components {
-            match comp {
-                Component::Normal(part) => out.push(part),
-                Component::CurDir => {}
-                Component::ParentDir => out.push(".."),
-                Component::RootDir | Component::Prefix(_) => return None,
-            }
-        }
-        Some(out)
+        Some(path_components.as_path().to_path_buf())
     }
 
     #[cfg(not(windows))]
@@ -363,6 +354,30 @@ mod tests {
             Path::new(r"\\?\C:\Foo\Bar"),
             Path::new(r"c:\foo")
         ));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn strip_prefix_case_insensitive_is_some_when_starts_with_for_prefix_only_matches() {
+        let cases = [
+            (Path::new(r"C:\Foo\Bar"), Path::new(r"c:")),
+            (
+                Path::new(r"\\Server\Share\Dir"),
+                Path::new(r"\\server\share"),
+            ),
+            (Path::new(r"\\?\C:\Foo\Bar"), Path::new(r"c:")),
+        ];
+
+        for (path, prefix) in cases {
+            assert!(
+                starts_with_case_insensitive(path, prefix),
+                "expected starts_with for path={path:?}, prefix={prefix:?}"
+            );
+            assert!(
+                strip_prefix_case_insensitive(path, prefix).is_some(),
+                "expected strip_prefix to succeed for path={path:?}, prefix={prefix:?}"
+            );
+        }
     }
 
     #[test]

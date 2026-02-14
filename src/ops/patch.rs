@@ -102,13 +102,10 @@ fn ensure_patch_headers_match_target(
         return Ok(());
     }
 
-    for (label, header) in [
-        ("original", patch.original()),
-        ("modified", patch.modified()),
-    ] {
-        let Some(header) = header else {
-            continue;
-        };
+    let original_header = required_patch_header("original", patch.original(), relative)?;
+    let modified_header = required_patch_header("modified", patch.modified(), relative)?;
+
+    for (label, header) in [("original", original_header), ("modified", modified_header)] {
         if !patch_header_matches_path(header, requested_path) {
             return Err(Error::Patch(format!(
                 "{}: patch {label} header '{header}' does not match target '{}'",
@@ -122,6 +119,20 @@ fn ensure_patch_headers_match_target(
 }
 
 #[cfg(feature = "patch")]
+fn required_patch_header<'a>(
+    label: &str,
+    header: Option<&'a str>,
+    relative: &Path,
+) -> Result<&'a str> {
+    header.ok_or_else(|| {
+        Error::Patch(format!(
+            "{}: patch {label} header is missing",
+            relative.display()
+        ))
+    })
+}
+
+#[cfg(feature = "patch")]
 fn patch_uses_diffy_default_filenames(patch: &Patch<'_, str>) -> bool {
     matches!(patch.original(), Some("original")) && matches!(patch.modified(), Some("modified"))
 }
@@ -131,7 +142,13 @@ fn patch_header_matches_path(header: &str, requested_path: &Path) -> bool {
     let normalized_header =
         crate::path_utils::normalize_path_lexical(Path::new(strip_common_patch_prefix(header)));
     let normalized_requested = crate::path_utils::normalize_path_lexical(requested_path);
-    normalized_header == normalized_requested
+    normalized_paths_match(&normalized_header, &normalized_requested)
+}
+
+#[cfg(feature = "patch")]
+fn normalized_paths_match(a: &Path, b: &Path) -> bool {
+    crate::path_utils::starts_with_case_insensitive(a, b)
+        && crate::path_utils::starts_with_case_insensitive(b, a)
 }
 
 #[cfg(feature = "patch")]
@@ -148,4 +165,48 @@ fn strip_common_patch_prefix(header: &str) -> &str {
         value = stripped;
     }
     value
+}
+
+#[cfg(all(test, feature = "patch"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_patch_header_is_rejected() {
+        let err = required_patch_header("original", None, Path::new("file.txt"))
+            .expect_err("missing header should be rejected");
+        match err {
+            Error::Patch(msg) => assert!(
+                msg.contains("patch original header is missing"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn patch_header_prefixes_are_normalized_before_compare() {
+        assert!(patch_header_matches_path(
+            "a/./nested/file.txt",
+            Path::new("nested/file.txt")
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn patch_header_compare_is_case_insensitive_on_windows() {
+        assert!(patch_header_matches_path(
+            "a/file.txt",
+            Path::new("File.txt")
+        ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn patch_header_compare_remains_case_sensitive_on_non_windows() {
+        assert!(!patch_header_matches_path(
+            "a/file.txt",
+            Path::new("File.txt")
+        ));
+    }
 }

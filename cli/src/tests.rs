@@ -260,7 +260,7 @@ fn tool_error_details_redacts_walkdir_root_message() {
     let details = tool_error_details_with(&err, Some(&redaction), true, false);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
-        Some("walkdir")
+        Some("walkdir_root")
     );
     assert!(
         details.get("message").is_none(),
@@ -298,7 +298,7 @@ fn tool_error_details_includes_walkdir_root_message_when_not_redacting() {
     let details = tool_error_details_with(&err, None, false, false);
     assert_eq!(
         details.get("kind").and_then(|v| v.as_str()),
-        Some("walkdir")
+        Some("walkdir_root")
     );
     assert_eq!(
         details.get("path").and_then(|v| v.as_str()),

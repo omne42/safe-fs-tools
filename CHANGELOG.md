@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Batch review-driven maintenance sweep across core ops/CLI/tests: tightened path/permission/error handling contracts, reduced control-flow complexity, and aligned helper APIs with clearer ownership and typing boundaries.
 - Review follow-up refactor/hardening sweep: strengthened root-relative path contract validation for mutating ops, tightened IO/path error typing and redaction plumbing, and expanded cross-op regression coverage in `tests/*`.
 - Internal refactor: flattened traversal walk error/symlink handling into focused helpers in `src/ops/traversal/walk.rs` to reduce nested control flow.
 - `list_dir` now uses a dedicated count-only fast path for `max_entries=0`, avoiding unnecessary entry materialization.

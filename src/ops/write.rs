@@ -57,9 +57,7 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
     let file_name = super::path_validation::ensure_non_root_leaf(
         &requested_path,
         &request.path,
-        "write",
-        "file name",
-        "refusing to write to the root directory",
+        super::path_validation::LeafOp::Write,
     )?;
 
     let requested_parent = requested_path.parent().unwrap_or_else(|| Path::new(""));
@@ -92,14 +90,29 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         Err(err) => return Err(Error::io_path("metadata", &relative, err)),
     };
 
-    if existing.is_some() && !request.overwrite {
-        return Err(Error::InvalidPath("file exists".to_string()));
-    }
-
-    if existing.is_some() {
-        if ctx.redactor.is_path_denied(&relative) {
-            return Err(Error::SecretPathDenied(relative.clone()));
+    if let Some(meta) = existing {
+        let file_type = meta.file_type();
+        if file_type.is_dir() {
+            return Err(Error::InvalidPath(
+                "destination exists and is a directory".to_string(),
+            ));
         }
+        if file_type.is_symlink() {
+            return Err(Error::InvalidPath(format!(
+                "path {} is a symlink",
+                relative.display()
+            )));
+        }
+        if !file_type.is_file() {
+            return Err(Error::InvalidPath(
+                "destination exists and is not a regular file".to_string(),
+            ));
+        }
+
+        if !request.overwrite {
+            return Err(Error::InvalidPath("file exists".to_string()));
+        }
+
         super::io::write_bytes_atomic(&target, &relative, request.content.as_bytes())?;
         return Ok(WriteFileResponse {
             path: relative,

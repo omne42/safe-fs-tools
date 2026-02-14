@@ -13,28 +13,20 @@ pub fn is_symlink_open_error(err: &io::Error) -> bool {
 /// `InvalidPath("... is a symlink")` style policy error.
 #[cfg(windows)]
 pub fn is_symlink_open_error(err: &io::Error) -> bool {
-    const ERROR_STOPPED_ON_SYMLINK: i32 = 681;
-    const ERROR_CANT_ACCESS_FILE: i32 = 1920;
-    const ERROR_CANT_RESOLVE_FILENAME: i32 = 1921;
-    const ERROR_NOT_A_REPARSE_POINT: i32 = 4390;
-    const ERROR_INVALID_REPARSE_DATA: i32 = 4392;
-    const ERROR_REPARSE_TAG_INVALID: i32 = 4393;
-    const ERROR_REPARSE_TAG_MISMATCH: i32 = 4394;
-    const ERROR_REPARSE_POINT_ENCOUNTERED: i32 = 4395;
+    use windows_sys::Win32::Foundation::{
+        ERROR_CANT_RESOLVE_FILENAME, ERROR_REPARSE_POINT_ENCOUNTERED, ERROR_STOPPED_ON_SYMLINK,
+    };
 
-    matches!(
-        err.raw_os_error(),
-        Some(
-            ERROR_STOPPED_ON_SYMLINK
-                | ERROR_CANT_ACCESS_FILE
-                | ERROR_CANT_RESOLVE_FILENAME
-                | ERROR_NOT_A_REPARSE_POINT
-                | ERROR_INVALID_REPARSE_DATA
-                | ERROR_REPARSE_TAG_INVALID
-                | ERROR_REPARSE_TAG_MISMATCH
-                | ERROR_REPARSE_POINT_ENCOUNTERED
-        )
-    )
+    match err.raw_os_error() {
+        Some(code) => {
+            // Keep a strict whitelist: direct "symlink encountered" plus
+            // unresolved link traversal (loop/too many indirections).
+            code == ERROR_STOPPED_ON_SYMLINK as i32
+                || code == ERROR_REPARSE_POINT_ENCOUNTERED as i32
+                || code == ERROR_CANT_RESOLVE_FILENAME as i32
+        }
+        None => false,
+    }
 }
 
 /// Returns `true` when an open failure should be mapped to an
@@ -78,4 +70,61 @@ pub fn open_readonly_nofollow(path: &Path) -> io::Result<File> {
         io::ErrorKind::Unsupported,
         "platform does not support atomic no-follow reads",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_symlink_open_is_classified_as_symlink_error() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let target = dir.path().join("target.txt");
+        let link = dir.path().join("link.txt");
+
+        std::fs::write(&target, b"x").expect("write target");
+        symlink(&target, &link).expect("create symlink");
+
+        let err = open_readonly_nofollow(&link).expect_err("symlink open should fail");
+        assert!(is_symlink_open_error(&err));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_only_expected_reparse_errors_are_classified_as_symlink_errors() {
+        use windows_sys::Win32::Foundation::{
+            ERROR_CANT_ACCESS_FILE, ERROR_CANT_RESOLVE_FILENAME, ERROR_INVALID_REPARSE_DATA,
+            ERROR_NOT_A_REPARSE_POINT, ERROR_REPARSE_POINT_ENCOUNTERED, ERROR_STOPPED_ON_SYMLINK,
+        };
+
+        for code in [
+            ERROR_STOPPED_ON_SYMLINK,
+            ERROR_CANT_RESOLVE_FILENAME,
+            ERROR_REPARSE_POINT_ENCOUNTERED,
+        ] {
+            let err = io::Error::from_raw_os_error(code as i32);
+            assert!(is_symlink_open_error(&err), "code {code} should be true");
+        }
+
+        for code in [
+            ERROR_CANT_ACCESS_FILE,
+            ERROR_NOT_A_REPARSE_POINT,
+            ERROR_INVALID_REPARSE_DATA,
+        ] {
+            let err = io::Error::from_raw_os_error(code as i32);
+            assert!(!is_symlink_open_error(&err), "code {code} should be false");
+        }
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    #[test]
+    fn unsupported_platform_open_returns_unsupported() {
+        let path = Path::new("dummy");
+        let err = open_readonly_nofollow(path).expect_err("open must fail");
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(!is_symlink_open_error(&err));
+    }
 }

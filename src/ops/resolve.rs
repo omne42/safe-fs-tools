@@ -6,35 +6,26 @@ use crate::error::{Error, Result};
 mod dir_ops;
 
 pub(super) fn derive_requested_path(
+    root_id: &str,
     root_path: &Path,
     canonical_root: &Path,
-    input: &Path,
     resolved: &Path,
 ) -> Result<PathBuf> {
-    let relative_requested = if input.is_absolute() {
-        let normalized_resolved = crate::path_utils::normalize_path_lexical(resolved);
-        let normalized_root_path = crate::path_utils::normalize_path_lexical(root_path);
-        let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
+    let normalized_resolved = crate::path_utils::normalize_path_lexical(resolved);
+    let normalized_root_path = crate::path_utils::normalize_path_lexical(root_path);
+    let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
 
+    let relative_requested = crate::path_utils::strip_prefix_case_insensitive(
+        &normalized_resolved,
+        &normalized_root_path,
+    )
+    .or_else(|| {
         crate::path_utils::strip_prefix_case_insensitive(
             &normalized_resolved,
-            &normalized_root_path,
+            &normalized_canonical_root,
         )
-        .or_else(|| {
-            crate::path_utils::strip_prefix_case_insensitive(
-                &normalized_resolved,
-                &normalized_canonical_root,
-            )
-        })
-        .ok_or_else(|| {
-            Error::InvalidPath(format!(
-                "failed to derive root-relative path from absolute input {}",
-                input.display()
-            ))
-        })?
-    } else {
-        input.to_path_buf()
-    };
+    })
+    .ok_or_else(|| outside_root_error(root_id, &normalized_resolved))?;
 
     let normalized = crate::path_utils::normalize_path_lexical(&relative_requested);
     if normalized.as_os_str().is_empty() {
@@ -63,6 +54,7 @@ fn classify_notfound_escape(
     requested_path: &Path,
 ) -> Result<()> {
     let mut current = canonical_root.to_path_buf();
+    let mut traversed_relative = PathBuf::new();
     for component in requested_path.components() {
         let segment = match component {
             Component::CurDir => continue,
@@ -72,16 +64,17 @@ fn classify_notfound_escape(
             }
         };
 
+        let next_relative = traversed_relative.join(segment);
         let next = current.join(segment);
         let metadata = match fs::symlink_metadata(&next) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(Error::io_path("symlink_metadata", requested_path, err)),
+            Err(err) => return Err(Error::io_path("symlink_metadata", &next_relative, err)),
         };
 
         if metadata.file_type().is_symlink() {
             let symlink_target = fs::read_link(&next)
-                .map_err(|err| Error::io_path("read_link", requested_path, err))?;
+                .map_err(|err| Error::io_path("read_link", &next_relative, err))?;
             let resolved_target = if symlink_target.is_absolute() {
                 symlink_target
             } else {
@@ -95,15 +88,17 @@ fn classify_notfound_escape(
             current = match resolved_target.canonicalize() {
                 Ok(canonical) => canonical,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(_) => return Err(outside_root_error(root_id, requested_path)),
+                Err(err) => return Err(Error::io_path("canonicalize", &next_relative, err)),
             };
             if !crate::path_utils::starts_with_case_insensitive(&current, canonical_root) {
                 return Err(outside_root_error(root_id, requested_path));
             }
+            traversed_relative = next_relative;
             continue;
         }
 
         current = next;
+        traversed_relative = next_relative;
     }
 
     Ok(())
@@ -145,28 +140,13 @@ pub(super) fn resolve_path_in_root_lexically(
     );
 
     if !lexically_in_root {
-        let requested_path = if path.is_absolute() {
-            normalized_resolved
-        } else {
-            derive_requested_path(&root.path, &canonical_root, path, &resolved)?
-        };
-        if requested_path.is_absolute() {
-            return Err(Error::OutsideRoot {
-                root_id: root_id.to_string(),
-                path: requested_path,
-            });
-        }
-        let requested_path = ctx.reject_secret_path(requested_path)?;
-        return Err(Error::OutsideRoot {
-            root_id: root_id.to_string(),
-            path: requested_path,
-        });
+        return Err(outside_root_error(root_id, &normalized_resolved));
     }
 
     let requested_path = ctx.reject_secret_path(derive_requested_path(
+        root_id,
         &root.path,
         &canonical_root,
-        path,
         &resolved,
     )?)?;
 

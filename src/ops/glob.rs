@@ -121,7 +121,10 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         },
     ) {
         Ok(diag) => diag,
-        Err(Error::WalkDirRoot { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+        Err(Error::WalkDirRoot { path, source })
+            if source.kind() == std::io::ErrorKind::NotFound
+                && path.as_path() != std::path::Path::new(".") =>
+        {
             return Ok(build_glob_response(matches, diag, &started));
         }
         Err(err) => return Err(err),

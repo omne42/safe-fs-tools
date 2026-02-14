@@ -6,6 +6,8 @@ mod unix_helpers;
 #[cfg(feature = "policy-io")]
 mod policy_io {
     const DUPLICATE_ROOT_ID_FRAGMENT: &str = "duplicate root.id";
+    const NON_REGULAR_FILE_FRAGMENT: &str = "not a regular file";
+    const SYMLINK_FRAGMENT: &str = "symlink";
 
     use safe_fs_tools::ops::Context;
     use safe_fs_tools::policy::{Permissions, Root, RootMode, SandboxPolicy};
@@ -40,6 +42,15 @@ mod policy_io {
         };
         let encoded = toml::to_string(&doc).expect("serialize toml");
         std::fs::write(policy_path, encoded).expect("write toml");
+    }
+
+    fn assert_invalid_path_contains(err: safe_fs_tools::Error, fragment: &str) {
+        match err {
+            safe_fs_tools::Error::InvalidPath(msg) => {
+                assert!(msg.contains(fragment), "unexpected message: {msg}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
@@ -131,10 +142,7 @@ mod policy_io {
         crate::unix_helpers::create_fifo(&path);
 
         let err = safe_fs_tools::policy_io::load_policy_limited(&path, 8).expect_err("reject");
-        match err {
-            safe_fs_tools::Error::InvalidPath(_) => {}
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_invalid_path_contains(err, NON_REGULAR_FILE_FRAGMENT);
     }
 
     #[test]
@@ -153,10 +161,7 @@ mod policy_io {
         symlink(&real_policy, &link_policy).expect("symlink");
 
         let err = safe_fs_tools::policy_io::load_policy(&link_policy).expect_err("reject");
-        match err {
-            safe_fs_tools::Error::InvalidPath(_) => {}
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_invalid_path_contains(err, SYMLINK_FRAGMENT);
     }
 
     #[test]

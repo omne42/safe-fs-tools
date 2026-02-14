@@ -29,6 +29,8 @@ fn read_redacts_matches() {
 
     assert_eq!(response.path, PathBuf::from("hello.txt"));
     assert_eq!(response.requested_path, Some(PathBuf::from("hello.txt")));
+    assert!(!response.truncated);
+    assert_eq!(response.bytes_read, 21);
     assert!(response.content.contains("***REDACTED***"));
     assert!(!response.content.contains("abc123"));
     assert!(response.content.contains("hello"));
@@ -216,6 +218,8 @@ fn read_supports_line_ranges() {
     assert_eq!(response.content, "two\nthree\n");
     assert_eq!(response.start_line, Some(2));
     assert_eq!(response.end_line, Some(3));
+    assert!(!response.truncated);
+    assert_eq!(response.bytes_read, 19);
 }
 
 #[test]
@@ -239,6 +243,60 @@ fn read_supports_line_ranges_without_trailing_newline() {
     assert_eq!(response.content, "three");
     assert_eq!(response.start_line, Some(3));
     assert_eq!(response.end_line, Some(3));
+    assert!(!response.truncated);
+    assert_eq!(response.bytes_read, 13);
+}
+
+#[test]
+fn read_rejects_non_utf8_file_full_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("invalid.txt");
+    std::fs::write(&path, b"fo\x80").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("invalid.txt"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidUtf8(path) => {
+            assert_eq!(path, PathBuf::from("invalid.txt"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn read_rejects_non_utf8_file_line_range_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("invalid.txt");
+    std::fs::write(&path, b"ok\n\xff\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let err = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("invalid.txt"),
+            start_line: Some(2),
+            end_line: Some(2),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::InvalidUtf8(path) => {
+            assert_eq!(path, PathBuf::from("invalid.txt"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
@@ -263,7 +321,15 @@ fn read_line_ranges_respects_max_read_bytes() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::FileTooLarge { .. } => {}
+        safe_fs_tools::Error::FileTooLarge {
+            path,
+            size_bytes,
+            max_bytes,
+        } => {
+            assert_eq!(path, PathBuf::from("bigline.txt"));
+            assert_eq!(max_bytes, 64);
+            assert!(size_bytes >= max_bytes.saturating_add(1));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -291,7 +357,10 @@ fn read_rejects_fifo_special_files() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("not a regular file"));
+            assert!(!message.contains(&dir.path().display().to_string()));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -317,7 +386,10 @@ fn read_line_ranges_reject_fifo_special_files() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("not a regular file"));
+            assert!(!message.contains(&dir.path().display().to_string()));
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }

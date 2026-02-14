@@ -15,6 +15,13 @@ fn open_private_temp_file_creates_files_without_group_or_other_access() {
     drop(io::open_private_temp_file(&path).expect("open"));
     let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
     assert_eq!(mode & 0o077, 0, "expected no group/other permission bits");
+
+    let err = io::open_private_temp_file(&path).expect_err("create_new must fail on existing path");
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::AlreadyExists,
+        "unexpected error for second create: {err:?}"
+    );
 }
 
 #[test]
@@ -44,6 +51,19 @@ fn derive_safe_traversal_prefix_is_conservative() {
         assert_eq!(traversal::derive_safe_traversal_prefix("C:/foo/*"), None);
         assert_eq!(traversal::derive_safe_traversal_prefix("c:foo/*"), None);
         assert_eq!(traversal::derive_safe_traversal_prefix("C:"), None);
+        assert_eq!(
+            traversal::derive_safe_traversal_prefix(r"src\**\*.rs"),
+            Some(PathBuf::from("src"))
+        );
+        assert_eq!(
+            traversal::derive_safe_traversal_prefix(r".\src\**\*.rs"),
+            Some(PathBuf::from("src"))
+        );
+        assert_eq!(traversal::derive_safe_traversal_prefix(r"src\..\*"), None);
+        assert_eq!(
+            traversal::derive_safe_traversal_prefix(r"src\foo\..\*.rs"),
+            None
+        );
         assert_eq!(traversal::derive_safe_traversal_prefix("src/c:foo/*"), None);
         assert_eq!(
             traversal::derive_safe_traversal_prefix("a/b/c:tmp/**"),
@@ -266,6 +286,12 @@ fn rename_replace_honors_replace_existing_flag_non_windows() {
         std::io::ErrorKind::AlreadyExists,
         "unexpected error: {err:?}"
     );
+    assert!(
+        src.exists(),
+        "source should remain when overwrite is disabled"
+    );
+    let out = fs::read_to_string(&dest).expect("read dest after failed overwrite");
+    assert_eq!(out, "old", "destination should not be replaced");
 
     io::rename_replace(&src, &dest, true).expect("overwrite");
     let out = fs::read_to_string(&dest).expect("read dest");

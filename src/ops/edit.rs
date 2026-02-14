@@ -34,7 +34,7 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
     if request.start_line == 0 || request.end_line == 0 || request.start_line > request.end_line {
-        return Err(Error::InvalidPath(format!(
+        return Err(invalid_edit_range(format!(
             "invalid line range {}..{}",
             request.start_line, request.end_line
         )));
@@ -51,12 +51,12 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         content.split_inclusive('\n').collect()
     };
     let start = usize::try_from(request.start_line - 1).map_err(|_| {
-        Error::InvalidPath(format!("line number too large: {}", request.start_line))
+        invalid_edit_range(format!("line number too large: {}", request.start_line))
     })?;
     let end = usize::try_from(request.end_line - 1)
-        .map_err(|_| Error::InvalidPath(format!("line number too large: {}", request.end_line)))?;
+        .map_err(|_| invalid_edit_range(format!("line number too large: {}", request.end_line)))?;
     if start >= lines.len() || end >= lines.len() {
-        return Err(Error::InvalidPath(format!(
+        return Err(invalid_edit_range(format!(
             "line range {}..{} out of bounds (file has {} lines)",
             request.start_line,
             request.end_line,
@@ -118,41 +118,28 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
 }
 
 fn normalize_replacement_line_endings(replacement: &str, newline: &str) -> String {
-    if newline == "\r\n" {
-        let mut out = String::with_capacity(replacement.len());
-        let mut prev_was_cr = false;
-        for ch in replacement.chars() {
-            if ch == '\n' {
-                if prev_was_cr {
-                    out.push('\n');
-                } else {
-                    out.push('\r');
-                    out.push('\n');
-                }
-                prev_was_cr = false;
-                continue;
-            }
-            out.push(ch);
-            prev_was_cr = ch == '\r';
-        }
-        return out;
+    if newline.is_empty() {
+        return replacement.to_string();
     }
 
-    if newline == "\n" {
-        let mut out = String::with_capacity(replacement.len());
-        let mut chars = replacement.chars().peekable();
-        while let Some(ch) = chars.next() {
-            if ch == '\r' {
+    let mut out = String::with_capacity(replacement.len());
+    let mut chars = replacement.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
                 if chars.peek() == Some(&'\n') {
                     let _ = chars.next();
                 }
-                out.push('\n');
-                continue;
+                out.push_str(newline);
             }
-            out.push(ch);
+            '\n' => out.push_str(newline),
+            _ => out.push(ch),
         }
-        return out;
     }
 
-    replacement.to_string()
+    out
+}
+
+fn invalid_edit_range(message: String) -> Error {
+    Error::Patch(format!("invalid edit range: {message}"))
 }

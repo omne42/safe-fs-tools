@@ -62,11 +62,31 @@ pub struct DeleteResponse {
 }
 
 fn missing_response(requested_path: &Path) -> DeleteResponse {
+    let requested_path = requested_path.to_path_buf();
     DeleteResponse {
-        path: requested_path.to_path_buf(),
-        requested_path: Some(requested_path.to_path_buf()),
+        path: requested_path.clone(),
+        requested_path: Some(requested_path),
         deleted: false,
         kind: DeleteKind::Missing,
+    }
+}
+
+fn unlink_symlink(target: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        match fs::remove_file(target) {
+            Ok(()) => Ok(()),
+            // On Windows, directory symlinks/junctions require remove_dir semantics.
+            Err(remove_file_err) => match fs::remove_dir(target) {
+                Ok(()) => Ok(()),
+                Err(_) => Err(remove_file_err),
+            },
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        fs::remove_file(target)
     }
 }
 
@@ -88,8 +108,10 @@ fn revalidate_parent_before_delete(
                 )))
             }
         }
-        Err(Error::IoPath { source, .. })
-            if request.ignore_missing && source.kind() == std::io::ErrorKind::NotFound =>
+        Err(Error::IoPath { op, source, .. })
+            if request.ignore_missing
+                && op == "metadata"
+                && source.kind() == std::io::ErrorKind::NotFound =>
         {
             Ok(Some(missing_response(requested_path)))
         }
@@ -113,9 +135,7 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
     let file_name = super::path_validation::ensure_non_root_leaf(
         &requested_path,
         &request.path,
-        "delete",
-        "path segment",
-        "refusing to delete the root directory",
+        super::path_validation::LeafOp::Delete,
     )?;
 
     let requested_parent = requested_path.parent().unwrap_or_else(|| Path::new(""));
@@ -128,8 +148,10 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
     let canonical_parent =
         match ctx.ensure_dir_under_root(&request.root_id, requested_parent, false) {
             Ok(path) => path,
-            Err(Error::IoPath { source, .. })
-                if request.ignore_missing && source.kind() == std::io::ErrorKind::NotFound =>
+            Err(Error::IoPath { op, source, .. })
+                if request.ignore_missing
+                    && op == "metadata"
+                    && source.kind() == std::io::ErrorKind::NotFound =>
             {
                 // If the parent directory doesn't exist, the target doesn't exist either.
                 return Ok(missing_response(&requested_path));
@@ -176,30 +198,35 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
         Err(err) => return Err(Error::io_path("metadata", &relative, err)),
     };
 
-    let kind = if meta.file_type().is_file() {
+    let file_type = meta.file_type();
+    let kind = if file_type.is_file() {
         DeleteKind::File
-    } else if meta.file_type().is_dir() {
+    } else if file_type.is_dir() {
         DeleteKind::Dir
-    } else if meta.file_type().is_symlink() {
+    } else if file_type.is_symlink() {
         DeleteKind::Symlink
     } else {
         DeleteKind::Other
     };
 
-    if meta.is_dir() {
+    let ensure_parent_stable_or_missing = || {
+        revalidate_parent_before_delete(
+            ctx,
+            &request,
+            requested_parent,
+            &canonical_parent,
+            &requested_path,
+        )
+    };
+
+    if file_type.is_dir() {
         if !request.recursive {
             return Err(Error::InvalidPath(
                 "path is a directory; set recursive=true to delete directories".to_string(),
             ));
         }
 
-        if let Some(response) = revalidate_parent_before_delete(
-            ctx,
-            &request,
-            requested_parent,
-            &canonical_parent,
-            &requested_path,
-        )? {
+        if let Some(response) = ensure_parent_stable_or_missing()? {
             return Ok(response);
         }
 
@@ -210,21 +237,25 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
             return Err(Error::io_path("remove_dir_all", &relative, err));
         }
     } else {
-        if let Some(response) = revalidate_parent_before_delete(
-            ctx,
-            &request,
-            requested_parent,
-            &canonical_parent,
-            &requested_path,
-        )? {
+        if let Some(response) = ensure_parent_stable_or_missing()? {
             return Ok(response);
         }
 
-        if let Err(err) = fs::remove_file(&target) {
+        let delete_non_dir_result = if file_type.is_symlink() {
+            unlink_symlink(&target)
+        } else {
+            fs::remove_file(&target)
+        };
+        if let Err(err) = delete_non_dir_result {
             if err.kind() == std::io::ErrorKind::NotFound && request.ignore_missing {
                 return Ok(missing_response(&requested_path));
             }
-            return Err(Error::io_path("remove_file", &relative, err));
+            let op = if file_type.is_symlink() {
+                "unlink_symlink"
+            } else {
+                "remove_file"
+            };
+            return Err(Error::io_path(op, &relative, err));
         }
     }
 

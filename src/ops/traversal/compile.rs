@@ -8,13 +8,8 @@ fn compile_validated_glob(
     pattern: &str,
     invalid_err: impl Fn(String) -> Error,
 ) -> Result<globset::Glob> {
-    if pattern.trim().is_empty() {
-        return Err(invalid_err("glob pattern must not be empty".to_string()));
-    }
-
-    let normalized = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
-    crate::path_utils::validate_root_relative_glob_pattern(&normalized)
-        .map_err(|msg| invalid_err(msg.to_string()))?;
+    let normalized = normalize_and_validate_root_relative_glob_pattern(pattern)
+        .map_err(|msg| invalid_err(msg))?;
     crate::path_utils::build_glob_from_normalized(&normalized)
         .map_err(|err| invalid_err(err.to_string()))
 }
@@ -52,52 +47,35 @@ pub(super) fn compile_traversal_skip_globs(patterns: &[String]) -> Result<Option
 }
 
 pub(super) fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
+    let normalized = normalize_and_validate_root_relative_glob_pattern(pattern).ok()?;
+    collect_literal_traversal_prefix(&normalized)
+}
+
+fn normalize_and_validate_root_relative_glob_pattern(
+    pattern: &str,
+) -> std::result::Result<String, String> {
     if pattern.trim().is_empty() {
-        return None;
+        return Err("glob pattern must not be empty".to_string());
     }
 
-    let pattern = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
-    if crate::path_utils::validate_root_relative_glob_pattern(&pattern).is_err() {
-        return None;
-    }
+    let normalized = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
+    crate::path_utils::validate_root_relative_glob_pattern(&normalized)
+        .map_err(|msg| msg.to_string())?;
+    Ok(normalized)
+}
 
-    let pattern = pattern.as_str();
-    if pattern.starts_with('/') {
-        return None;
-    }
-
-    #[cfg(windows)]
-    {
-        let bytes = pattern.as_bytes();
-        if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-            // Drive-prefix paths (e.g. `C:...`, `C:/...`) would cause `PathBuf::join` to
-            // discard the root prefix, allowing traversal outside the selected root.
-            return None;
-        }
-    }
-
+fn collect_literal_traversal_prefix(pattern: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for segment in pattern.split('/') {
         if segment.is_empty() || segment == "." {
             continue;
         }
-        #[cfg(windows)]
-        {
-            use std::path::{Component, Path};
 
-            if matches!(
-                Path::new(segment).components().next(),
-                Some(Component::Prefix(_))
-            ) {
-                // Windows drive/prefix components in later segments can cause `PathBuf::push/join`
-                // to discard prior components, allowing traversal outside the selected root.
-                return None;
-            }
+        if reject_unsafe_segment(segment) {
+            return None;
         }
-        if segment
-            .chars()
-            .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
-        {
+
+        if segment_contains_glob_meta(segment) {
             break;
         }
         out.push(segment);
@@ -108,4 +86,27 @@ pub(super) fn derive_safe_traversal_prefix(pattern: &str) -> Option<PathBuf> {
     } else {
         Some(out)
     }
+}
+
+fn segment_contains_glob_meta(segment: &str) -> bool {
+    // Keep this in sync with the glob syntax we treat as non-literal when deriving
+    // a conservative traversal prefix.
+    segment
+        .chars()
+        .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
+}
+
+#[cfg(windows)]
+fn reject_unsafe_segment(segment: &str) -> bool {
+    use std::path::{Component, Path};
+
+    matches!(
+        Path::new(segment).components().next(),
+        Some(Component::Prefix(_))
+    )
+}
+
+#[cfg(not(windows))]
+fn reject_unsafe_segment(_: &str) -> bool {
+    false
 }

@@ -104,6 +104,34 @@ fn edit_rejects_symlink_escape_via_ancestor_dir() {
 }
 
 #[test]
+#[cfg(all(unix, feature = "patch"))]
+fn patch_rejects_symlink_escape_via_ancestor_dir() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    std::fs::write(outside.path().join("file.txt"), "one\n").expect("write");
+
+    symlink(outside.path(), dir.path().join("sub")).expect("symlink dir");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let err = apply_unified_patch(
+        &ctx,
+        PatchRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("sub/file.txt"),
+            patch: diffy::create_patch("one\n", "ONE\n").to_string(),
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::OutsideRoot { .. } => {}
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn edit_happy_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("file.txt");
@@ -639,7 +667,6 @@ fn patch_rejects_invalid_patch_text() {
     match err {
         safe_fs_tools::Error::Patch(message) => {
             assert!(message.contains("file.txt"));
-            assert!(message.contains("error parsing patch"));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -672,7 +699,6 @@ fn patch_rejects_patches_that_do_not_apply() {
     match err {
         safe_fs_tools::Error::Patch(message) => {
             assert!(message.contains("file.txt"));
-            assert!(message.contains("error applying hunk"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

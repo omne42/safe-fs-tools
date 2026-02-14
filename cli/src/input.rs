@@ -1,9 +1,60 @@
-use std::io::Read;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read};
 use std::path::Path;
 
+const HARD_MAX_TEXT_INPUT_BYTES: u64 = 64 * 1024 * 1024;
+
+#[cfg(unix)]
+fn is_symlink_open_error(err: &io::Error) -> bool {
+    err.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(windows)]
+fn is_symlink_open_error(_err: &io::Error) -> bool {
+    false
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn is_symlink_open_error(_err: &io::Error) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn open_readonly_nofollow(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    options.open(path)
+}
+
+#[cfg(windows)]
+fn open_readonly_nofollow(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn open_readonly_nofollow(path: &Path) -> io::Result<File> {
+    let _ = path;
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "platform does not support atomic no-follow reads",
+    ))
+}
+
 fn open_input_file(path: &Path) -> Result<std::fs::File, safe_fs_tools::Error> {
-    let file = safe_fs_tools::platform_open::open_readonly_nofollow(path).map_err(|err| {
-        if safe_fs_tools::platform_open::is_symlink_open_error(&err) {
+    let file = open_readonly_nofollow(path).map_err(|err| {
+        if is_symlink_open_error(&err) {
             return safe_fs_tools::Error::InvalidPath(format!(
                 "path resolution for {} encountered a symlink (or symlink loop); refusing to read text inputs from symlink paths",
                 path.display()
@@ -45,12 +96,17 @@ pub(crate) fn load_text_limited(
     max_bytes: u64,
 ) -> Result<String, safe_fs_tools::Error> {
     if max_bytes == 0 {
-        return Err(safe_fs_tools::Error::InvalidPath(
+        return Err(safe_fs_tools::Error::InvalidPolicy(
             "max input bytes must be > 0".to_string(),
         ));
     }
+    if max_bytes > HARD_MAX_TEXT_INPUT_BYTES {
+        return Err(safe_fs_tools::Error::InvalidPolicy(format!(
+            "max input bytes exceeds hard limit ({HARD_MAX_TEXT_INPUT_BYTES} bytes)"
+        )));
+    }
     if max_bytes >= usize::MAX as u64 {
-        return Err(safe_fs_tools::Error::InvalidPath(
+        return Err(safe_fs_tools::Error::InvalidPolicy(
             "max input bytes exceeds platform limits".to_string(),
         ));
     }

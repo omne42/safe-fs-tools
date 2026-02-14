@@ -254,10 +254,16 @@ pub(super) fn write_bytes_atomic_checked(
         .sync_all()
         .map_err(|err| Error::io_path("sync", relative, err))?;
 
-    let tmp_path = tmp_file.into_temp_path();
-
-    fs::set_permissions(&tmp_path, perms)
+    tmp_file
+        .as_file()
+        .set_permissions(perms)
         .map_err(|err| Error::io_path("set_permissions", relative, err))?;
+    tmp_file
+        .as_file_mut()
+        .sync_all()
+        .map_err(|err| Error::io_path("sync", relative, err))?;
+
+    let tmp_path = tmp_file.into_temp_path();
 
     if expected_identity.is_some() {
         // Best-effort conflict detection: re-open with no-follow and re-check identity

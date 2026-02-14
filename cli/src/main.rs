@@ -29,7 +29,7 @@ struct Cli {
     #[arg(long)]
     policy: PathBuf,
 
-    /// Pretty-print JSON responses to stdout.
+    /// Pretty-print JSON responses (stdout and stderr).
     #[arg(long)]
     pretty: bool,
 
@@ -164,12 +164,8 @@ enum Command {
     },
 }
 
-fn main() {
-    std::process::exit(match run() {
-        ExitCode::SUCCESS => 0,
-        ExitCode::FAILURE => 1,
-        _ => 1,
-    });
+fn main() -> ExitCode {
+    run()
 }
 
 fn run() -> ExitCode {
@@ -181,76 +177,107 @@ fn run() -> ExitCode {
 
     let result = match safe_fs_tools::policy_io::load_policy(&cli.policy) {
         Ok(policy) => {
-            if matches!(error_format, ErrorFormat::Json) && redact_paths {
-                redaction = Some(PathRedaction::from_policy(&policy));
-            }
+            redaction = build_redaction(&policy, error_format, redact_paths);
             command_exec::run_with_policy(&cli, policy)
         }
         Err(err) => Err(CliError::Tool(err)),
     };
 
     if let Err(err) = result {
-        match error_format {
-            ErrorFormat::Text => {
-                let _ = write_stderr_line(&err.to_string());
-            }
-            ErrorFormat::Json => {
-                let mut error = serde_json::Map::new();
-                error.insert(
-                    "code".to_string(),
-                    serde_json::Value::String(err.code().to_string()),
-                );
-                error.insert(
-                    "message".to_string(),
-                    serde_json::Value::String(match &err {
-                        CliError::Tool(tool) => tool_public_message(
-                            tool,
-                            redaction.as_ref(),
-                            redact_paths,
-                            strict_redact_paths,
-                        ),
-                        CliError::Json(_) => err.to_string(),
-                    }),
-                );
-
-                if let CliError::Tool(tool) = &err {
-                    let details = if redact_paths {
-                        tool_error_details_with(tool, redaction.as_ref(), true, strict_redact_paths)
-                    } else {
-                        tool_error_details(tool)
-                    };
-                    error.insert("details".to_string(), details);
-                }
-
-                let out = serde_json::json!({ "error": error });
-                match serialize_json(&out, cli.pretty) {
-                    Ok(text) => {
-                        let _ = write_stderr_line(&text);
-                    }
-                    Err(_) => {
-                        const FALLBACK: &str = r#"{"error":{"code":"json","message":"failed to serialize json error output"}}"#;
-                        let fallback = serde_json::json!({
-                            "error": {
-                                "code": "json",
-                                "message": "failed to serialize json error output",
-                            }
-                        });
-                        match serde_json::to_string(&fallback) {
-                            Ok(text) => {
-                                let _ = write_stderr_line(&text);
-                            }
-                            Err(_) => {
-                                let _ = write_stderr_line(FALLBACK);
-                            }
-                        }
-                    }
-                }
-            }
+        let rendered = render_error(
+            &err,
+            ErrorRenderCfg {
+                format: error_format,
+                pretty: cli.pretty,
+                redact_paths,
+                strict_redact_paths,
+                redaction: redaction.as_ref(),
+            },
+        );
+        if write_stderr_line(&rendered).is_err() {
+            write_stderr_fallback();
         }
         return ExitCode::FAILURE;
     }
 
     ExitCode::SUCCESS
+}
+
+fn build_redaction(
+    policy: &safe_fs_tools::policy::SandboxPolicy,
+    error_format: ErrorFormat,
+    redact_paths: bool,
+) -> Option<PathRedaction> {
+    if matches!(error_format, ErrorFormat::Json) && redact_paths {
+        Some(PathRedaction::from_policy(policy))
+    } else {
+        None
+    }
+}
+
+struct ErrorRenderCfg<'a> {
+    format: ErrorFormat,
+    pretty: bool,
+    redact_paths: bool,
+    strict_redact_paths: bool,
+    redaction: Option<&'a PathRedaction>,
+}
+
+fn render_error(err: &CliError, cfg: ErrorRenderCfg<'_>) -> String {
+    match cfg.format {
+        ErrorFormat::Text => err.to_string(),
+        ErrorFormat::Json => render_json_error(err, cfg),
+    }
+}
+
+fn render_json_error(err: &CliError, cfg: ErrorRenderCfg<'_>) -> String {
+    let mut error = serde_json::Map::new();
+    error.insert(
+        "code".to_string(),
+        serde_json::Value::String(err.code().to_string()),
+    );
+    error.insert(
+        "message".to_string(),
+        serde_json::Value::String(match err {
+            CliError::Tool(tool) => tool_public_message(
+                tool,
+                cfg.redaction,
+                cfg.redact_paths,
+                cfg.strict_redact_paths,
+            ),
+            CliError::Json(_) => err.to_string(),
+        }),
+    );
+
+    if let CliError::Tool(tool) = err {
+        let details = if cfg.redact_paths {
+            tool_error_details_with(tool, cfg.redaction, true, cfg.strict_redact_paths)
+        } else {
+            tool_error_details(tool)
+        };
+        error.insert("details".to_string(), details);
+    }
+
+    let out = serde_json::json!({ "error": error });
+    match serialize_json(&out, cfg.pretty) {
+        Ok(text) => text,
+        Err(_) => fallback_json_error(),
+    }
+}
+
+fn fallback_json_error() -> String {
+    const FALLBACK: &str =
+        r#"{"error":{"code":"json","message":"failed to serialize json error output"}}"#;
+    let fallback = serde_json::json!({
+        "error": {
+            "code": "json",
+            "message": "failed to serialize json error output",
+        }
+    });
+    match serde_json::to_string(&fallback) {
+        Ok(text) => text,
+        Err(_) => FALLBACK.to_string(),
+    }
 }
 
 fn serialize_json(value: &serde_json::Value, pretty: bool) -> Result<String, CliError> {
@@ -285,6 +312,14 @@ fn write_stderr_line(line: &str) -> Result<(), CliError> {
     map_broken_pipe(stderr.write_all(line.as_bytes()))?;
     map_broken_pipe(stderr.write_all(b"\n"))?;
     map_broken_pipe(stderr.flush())
+}
+
+fn write_stderr_fallback() {
+    use std::io::Write;
+
+    let mut stderr = std::io::stderr().lock();
+    let _ = stderr.write_all(b"safe-fs-tools: failed to write error output to stderr\n");
+    let _ = stderr.flush();
 }
 
 #[cfg(test)]

@@ -57,25 +57,38 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "grep")]
 use super::traversal::{
-    TRAVERSAL_GLOB_PROBE_NAME, compile_glob, derive_safe_traversal_prefix, elapsed_ms,
-    globset_is_match, walk_traversal_files,
+    TRAVERSAL_GLOB_PROBE_NAME, TraversalDiagnostics, compile_glob, derive_safe_traversal_prefix,
+    elapsed_ms, globset_is_match, walk_traversal_files,
 };
 
 #[cfg(feature = "grep")]
-fn empty_grep_response(started: &Instant) -> GrepResponse {
+#[derive(Debug, Default, Clone, Copy)]
+struct GrepSkipCounters {
+    skipped_too_large_files: u64,
+    skipped_non_utf8_files: u64,
+}
+
+#[cfg(feature = "grep")]
+fn build_grep_response(
+    mut matches: Vec<GrepMatch>,
+    diag: TraversalDiagnostics,
+    counters: GrepSkipCounters,
+    started: &Instant,
+) -> GrepResponse {
+    matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
     GrepResponse {
-        matches: Vec::new(),
-        truncated: false,
-        skipped_too_large_files: 0,
-        skipped_non_utf8_files: 0,
-        scanned_files: 0,
-        scan_limit_reached: false,
-        scan_limit_reason: None,
+        matches,
+        truncated: diag.truncated,
+        skipped_too_large_files: counters.skipped_too_large_files,
+        skipped_non_utf8_files: counters.skipped_non_utf8_files,
+        scanned_files: diag.scanned_files,
+        scan_limit_reached: diag.scan_limit_reached,
+        scan_limit_reason: diag.scan_limit_reason,
         elapsed_ms: elapsed_ms(started),
-        scanned_entries: 0,
-        skipped_walk_errors: 0,
-        skipped_io_errors: 0,
-        skipped_dangling_symlink_targets: 0,
+        scanned_entries: diag.scanned_entries,
+        skipped_walk_errors: diag.skipped_walk_errors,
+        skipped_io_errors: diag.skipped_io_errors,
+        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
     }
 }
 
@@ -102,7 +115,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     }
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
+    let max_line_bytes = ctx.policy.limits.max_line_bytes;
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
+    let mut matches = Vec::<GrepMatch>::new();
+    let mut counters = GrepSkipCounters::default();
+    let mut diag = TraversalDiagnostics::default();
     let walk_root = match request
         .glob
         .as_deref()
@@ -115,7 +132,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 || ctx.is_traversal_path_skipped(&prefix)
                 || ctx.is_traversal_path_skipped(&probe)
             {
-                return Ok(empty_grep_response(&started));
+                return Ok(build_grep_response(matches, diag, counters, &started));
             }
             root_path.join(prefix)
         }
@@ -132,11 +149,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         None
     };
 
-    let mut matches = Vec::<GrepMatch>::new();
-    let mut skipped_too_large_files: u64 = 0;
-    let mut skipped_non_utf8_files: u64 = 0;
-
-    let diag = match walk_traversal_files(
+    diag = match walk_traversal_files(
         ctx,
         &request.root_id,
         &root_path,
@@ -157,7 +170,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             ) {
                 Ok(bytes) => bytes,
                 Err(Error::FileTooLarge { .. }) => {
-                    skipped_too_large_files = skipped_too_large_files.saturating_add(1);
+                    counters.skipped_too_large_files =
+                        counters.skipped_too_large_files.saturating_add(1);
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
                 Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
@@ -169,7 +183,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             let content = match std::str::from_utf8(&bytes) {
                 Ok(content) => content,
                 Err(_) => {
-                    skipped_non_utf8_files = skipped_non_utf8_files.saturating_add(1);
+                    counters.skipped_non_utf8_files =
+                        counters.skipped_non_utf8_files.saturating_add(1);
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
             };
@@ -183,18 +198,25 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     continue;
                 }
                 if matches.len() >= ctx.policy.limits.max_results {
-                    diag.truncated = true;
-                    diag.scan_limit_reached = true;
-                    diag.scan_limit_reason = Some(ScanLimitReason::Results);
+                    diag.mark_limit_reached(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
-                let redacted = ctx.redactor.redact_text(line);
-                let line_truncated = redacted.len() > ctx.policy.limits.max_line_bytes;
-                let mut end = redacted.len().min(ctx.policy.limits.max_line_bytes);
+                let redacted = ctx.redactor.redact_text_cow(line);
+                let line_truncated = redacted.len() > max_line_bytes;
+                let mut end = redacted.len().min(max_line_bytes);
                 while end > 0 && !redacted.is_char_boundary(end) {
                     end = end.saturating_sub(1);
                 }
-                let text = redacted[..end].to_string();
+                let text = match redacted {
+                    std::borrow::Cow::Borrowed(redacted) => redacted[..end].to_string(),
+                    std::borrow::Cow::Owned(redacted) => {
+                        if end == redacted.len() {
+                            redacted
+                        } else {
+                            redacted[..end].to_string()
+                        }
+                    }
+                };
                 matches.push(GrepMatch {
                     path: file.relative_path.clone(),
                     line: idx.saturating_add(1) as u64,
@@ -208,24 +230,10 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     ) {
         Ok(diag) => diag,
         Err(Error::WalkDirRoot { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(empty_grep_response(&started));
+            return Ok(build_grep_response(matches, diag, counters, &started));
         }
         Err(err) => return Err(err),
     };
 
-    matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
-    Ok(GrepResponse {
-        matches,
-        truncated: diag.truncated,
-        skipped_too_large_files,
-        skipped_non_utf8_files,
-        scanned_files: diag.scanned_files,
-        scan_limit_reached: diag.scan_limit_reached,
-        scan_limit_reason: diag.scan_limit_reason,
-        elapsed_ms: elapsed_ms(&started),
-        scanned_entries: diag.scanned_entries,
-        skipped_walk_errors: diag.skipped_walk_errors,
-        skipped_io_errors: diag.skipped_io_errors,
-        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
-    })
+    Ok(build_grep_response(matches, diag, counters, &started))
 }

@@ -12,6 +12,12 @@ use safe_fs_tools::policy::RootMode;
 use std::os::unix::fs::PermissionsExt;
 
 #[cfg(unix)]
+fn is_running_as_root() -> bool {
+    // SAFETY: `geteuid` has no preconditions and does not dereference pointers.
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(unix)]
 struct PermissionRestoreGuard {
     path: PathBuf,
     mode: u32,
@@ -71,7 +77,11 @@ fn glob_patterns_reject_absolute_and_parent_segments() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
 
-    for pattern in ["/src/*.txt", "../**/*.txt", "src/../*.txt"] {
+    for (pattern, expected_message_fragment) in [
+        ("/src/*.txt", "must not start with '/'"),
+        ("../**/*.txt", "must not contain '..' segments"),
+        ("src/../*.txt", "must not contain '..' segments"),
+    ] {
         let err = glob_paths(
             &ctx,
             GlobRequest {
@@ -82,7 +92,12 @@ fn glob_patterns_reject_absolute_and_parent_segments() {
         .expect_err("should reject");
 
         match err {
-            safe_fs_tools::Error::InvalidPath(_) => {}
+            safe_fs_tools::Error::InvalidPath(message) => {
+                assert!(
+                    message.contains(expected_message_fragment),
+                    "expected error message to contain {expected_message_fragment:?}, got {message:?}"
+                );
+            }
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -151,6 +166,10 @@ fn glob_skips_dangling_symlink_targets() {
     .expect("glob");
 
     assert_eq!(resp.matches, vec![PathBuf::from("a.txt")]);
+    assert!(
+        resp.skipped_dangling_symlink_targets > 0,
+        "expected at least one dangling symlink target to be counted"
+    );
 }
 
 #[test]
@@ -180,8 +199,11 @@ fn glob_does_not_follow_symlink_root_prefix() {
 
 #[test]
 #[cfg(unix)]
-#[ignore = "requires non-root"]
 fn glob_skips_walkdir_errors() {
+    if is_running_as_root() {
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
 
@@ -209,8 +231,11 @@ fn glob_skips_walkdir_errors() {
 
 #[test]
 #[cfg(unix)]
-#[ignore = "requires non-root"]
 fn glob_root_walkdir_error_does_not_leak_absolute_paths() {
+    if is_running_as_root() {
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
 
     let blocked = dir.path().join("blocked");

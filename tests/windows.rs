@@ -43,13 +43,12 @@ fn deny_globs_apply_to_absolute_paths_even_when_parent_is_missing() {
     policy.secrets.deny_globs = vec!["missing/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
-    let Some(root) = toggle_drive_letter_case(dir.path()) else {
-        eprintln!(
-            "skip: unable to toggle drive-letter case for root {}",
+    let root = toggle_drive_letter_case(dir.path()).unwrap_or_else(|| {
+        panic!(
+            "unable to toggle drive-letter case for root {}",
             dir.path().display()
-        );
-        return;
-    };
+        )
+    });
     let abs = root.join("missing").join("file.txt");
     let err = read_file(
         &ctx,
@@ -80,12 +79,10 @@ fn resolve_path_rejects_drive_relative_paths() {
         .resolve_path("root", Path::new("C:foo"))
         .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::InvalidPath(message) => {
-            assert!(message.contains("drive-relative"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert!(
+        matches!(err, safe_fs_tools::Error::InvalidPath(_)),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[test]
@@ -98,12 +95,10 @@ fn resolve_path_rejects_colon_paths_on_windows() {
         .resolve_path("root", Path::new("file.txt::$DATA"))
         .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::InvalidPath(message) => {
-            assert!(message.contains("':' is not allowed"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert!(
+        matches!(err, safe_fs_tools::Error::InvalidPath(_)),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[test]
@@ -193,6 +188,31 @@ fn windows_prefix_matching_matrix_is_case_insensitive() {
             safe_fs_tools::path_utils::strip_prefix_case_insensitive(full, prefix),
             Some(expected),
             "strip_prefix_case_insensitive failed for case {name}"
+        );
+    }
+
+    let negative_cases = [
+        ("drive-boundary", r"C:\rooted\file.txt", r"C:\root"),
+        (
+            "unc-share-boundary",
+            r"\\server\sharex\root\a.txt",
+            r"\\server\share\root",
+        ),
+        ("shorter-full", r"C:\root", r"C:\root\sub"),
+    ];
+
+    for (name, full, prefix) in negative_cases {
+        let full = Path::new(full);
+        let prefix = Path::new(prefix);
+
+        assert!(
+            !safe_fs_tools::path_utils::starts_with_case_insensitive(full, prefix),
+            "starts_with_case_insensitive should be false for case {name}"
+        );
+        assert_eq!(
+            safe_fs_tools::path_utils::strip_prefix_case_insensitive(full, prefix),
+            None,
+            "strip_prefix_case_insensitive should be None for case {name}"
         );
     }
 }

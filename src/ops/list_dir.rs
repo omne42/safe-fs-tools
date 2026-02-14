@@ -70,21 +70,27 @@ enum EntryOutcome {
 fn process_dir_entry(
     ctx: &Context,
     entry: fs::DirEntry,
+    root_id: &str,
     root_path: &std::path::Path,
-) -> EntryOutcome {
+) -> Result<EntryOutcome> {
     let path = entry.path();
     let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, root_path) {
         Some(relative) => relative,
-        None => return EntryOutcome::SkippedIoError,
+        None => {
+            return Err(Error::OutsideRoot {
+                root_id: root_id.to_string(),
+                path,
+            });
+        }
     };
 
     if ctx.redactor.is_path_denied(&relative) {
-        return EntryOutcome::Denied;
+        return Ok(EntryOutcome::Denied);
     }
 
     let file_type = match entry.file_type() {
         Ok(value) => value,
-        Err(_) => return EntryOutcome::SkippedIoError,
+        Err(_) => return Ok(EntryOutcome::SkippedIoError),
     };
 
     let kind = if file_type.is_file() {
@@ -100,18 +106,18 @@ fn process_dir_entry(
     let size_bytes = if file_type.is_file() {
         match entry.metadata() {
             Ok(meta) => meta.len(),
-            Err(_) => return EntryOutcome::SkippedIoError,
+            Err(_) => return Ok(EntryOutcome::SkippedIoError),
         }
     } else {
         0
     };
 
-    EntryOutcome::Accepted(ListDirEntry {
+    Ok(EntryOutcome::Accepted(ListDirEntry {
         path: relative,
         name: entry.file_name().to_string_lossy().into_owned(),
         kind: kind.to_string(),
         size_bytes,
-    })
+    }))
 }
 
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
@@ -150,7 +156,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 continue;
             }
         };
-        match process_dir_entry(ctx, entry, &root_path) {
+        match process_dir_entry(ctx, entry, &request.root_id, &root_path)? {
             EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
                 if max_entries == 0 {

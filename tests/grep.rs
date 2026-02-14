@@ -15,6 +15,12 @@ use safe_fs_tools::ops::{GlobRequest, glob_paths};
 use std::os::unix::fs::PermissionsExt;
 
 #[cfg(unix)]
+fn is_running_as_root() -> bool {
+    // SAFETY: `geteuid` has no preconditions and does not dereference pointers.
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(unix)]
 struct PermissionRestoreGuard {
     path: PathBuf,
     mode: u32,
@@ -148,6 +154,7 @@ fn grep_skips_dangling_symlink_targets() {
 
     assert_eq!(resp.matches.len(), 1);
     assert_eq!(resp.matches[0].path, PathBuf::from("a.txt"));
+    assert_eq!(resp.skipped_dangling_symlink_targets, 1);
 }
 
 #[test]
@@ -173,14 +180,18 @@ fn grep_does_not_follow_symlink_root_prefix() {
     .expect("grep");
 
     assert!(resp.matches.is_empty());
-    assert_eq!(resp.scanned_entries, 0);
-    assert_eq!(resp.scanned_files, 1);
+    assert!(!resp.scan_limit_reached);
+    assert!(!resp.truncated);
+    assert_eq!(resp.scan_limit_reason, None);
 }
 
 #[test]
 #[cfg(unix)]
-#[ignore = "requires non-root"]
 fn grep_skips_walkdir_errors() {
+    if is_running_as_root() {
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
 
@@ -211,8 +222,11 @@ fn grep_skips_walkdir_errors() {
 
 #[test]
 #[cfg(unix)]
-#[ignore = "requires non-root"]
 fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
+    if is_running_as_root() {
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
 
     let blocked = dir.path().join("blocked");
@@ -249,8 +263,11 @@ fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
 
 #[test]
 #[cfg(unix)]
-#[ignore = "requires non-root"]
 fn grep_skips_unreadable_files() {
+    if is_running_as_root() {
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
     let unreadable = dir.path().join("b.txt");
@@ -300,6 +317,83 @@ fn grep_respects_max_walk_ms_time_budget() {
         resp.scan_limit_reason,
         Some(safe_fs_tools::ops::ScanLimitReason::Time)
     );
+}
+
+#[test]
+fn grep_redacts_sensitive_match_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "API_KEY=abc123 hello\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_read_bytes = 64;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "API_KEY=".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert!(resp.matches[0].text.contains("***REDACTED***"));
+    assert!(!resp.matches[0].text.contains("abc123"));
+}
+
+#[test]
+fn grep_skips_non_utf8_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "API_KEY=abc123 hello\n").expect("write");
+    std::fs::write(dir.path().join("bin.dat"), [0xff, 0xfe, 0xfd]).expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_read_bytes = 64;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "API_KEY=".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.skipped_non_utf8_files, 1);
+    assert_eq!(resp.skipped_too_large_files, 0);
+}
+
+#[test]
+fn grep_skips_too_large_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "API_KEY=abc123 hello\n").expect("write");
+    std::fs::write(dir.path().join("large.txt"), "x".repeat(200)).expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_read_bytes = 64;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "API_KEY=".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.skipped_non_utf8_files, 0);
+    assert_eq!(resp.skipped_too_large_files, 1);
 }
 
 #[test]

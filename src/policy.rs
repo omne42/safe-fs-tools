@@ -152,7 +152,7 @@ pub struct PathRules {
 }
 
 const fn default_allow_absolute_paths() -> bool {
-    true
+    false
 }
 
 impl Default for PathRules {
@@ -220,7 +220,7 @@ impl SandboxPolicy {
         }
     }
 
-    /// Validate policy structure and limit values.
+    /// Structural validation only: validates policy shape and limit values.
     ///
     /// This is a purely *structural* validation: it does **not** perform any filesystem IO
     /// (e.g. it does not check whether roots exist or are directories).
@@ -371,8 +371,12 @@ impl SandboxPolicy {
 
     /// Compatibility alias for unchecked lexical path resolution.
     ///
+    /// This API does **not** enforce root-boundary checks and must not be used as a
+    /// security decision point.
+    ///
     /// Prefer [`SandboxPolicy::resolve_path_unchecked`] at new callsites so API semantics are
     /// explicit.
+    #[deprecated(note = "use resolve_path_unchecked or Context checked APIs")]
     pub fn resolve_path(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
         self.resolve_path_unchecked(root_id, path)
     }

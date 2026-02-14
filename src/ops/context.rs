@@ -8,11 +8,14 @@ use crate::redaction::SecretRedactor;
 
 use super::{
     Context, CopyFileRequest, CopyFileResponse, DeleteRequest, DeleteResponse, EditRequest,
-    EditResponse, GlobRequest, GlobResponse, GrepRequest, GrepResponse, ListDirRequest,
-    ListDirResponse, MkdirRequest, MkdirResponse, MovePathRequest, MovePathResponse, PatchRequest,
-    PatchResponse, ReadRequest, ReadResponse, StatRequest, StatResponse, WriteFileRequest,
-    WriteFileResponse,
+    EditResponse, ListDirRequest, ListDirResponse, MkdirRequest, MkdirResponse, MovePathRequest,
+    MovePathResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse, StatRequest,
+    StatResponse, WriteFileRequest, WriteFileResponse,
 };
+#[cfg(feature = "glob")]
+use super::{GlobRequest, GlobResponse};
+#[cfg(feature = "grep")]
+use super::{GrepRequest, GrepResponse};
 
 impl Context {
     pub fn new(policy: SandboxPolicy) -> Result<Self> {
@@ -43,10 +46,12 @@ impl Context {
                 )));
             }
             let previous = canonical_roots.insert(root.id.clone(), canonical);
-            debug_assert!(
-                previous.is_none(),
-                "policy.validate() must reject duplicate root.id values"
-            );
+            if previous.is_some() {
+                return Err(Error::InvalidPolicy(format!(
+                    "duplicate root.id: {:?}",
+                    root.id
+                )));
+            }
         }
 
         #[cfg(any(feature = "glob", feature = "grep"))]
@@ -80,10 +85,12 @@ impl Context {
         super::list_dir(self, request)
     }
 
+    #[cfg(feature = "glob")]
     pub fn glob_paths(&self, request: GlobRequest) -> Result<GlobResponse> {
         super::glob_paths(self, request)
     }
 
+    #[cfg(feature = "grep")]
     pub fn grep(&self, request: GrepRequest) -> Result<GrepResponse> {
         super::grep(self, request)
     }
@@ -142,14 +149,7 @@ impl Context {
     }
 
     pub(super) fn ensure_can_write(&self, root_id: &str, op: &str) -> Result<()> {
-        // Keep existence checks on the canonical root index (single source for root lookup here).
-        self.canonical_root(root_id)?;
-        let root = self
-            .policy
-            .roots
-            .iter()
-            .find(|root| root.id == root_id)
-            .ok_or_else(|| Error::RootNotFound(root_id.to_string()))?;
+        let root = self.policy.root(root_id)?;
         if !matches!(root.mode, RootMode::ReadWrite) {
             return Err(Error::NotPermitted(format!(
                 "{op} is not allowed: root {root_id} is read_only"

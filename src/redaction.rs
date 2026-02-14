@@ -18,6 +18,11 @@ impl SecretRedactor {
     pub fn from_rules(rules: &SecretRules) -> Result<Self> {
         let mut deny_builder = GlobSetBuilder::new();
         for pattern in &rules.deny_globs {
+            if pattern.trim().is_empty() {
+                return Err(Error::InvalidPolicy(format!(
+                    "invalid secrets.deny_globs glob {pattern:?}: glob pattern must not be empty"
+                )));
+            }
             let normalized = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
             crate::path_utils::validate_root_relative_glob_pattern(&normalized).map_err(|msg| {
                 Error::InvalidPolicy(format!("invalid deny glob {pattern:?}: {msg}"))
@@ -119,6 +124,7 @@ fn normalize_relative_path(path: &Path) -> Cow<'_, Path> {
 
 #[cfg(windows)]
 fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
+    debug_assert!(is_root_relative(path));
     let path = normalize_relative_path(path);
     let raw = path.to_string_lossy();
     if matches!(raw, Cow::Owned(_)) {
@@ -132,6 +138,7 @@ fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
 
 #[cfg(not(windows))]
 fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
+    debug_assert!(is_root_relative(path));
     Some(normalize_relative_path(path))
 }
 
@@ -201,10 +208,47 @@ mod tests {
     }
 
     #[test]
+    fn empty_deny_glob_is_rejected() {
+        for pattern in ["", "   "] {
+            let err = SecretRedactor::from_rules(&SecretRules {
+                deny_globs: vec![pattern.to_string()],
+                redact_regexes: Vec::new(),
+                replacement: "***".to_string(),
+            })
+            .expect_err("empty deny glob should be rejected");
+
+            match err {
+                Error::InvalidPolicy(msg) => {
+                    assert!(
+                        msg.contains("secrets.deny_globs"),
+                        "unexpected message: {msg}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn redact_text_cow_returns_borrowed_when_no_regex_configured() {
         let redactor = SecretRedactor::from_rules(&SecretRules {
             deny_globs: vec![".git/**".to_string()],
             redact_regexes: Vec::new(),
+            replacement: "***".to_string(),
+        })
+        .expect("redactor");
+
+        let input = "no secrets here";
+        let redacted = redactor.redact_text_cow(input);
+        assert!(matches!(&redacted, Cow::Borrowed(_)));
+        assert_eq!(redacted.as_ref(), input);
+    }
+
+    #[test]
+    fn redact_text_cow_returns_borrowed_when_regex_configured_but_no_match() {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: vec!["token".to_string()],
             replacement: "***".to_string(),
         })
         .expect("redactor");

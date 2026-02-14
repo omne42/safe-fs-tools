@@ -6,7 +6,7 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum Error {
     #[error("io error: {0}")]
-    Io(std::io::Error),
+    Io(#[source] std::io::Error),
 
     #[error("io error during {op} ({path}): {source}")]
     IoPath {
@@ -126,6 +126,7 @@ impl Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
 
     fn not_found_error() -> std::io::Error {
         std::io::Error::new(std::io::ErrorKind::NotFound, "not found")
@@ -200,5 +201,11 @@ mod tests {
         for (error, code) in cases {
             assert_eq!(error.code(), code);
         }
+    }
+
+    #[test]
+    fn io_error_exposes_source() {
+        let error = Error::Io(not_found_error());
+        assert!(error.source().is_some());
     }
 }

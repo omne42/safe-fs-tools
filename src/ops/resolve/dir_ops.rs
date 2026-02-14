@@ -110,7 +110,7 @@ pub(super) fn ensure_dir_under_root(
             )?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 if !create_missing {
-                    return Err(Error::io_path("metadata", &current_relative, err));
+                    return Err(Error::io_path("symlink_metadata", &current_relative, err));
                 }
                 let created_now = match fs::create_dir(&next) {
                     Ok(()) => true,
@@ -123,7 +123,9 @@ pub(super) fn ensure_dir_under_root(
                 };
 
                 match fs::symlink_metadata(&next)
-                    .map_err(|meta_err| Error::io_path("metadata", &current_relative, meta_err))
+                    .map_err(|meta_err| {
+                        Error::io_path("symlink_metadata", &current_relative, meta_err)
+                    })
                     .and_then(|meta| {
                         handle_existing_component(
                             &next,
@@ -136,13 +138,26 @@ pub(super) fn ensure_dir_under_root(
                     Ok(canonical) => canonical,
                     Err(err) => {
                         if created_now {
-                            let _ = fs::remove_dir(&next);
+                            let validation_message = err.to_string();
+                            if let Err(cleanup_err) = fs::remove_dir(&next) {
+                                let cleanup_context = std::io::Error::new(
+                                    cleanup_err.kind(),
+                                    format!(
+                                        "directory post-create validation failed ({validation_message}); cleanup failed: {cleanup_err}"
+                                    ),
+                                );
+                                return Err(Error::io_path(
+                                    "remove_dir",
+                                    &current_relative,
+                                    cleanup_context,
+                                ));
+                            }
                         }
                         return Err(err);
                     }
                 }
             }
-            Err(err) => return Err(Error::io_path("metadata", &current_relative, err)),
+            Err(err) => return Err(Error::io_path("symlink_metadata", &current_relative, err)),
         };
     }
 

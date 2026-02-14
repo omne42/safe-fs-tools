@@ -160,6 +160,45 @@ fn delete_denies_requested_path_before_resolving_symlink_dirs() {
 }
 
 #[test]
+#[cfg(unix)]
+fn delete_denies_after_canonicalization_when_symlink_parent_points_to_denied_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let denied_dir = dir.path().join("denied_dir");
+    std::fs::create_dir_all(&denied_dir).expect("mkdir denied dir");
+    std::fs::write(denied_dir.join("file.txt"), "secret\n").expect("write");
+    symlink(&denied_dir, dir.path().join("allowed_link")).expect("symlink dir");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.secrets.deny_globs = vec!["denied_dir/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = delete(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("allowed_link/file.txt"),
+            recursive: false,
+            ignore_missing: false,
+        },
+    )
+    .expect_err("should reject");
+
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(path) => {
+            assert_eq!(path, PathBuf::from("denied_dir/file.txt"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    assert!(
+        denied_dir.join("file.txt").exists(),
+        "expected denied canonical target to remain after rejected delete"
+    );
+}
+
+#[test]
 fn delete_is_not_allowed_on_readonly_root() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("file.txt");
@@ -191,6 +230,8 @@ fn delete_is_not_allowed_on_readonly_root() {
 #[test]
 fn delete_rejects_dot_and_empty_paths() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let sentinel = dir.path().join("sentinel.txt");
+    std::fs::write(&sentinel, "keep\n").expect("write sentinel");
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
     let err = delete(
@@ -228,12 +269,23 @@ fn delete_rejects_dot_and_empty_paths() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+
+    assert!(
+        sentinel.exists(),
+        "rejecting dot/empty path must not delete files"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).expect("read sentinel"),
+        "keep\n",
+        "rejecting dot/empty path must not mutate unrelated files"
+    );
 }
 
 #[test]
 fn delete_rejects_directories_without_recursive() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir_all(dir.path().join("subdir")).expect("mkdir");
+    let subdir = dir.path().join("subdir");
+    std::fs::create_dir_all(&subdir).expect("mkdir");
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
@@ -254,6 +306,149 @@ fn delete_rejects_directories_without_recursive() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+
+    assert!(
+        subdir.exists(),
+        "rejecting non-recursive delete must keep directory"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn delete_revalidate_parent_detects_path_change() {
+    use std::os::unix::fs::symlink;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_a = dir.path().join("dir_a");
+    let dir_b = dir.path().join("dir_b");
+    std::fs::create_dir_all(dir_a.join("subdir")).expect("mkdir dir_a/subdir");
+    std::fs::create_dir_all(dir_b.join("subdir")).expect("mkdir dir_b/subdir");
+
+    let pivot = dir.path().join("pivot");
+    symlink(&dir_a, &pivot).expect("symlink pivot");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let keep_flapping = Arc::new(AtomicBool::new(true));
+    let keep_flapping_bg = Arc::clone(&keep_flapping);
+    let pivot_bg = pivot.clone();
+    let dir_a_bg = dir_a.clone();
+    let dir_b_bg = dir_b.clone();
+    let toggler = std::thread::spawn(move || {
+        while keep_flapping_bg.load(Ordering::Relaxed) {
+            let _ = std::fs::remove_file(&pivot_bg);
+            let _ = symlink(&dir_b_bg, &pivot_bg);
+            std::thread::yield_now();
+            let _ = std::fs::remove_file(&pivot_bg);
+            let _ = symlink(&dir_a_bg, &pivot_bg);
+            std::thread::yield_now();
+        }
+    });
+
+    let mut observed_changed = false;
+    for _ in 0..4_000 {
+        let err = delete(
+            &ctx,
+            DeleteRequest {
+                root_id: "root".to_string(),
+                path: PathBuf::from("pivot/subdir"),
+                recursive: false,
+                ignore_missing: false,
+            },
+        )
+        .expect_err("should reject");
+
+        match err {
+            safe_fs_tools::Error::InvalidPath(message)
+                if message.contains("changed during delete") =>
+            {
+                observed_changed = true;
+                break;
+            }
+            safe_fs_tools::Error::InvalidPath(message) if message.contains("recursive=true") => {}
+            safe_fs_tools::Error::IoPath { op, .. } if op == "metadata" => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    keep_flapping.store(false, Ordering::Relaxed);
+    toggler.join().expect("join toggler");
+
+    assert!(
+        observed_changed,
+        "expected to observe revalidation failure for path change"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn delete_revalidate_parent_returns_missing_when_ignore_missing_is_true() {
+    use std::os::unix::fs::symlink;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let actual_parent = dir.path().join("actual_parent");
+    std::fs::create_dir_all(actual_parent.join("subdir")).expect("mkdir actual_parent/subdir");
+
+    let pivot = dir.path().join("pivot");
+    symlink(&actual_parent, &pivot).expect("symlink pivot");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+
+    let keep_flapping = Arc::new(AtomicBool::new(true));
+    let keep_flapping_bg = Arc::clone(&keep_flapping);
+    let pivot_bg = pivot.clone();
+    let actual_parent_bg = actual_parent.clone();
+    let toggler = std::thread::spawn(move || {
+        while keep_flapping_bg.load(Ordering::Relaxed) {
+            let _ = std::fs::remove_file(&pivot_bg);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            let _ = symlink(&actual_parent_bg, &pivot_bg);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    });
+
+    let mut observed_missing = None;
+    for _ in 0..2_000 {
+        match delete(
+            &ctx,
+            DeleteRequest {
+                root_id: "root".to_string(),
+                path: PathBuf::from("pivot/subdir"),
+                recursive: false,
+                ignore_missing: true,
+            },
+        ) {
+            Ok(resp) if resp.kind == "missing" => {
+                observed_missing = Some(resp);
+                break;
+            }
+            Err(safe_fs_tools::Error::InvalidPath(message))
+                if message.contains("recursive=true") => {}
+            Err(safe_fs_tools::Error::IoPath { op, .. }) if op == "metadata" => {}
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    keep_flapping.store(false, Ordering::Relaxed);
+    toggler.join().expect("join toggler");
+
+    let resp = observed_missing.expect("expected ignore_missing response when parent disappears");
+    assert_eq!(resp.path, PathBuf::from("pivot/subdir"));
+    assert_eq!(resp.requested_path, Some(PathBuf::from("pivot/subdir")));
+    assert!(!resp.deleted);
+    assert_eq!(resp.kind, "missing");
+    assert!(
+        actual_parent.join("subdir").is_dir(),
+        "missing response must not remove existing directories"
+    );
 }
 
 #[test]

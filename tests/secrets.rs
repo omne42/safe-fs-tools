@@ -44,6 +44,12 @@ fn create_file_symlink_or_skip(target: &Path, link: &Path) -> bool {
         match std::os::windows::fs::symlink_file(target, link) {
             Ok(()) => true,
             Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                let ci = std::env::var("CI").unwrap_or_default();
+                if ci.eq_ignore_ascii_case("true") || ci == "1" {
+                    panic!(
+                        "symlink test requires Windows symlink privileges in CI (set Developer Mode or grant SeCreateSymbolicLinkPrivilege): {err}"
+                    );
+                }
                 eprintln!("skipping symlink test (permission denied): {err}");
                 false
             }
@@ -173,4 +179,30 @@ fn deny_globs_match_after_lexical_normalization() {
     let ctx = Context::new(policy).expect("ctx");
 
     assert_secret_path_denied(&ctx, "sub/../.git/config", ".git/config");
+}
+
+#[test]
+fn deny_globs_allow_non_secret_paths() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+    std::fs::write(dir.path().join(".git").join("config"), "secret\n").expect("write");
+    std::fs::write(dir.path().join("public.txt"), "hello\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.deny_globs = vec![".git/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let response = read_file(
+        &ctx,
+        ReadRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("public.txt"),
+            start_line: None,
+            end_line: None,
+        },
+    )
+    .expect("read");
+
+    assert_eq!(response.path, PathBuf::from("public.txt"));
+    assert_eq!(response.content, "hello\n");
 }

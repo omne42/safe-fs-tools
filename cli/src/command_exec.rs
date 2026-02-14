@@ -118,15 +118,18 @@ fn execute_command(
             root,
             path,
             patch_file,
-        } => serde_json::to_value(safe_fs_tools::ops::apply_unified_patch(
-            ctx,
-            PatchRequest {
-                root_id: root.clone(),
-                path: path.clone(),
-                patch: load_text_limited(patch_file, max_patch_bytes)?,
-            },
-        )?)
-        .map_err(CliError::from),
+        } => {
+            ensure_mutation_preconditions(ctx, root, "patch", ctx.policy().permissions.patch)?;
+            serde_json::to_value(safe_fs_tools::ops::apply_unified_patch(
+                ctx,
+                PatchRequest {
+                    root_id: root.clone(),
+                    path: path.clone(),
+                    patch: load_text_limited(patch_file, max_patch_bytes)?,
+                },
+            )?)
+            .map_err(CliError::from)
+        }
         Command::Mkdir {
             root,
             path,
@@ -148,17 +151,20 @@ fn execute_command(
             content_file,
             overwrite,
             create_parents,
-        } => serde_json::to_value(safe_fs_tools::ops::write_file(
-            ctx,
-            WriteFileRequest {
-                root_id: root.clone(),
-                path: path.clone(),
-                content: load_text_limited(content_file, max_write_bytes)?,
-                overwrite: *overwrite,
-                create_parents: *create_parents,
-            },
-        )?)
-        .map_err(CliError::from),
+        } => {
+            ensure_mutation_preconditions(ctx, root, "write", ctx.policy().permissions.write)?;
+            serde_json::to_value(safe_fs_tools::ops::write_file(
+                ctx,
+                WriteFileRequest {
+                    root_id: root.clone(),
+                    path: path.clone(),
+                    content: load_text_limited(content_file, max_write_bytes)?,
+                    overwrite: *overwrite,
+                    create_parents: *create_parents,
+                },
+            )?)
+            .map_err(CliError::from)
+        }
         Command::Delete {
             root,
             path,
@@ -209,4 +215,27 @@ fn execute_command(
         )?)
         .map_err(CliError::from),
     }
+}
+
+fn ensure_mutation_preconditions(
+    ctx: &Context,
+    root_id: &str,
+    op: &str,
+    permission_enabled: bool,
+) -> Result<(), CliError> {
+    if !permission_enabled {
+        return Err(
+            safe_fs_tools::Error::NotPermitted(format!("{op} is disabled by policy")).into(),
+        );
+    }
+
+    let root = ctx.policy().root(root_id)?;
+    if !matches!(root.mode, safe_fs_tools::RootMode::ReadWrite) {
+        return Err(safe_fs_tools::Error::NotPermitted(format!(
+            "{op} is not allowed: root {root_id} is read_only"
+        ))
+        .into());
+    }
+
+    Ok(())
 }

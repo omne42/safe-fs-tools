@@ -16,7 +16,7 @@ fn open_policy_file(path: &Path) -> Result<std::fs::File> {
     let file = crate::platform_open::open_readonly_nofollow(path).map_err(|err| {
         if crate::platform_open::is_symlink_open_error(&err) {
             return Error::InvalidPath(format!(
-                "path {} is a symlink; refusing to load policy from symlink paths",
+                "path {} final component is a symlink; refusing to load policy via symlink final component",
                 path.display()
             ));
         }
@@ -35,7 +35,7 @@ fn open_policy_file(path: &Path) -> Result<std::fs::File> {
             .map_err(|err| Error::io_path("metadata", path, err))?;
         if meta.file_type().is_symlink() {
             return Err(Error::InvalidPath(format!(
-                "path {} is a symlink; refusing to load policy from symlink paths",
+                "path {} final component is a symlink; refusing to load policy via symlink final component",
                 path.display()
             )));
         }
@@ -49,6 +49,10 @@ pub fn parse_policy(raw: &str, format: PolicyFormat) -> Result<SandboxPolicy> {
     Ok(policy)
 }
 
+/// Parse a policy without enforcing [`SandboxPolicy::validate`] invariants.
+///
+/// The returned value may violate policy safety constraints. Prefer [`parse_policy`]
+/// unless you explicitly need a partially validated intermediate value.
 pub fn parse_policy_unvalidated(raw: &str, format: PolicyFormat) -> Result<SandboxPolicy> {
     match format {
         PolicyFormat::Json => serde_json::from_str(raw)

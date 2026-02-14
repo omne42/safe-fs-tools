@@ -48,6 +48,23 @@ pub struct CopyFileResponse {
     pub bytes: u64,
 }
 
+struct ResolvedCopyPaths {
+    canonical_root: PathBuf,
+    requested_from: PathBuf,
+    requested_to: PathBuf,
+    from_relative: PathBuf,
+    source: PathBuf,
+    to_parent_rel: PathBuf,
+    to_name: PathBuf,
+    to_parent: Option<PathBuf>,
+}
+
+struct PreparedDestination {
+    parent: PathBuf,
+    to_effective_relative: PathBuf,
+    path: PathBuf,
+}
+
 pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResponse> {
     if !ctx.policy.permissions.copy_file {
         return Err(Error::NotPermitted(
@@ -55,14 +72,105 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         ));
     }
     ctx.ensure_can_write(&request.root_id, "copy_file")?;
+    let mut paths = resolve_and_validate_paths(ctx, &request)?;
 
+    let (mut input, source_meta) =
+        super::io::open_regular_file_for_read(&paths.source, &paths.from_relative)?;
+
+    if source_meta.len() > ctx.policy.limits.max_write_bytes {
+        return Err(Error::FileTooLarge {
+            path: paths.from_relative.clone(),
+            size_bytes: source_meta.len(),
+            max_bytes: ctx.policy.limits.max_write_bytes,
+        });
+    }
+
+    let destination = prepare_destination(ctx, &request, &mut paths)?;
+    if paths.source == destination.path {
+        return Ok(noop_response(
+            paths.from_relative.clone(),
+            destination.to_effective_relative.clone(),
+            paths.requested_from.clone(),
+            paths.requested_to.clone(),
+        ));
+    }
+
+    let destination_meta = match fs::symlink_metadata(&destination.path) {
+        Ok(meta) => Some(meta),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(Error::io_path(
+                "metadata",
+                &destination.to_effective_relative,
+                err,
+            ));
+        }
+    };
+    if let Some(meta) = &destination_meta {
+        if metadata_same_file(&source_meta, meta) {
+            return Ok(noop_response(
+                paths.from_relative.clone(),
+                destination.to_effective_relative.clone(),
+                paths.requested_from.clone(),
+                paths.requested_to.clone(),
+            ));
+        }
+        if meta.is_dir() {
+            return Err(Error::InvalidPath(
+                "destination exists and is a directory".to_string(),
+            ));
+        }
+        if !meta.is_file() {
+            return Err(Error::InvalidPath(
+                "destination exists and is not a regular file".to_string(),
+            ));
+        }
+        if !request.overwrite {
+            return Err(Error::InvalidPath("destination exists".to_string()));
+        }
+    }
+
+    let destination_parent_meta = capture_destination_parent_identity(
+        &destination.parent,
+        &destination.to_effective_relative,
+    )?;
+    let (tmp_path, bytes) = copy_to_temp(
+        &mut input,
+        &source_meta,
+        &destination.parent,
+        &paths.from_relative,
+        &destination.to_effective_relative,
+        ctx.policy.limits.max_write_bytes,
+    )?;
+    commit_replace(
+        &tmp_path,
+        &destination.path,
+        &destination.parent,
+        &destination_parent_meta,
+        &destination.to_effective_relative,
+        request.overwrite,
+    )?;
+
+    Ok(CopyFileResponse {
+        from: paths.from_relative,
+        to: destination.to_effective_relative,
+        requested_from: Some(paths.requested_from),
+        requested_to: Some(paths.requested_to),
+        copied: true,
+        bytes,
+    })
+}
+
+fn resolve_and_validate_paths(
+    ctx: &Context,
+    request: &CopyFileRequest,
+) -> Result<ResolvedCopyPaths> {
     let from_resolved =
         super::resolve::resolve_path_in_root_lexically(ctx, &request.root_id, &request.from)?;
     let to_resolved =
         super::resolve::resolve_path_in_root_lexically(ctx, &request.root_id, &request.to)?;
 
     let canonical_root = from_resolved.canonical_root;
-
     if to_resolved.canonical_root != canonical_root {
         return Err(Error::InvalidPath(
             "from/to roots resolved inconsistently".to_string(),
@@ -96,12 +204,19 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
             request.to
         ))
     })?;
+    let to_name = PathBuf::from(to_name);
 
-    let from_parent_rel = requested_from.parent().unwrap_or_else(|| Path::new(""));
-    let to_parent_rel = requested_to.parent().unwrap_or_else(|| Path::new(""));
+    let from_parent_rel = requested_from
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .to_path_buf();
+    let to_parent_rel = requested_to
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .to_path_buf();
 
-    let from_parent = ctx.ensure_dir_under_root(&request.root_id, from_parent_rel, false)?;
-    let mut to_parent = match ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, false) {
+    let from_parent = ctx.ensure_dir_under_root(&request.root_id, &from_parent_rel, false)?;
+    let to_parent = match ctx.ensure_dir_under_root(&request.root_id, &to_parent_rel, false) {
         Ok(path) => Some(path),
         Err(Error::IoPath { source, .. })
             if request.create_parents && source.kind() == std::io::ErrorKind::NotFound =>
@@ -117,158 +232,192 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
                 root_id: request.root_id.clone(),
                 path: requested_from.clone(),
             })?;
-
     let from_relative = from_relative_parent.join(from_name);
-    let mut to_relative = requested_to.clone();
+    let to_requested_relative = requested_to.clone();
 
     if ctx.redactor.is_path_denied(&from_relative) {
         return Err(Error::SecretPathDenied(from_relative));
     }
-    if ctx.redactor.is_path_denied(&to_relative) {
-        return Err(Error::SecretPathDenied(to_relative));
+    if ctx.redactor.is_path_denied(&to_requested_relative) {
+        return Err(Error::SecretPathDenied(to_requested_relative));
     }
 
     let source = from_parent.join(from_name);
-
     if !crate::path_utils::starts_with_case_insensitive(&source, &canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
-            path: requested_from,
+            path: requested_from.clone(),
         });
     }
 
-    let (input, source_meta) = super::io::open_regular_file_for_read(&source, &from_relative)?;
-    if source_meta.is_dir() {
-        return Err(Error::InvalidPath("path is a directory".to_string()));
-    }
-    if !source_meta.is_file() {
-        return Err(Error::InvalidPath("path is not a file".to_string()));
-    }
+    Ok(ResolvedCopyPaths {
+        canonical_root,
+        requested_from,
+        requested_to,
+        from_relative,
+        source,
+        to_parent_rel,
+        to_name,
+        to_parent,
+    })
+}
 
-    if source_meta.len() > ctx.policy.limits.max_write_bytes {
-        return Err(Error::FileTooLarge {
-            path: from_relative.clone(),
-            size_bytes: source_meta.len(),
-            max_bytes: ctx.policy.limits.max_write_bytes,
-        });
+fn prepare_destination(
+    ctx: &Context,
+    request: &CopyFileRequest,
+    paths: &mut ResolvedCopyPaths,
+) -> Result<PreparedDestination> {
+    if paths.to_parent.is_none() {
+        paths.to_parent =
+            Some(ctx.ensure_dir_under_root(&request.root_id, &paths.to_parent_rel, true)?);
     }
-
-    if to_parent.is_none() {
-        to_parent = Some(ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, true)?);
-    }
-    let to_parent = to_parent.ok_or_else(|| {
+    let to_parent = paths.to_parent.clone().ok_or_else(|| {
         Error::InvalidPath("failed to prepare destination parent directory".to_string())
     })?;
+
     let to_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root).ok_or_else(
-            || Error::OutsideRoot {
+        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &paths.canonical_root)
+            .ok_or_else(|| Error::OutsideRoot {
                 root_id: request.root_id.clone(),
-                path: requested_to.clone(),
-            },
-        )?;
-    to_relative = to_relative_parent.join(to_name);
-    if ctx.redactor.is_path_denied(&to_relative) {
-        return Err(Error::SecretPathDenied(to_relative));
+                path: paths.requested_to.clone(),
+            })?;
+    let to_effective_relative = to_relative_parent.join(&paths.to_name);
+    if ctx.redactor.is_path_denied(&to_effective_relative) {
+        return Err(Error::SecretPathDenied(to_effective_relative));
     }
 
-    let destination = to_parent.join(to_name);
-    if !crate::path_utils::starts_with_case_insensitive(&destination, &canonical_root) {
+    let destination = to_parent.join(&paths.to_name);
+    if !crate::path_utils::starts_with_case_insensitive(&destination, &paths.canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
-            path: requested_to.clone(),
-        });
-    }
-    if source == destination {
-        return Ok(CopyFileResponse {
-            from: from_relative,
-            to: to_relative,
-            requested_from: Some(requested_from),
-            requested_to: Some(requested_to),
-            copied: false,
-            bytes: 0,
+            path: paths.requested_to.clone(),
         });
     }
 
-    let destination_meta = match fs::symlink_metadata(&destination) {
-        Ok(meta) => Some(meta),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(Error::io_path("metadata", &to_relative, err)),
-    };
-    if let Some(meta) = &destination_meta {
-        if metadata_same_file(&source_meta, meta) {
-            return Ok(CopyFileResponse {
-                from: from_relative,
-                to: to_relative,
-                requested_from: Some(requested_from),
-                requested_to: Some(requested_to),
-                copied: false,
-                bytes: 0,
-            });
-        }
-        if meta.is_dir() {
-            return Err(Error::InvalidPath(
-                "destination exists and is a directory".to_string(),
-            ));
-        }
-        if !meta.is_file() {
-            return Err(Error::InvalidPath(
-                "destination exists and is not a regular file".to_string(),
-            ));
-        }
-        if !request.overwrite {
-            return Err(Error::InvalidPath("destination exists".to_string()));
-        }
-    }
+    Ok(PreparedDestination {
+        parent: to_parent,
+        to_effective_relative,
+        path: destination,
+    })
+}
 
-    let parent = destination.parent().ok_or_else(|| {
-        Error::InvalidPath(format!(
-            "invalid destination path {}: missing parent directory",
-            to_relative.display()
-        ))
-    })?;
-
+fn copy_to_temp(
+    input: &mut fs::File,
+    source_meta: &fs::Metadata,
+    destination_parent: &Path,
+    from_relative: &Path,
+    to_effective_relative: &Path,
+    max_write_bytes: u64,
+) -> Result<(tempfile::TempPath, u64)> {
     let mut tmp_file = tempfile::Builder::new()
         .prefix(".safe-fs-tools.")
         .suffix(".tmp")
-        .tempfile_in(parent)
-        .map_err(|err| Error::io_path("create_temp", &to_relative, err))?;
+        .tempfile_in(destination_parent)
+        .map_err(|err| Error::io_path("create_temp", to_effective_relative, err))?;
 
-    let limit = ctx.policy.limits.max_write_bytes.saturating_add(1);
+    let limit = max_write_bytes.saturating_add(1);
     let bytes = std::io::copy(&mut input.take(limit), tmp_file.as_file_mut())
-        .map_err(|err| Error::io_path("copy", &to_relative, err))?;
-    if bytes > ctx.policy.limits.max_write_bytes {
+        .map_err(|err| Error::io_path("copy", to_effective_relative, err))?;
+    if bytes > max_write_bytes {
         return Err(Error::FileTooLarge {
-            path: from_relative.clone(),
+            path: from_relative.to_path_buf(),
             size_bytes: bytes,
-            max_bytes: ctx.policy.limits.max_write_bytes,
+            max_bytes: max_write_bytes,
         });
     }
 
     tmp_file
         .as_file_mut()
         .sync_all()
-        .map_err(|err| Error::io_path("sync", &to_relative, err))?;
+        .map_err(|err| Error::io_path("sync", to_effective_relative, err))?;
 
-    let perms = source_meta.permissions();
     let tmp_path = tmp_file.into_temp_path();
-    fs::set_permissions(&tmp_path, perms)
-        .map_err(|err| Error::io_path("set_permissions", &to_relative, err))?;
+    fs::set_permissions(&tmp_path, source_meta.permissions())
+        .map_err(|err| Error::io_path("set_permissions", to_effective_relative, err))?;
+    Ok((tmp_path, bytes))
+}
 
-    super::io::rename_replace(tmp_path.as_ref(), &destination, request.overwrite).map_err(
-        |err| {
-            if !request.overwrite && err.kind() == std::io::ErrorKind::AlreadyExists {
-                return Error::InvalidPath("destination exists".to_string());
-            }
-            Error::io_path("rename", &to_relative, err)
-        },
+fn commit_replace(
+    tmp_path: &tempfile::TempPath,
+    destination: &Path,
+    destination_parent: &Path,
+    expected_parent_meta: &fs::Metadata,
+    to_effective_relative: &Path,
+    overwrite: bool,
+) -> Result<()> {
+    verify_destination_parent_identity(
+        destination_parent,
+        expected_parent_meta,
+        to_effective_relative,
     )?;
+    super::io::rename_replace(tmp_path.as_ref(), destination, overwrite).map_err(|err| {
+        if !overwrite && err.kind() == std::io::ErrorKind::AlreadyExists {
+            return Error::InvalidPath("destination exists".to_string());
+        }
+        Error::io_path("rename", to_effective_relative, err)
+    })?;
+    Ok(())
+}
 
-    Ok(CopyFileResponse {
-        from: from_relative,
-        to: to_relative,
+fn capture_destination_parent_identity(
+    destination_parent: &Path,
+    to_effective_relative: &Path,
+) -> Result<fs::Metadata> {
+    let meta = fs::symlink_metadata(destination_parent)
+        .map_err(|err| Error::io_path("symlink_metadata", to_effective_relative, err))?;
+    if !meta.is_dir() {
+        return Err(Error::InvalidPath(
+            "destination parent directory is not a directory".to_string(),
+        ));
+    }
+    Ok(meta)
+}
+
+fn verify_destination_parent_identity(
+    destination_parent: &Path,
+    expected_parent_meta: &fs::Metadata,
+    to_effective_relative: &Path,
+) -> Result<()> {
+    let actual_parent_meta = fs::symlink_metadata(destination_parent)
+        .map_err(|err| Error::io_path("symlink_metadata", to_effective_relative, err))?;
+    if !actual_parent_meta.is_dir()
+        || !destination_parent_identity_matches(expected_parent_meta, &actual_parent_meta)
+    {
+        return Err(Error::InvalidPath(
+            "destination parent directory changed during copy".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(unix, windows))]
+fn destination_parent_identity_matches(
+    expected_parent_meta: &fs::Metadata,
+    actual_parent_meta: &fs::Metadata,
+) -> bool {
+    metadata_same_file(expected_parent_meta, actual_parent_meta)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn destination_parent_identity_matches(
+    _expected_parent_meta: &fs::Metadata,
+    _actual_parent_meta: &fs::Metadata,
+) -> bool {
+    true
+}
+
+fn noop_response(
+    from: PathBuf,
+    to: PathBuf,
+    requested_from: PathBuf,
+    requested_to: PathBuf,
+) -> CopyFileResponse {
+    CopyFileResponse {
+        from,
+        to,
         requested_from: Some(requested_from),
         requested_to: Some(requested_to),
-        copied: true,
-        bytes,
-    })
+        copied: false,
+        bytes: 0,
+    }
 }

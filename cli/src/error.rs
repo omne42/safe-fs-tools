@@ -70,17 +70,53 @@ impl PathRedaction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RedactionMode {
+    Off,
+    BestEffort,
+    Strict,
+}
+
+impl RedactionMode {
+    fn from_flags(redact_paths: bool, strict_redact_paths: bool) -> Self {
+        debug_assert!(
+            !strict_redact_paths || redact_paths,
+            "strict redaction requires path redaction"
+        );
+        if strict_redact_paths {
+            Self::Strict
+        } else if redact_paths {
+            Self::BestEffort
+        } else {
+            Self::Off
+        }
+    }
+
+    fn redact_paths(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
 pub(crate) fn format_path_for_error(
     path: &Path,
     redaction: Option<&PathRedaction>,
     redact_paths: bool,
     strict_redact_paths: bool,
 ) -> String {
-    if !redact_paths {
+    let mode = RedactionMode::from_flags(redact_paths, strict_redact_paths);
+    format_path_for_error_with_mode(path, redaction, mode)
+}
+
+fn format_path_for_error_with_mode(
+    path: &Path,
+    redaction: Option<&PathRedaction>,
+    mode: RedactionMode,
+) -> String {
+    if !mode.redact_paths() {
         return path.display().to_string();
     }
 
-    if strict_redact_paths {
+    if matches!(mode, RedactionMode::Strict) {
         return "<redacted>".to_string();
     }
 
@@ -144,6 +180,17 @@ pub(crate) fn tool_error_details_with(
     redact_paths: bool,
     strict_redact_paths: bool,
 ) -> serde_json::Value {
+    let mode = RedactionMode::from_flags(redact_paths, strict_redact_paths);
+    tool_error_details_with_mode(tool, redaction, mode)
+}
+
+fn tool_error_details_with_mode(
+    tool: &safe_fs_tools::Error,
+    redaction: Option<&PathRedaction>,
+    mode: RedactionMode,
+) -> serde_json::Value {
+    let redact_paths = mode.redact_paths();
+
     match tool {
         safe_fs_tools::Error::Io(err) => {
             let mut out = details_map("io");
@@ -167,12 +214,7 @@ pub(crate) fn tool_error_details_with(
             out.insert("op".to_string(), serde_json::Value::String(op.to_string()));
             out.insert(
                 "path".to_string(),
-                serde_json::Value::String(format_path_for_error(
-                    path,
-                    redaction,
-                    redact_paths,
-                    strict_redact_paths,
-                )),
+                serde_json::Value::String(format_path_for_error_with_mode(path, redaction, mode)),
             );
             out.insert(
                 "io_kind".to_string(),
@@ -220,7 +262,7 @@ pub(crate) fn tool_error_details_with(
         safe_fs_tools::Error::OutsideRoot { root_id, path } => serde_json::json!({
             "kind": "outside_root",
             "root_id": root_id,
-            "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
+            "path": format_path_for_error_with_mode(path, redaction, mode),
         }),
         safe_fs_tools::Error::NotPermitted(message) => serde_json::json!({
             "kind": "not_permitted",
@@ -232,7 +274,7 @@ pub(crate) fn tool_error_details_with(
         }),
         safe_fs_tools::Error::SecretPathDenied(path) => serde_json::json!({
             "kind": "secret_path_denied",
-            "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
+            "path": format_path_for_error_with_mode(path, redaction, mode),
         }),
         safe_fs_tools::Error::FileTooLarge {
             path,
@@ -240,13 +282,13 @@ pub(crate) fn tool_error_details_with(
             max_bytes,
         } => serde_json::json!({
             "kind": "file_too_large",
-            "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
+            "path": format_path_for_error_with_mode(path, redaction, mode),
             "size_bytes": size_bytes,
             "max_bytes": max_bytes,
         }),
         safe_fs_tools::Error::InvalidUtf8(path) => serde_json::json!({
             "kind": "invalid_utf8",
-            "path": format_path_for_error(path, redaction, redact_paths, strict_redact_paths),
+            "path": format_path_for_error_with_mode(path, redaction, mode),
         }),
         safe_fs_tools::Error::Patch(message) => {
             if redact_paths {
@@ -284,12 +326,7 @@ pub(crate) fn tool_error_details_with(
             let mut out = details_map("walkdir_root");
             out.insert(
                 "path".to_string(),
-                serde_json::Value::String(format_path_for_error(
-                    path,
-                    redaction,
-                    redact_paths,
-                    strict_redact_paths,
-                )),
+                serde_json::Value::String(format_path_for_error_with_mode(path, redaction, mode)),
             );
             out.insert(
                 "io_kind".to_string(),
@@ -312,11 +349,8 @@ pub(crate) fn tool_error_details_with(
                 if let Some(path) = err.path() {
                     out.insert(
                         "path".to_string(),
-                        serde_json::Value::String(format_path_for_error(
-                            path,
-                            redaction,
-                            redact_paths,
-                            strict_redact_paths,
+                        serde_json::Value::String(format_path_for_error_with_mode(
+                            path, redaction, mode,
                         )),
                     );
                 }
@@ -358,14 +392,23 @@ pub(crate) fn tool_public_message(
     redact_paths: bool,
     strict_redact_paths: bool,
 ) -> String {
-    if !redact_paths {
+    let mode = RedactionMode::from_flags(redact_paths, strict_redact_paths);
+    tool_public_message_with_mode(tool, redaction, mode)
+}
+
+fn tool_public_message_with_mode(
+    tool: &safe_fs_tools::Error,
+    redaction: Option<&PathRedaction>,
+    mode: RedactionMode,
+) -> String {
+    if !mode.redact_paths() {
         return tool.to_string();
     }
 
     match tool {
         safe_fs_tools::Error::Io(_) => "io error".to_string(),
         safe_fs_tools::Error::IoPath { op, path, .. } => {
-            let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
+            let path = format_path_for_error_with_mode(path, redaction, mode);
             format!("io error during {op} ({path})")
         }
         safe_fs_tools::Error::InvalidPolicy(_) => "invalid policy".to_string(),
@@ -376,7 +419,7 @@ pub(crate) fn tool_public_message(
         }
         safe_fs_tools::Error::NotPermitted(_) => "not permitted".to_string(),
         safe_fs_tools::Error::SecretPathDenied(path) => {
-            let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
+            let path = format_path_for_error_with_mode(path, redaction, mode);
             format!("path is denied by secret rules: {path}")
         }
         safe_fs_tools::Error::FileTooLarge {
@@ -384,11 +427,11 @@ pub(crate) fn tool_public_message(
             size_bytes,
             max_bytes,
         } => {
-            let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
+            let path = format_path_for_error_with_mode(path, redaction, mode);
             format!("file is too large ({size_bytes} bytes; max {max_bytes} bytes): {path}")
         }
         safe_fs_tools::Error::InvalidUtf8(path) => {
-            let path = format_path_for_error(path, redaction, redact_paths, strict_redact_paths);
+            let path = format_path_for_error_with_mode(path, redaction, mode);
             format!("invalid utf-8 in file: {path}")
         }
         safe_fs_tools::Error::Patch(_) => "failed to apply patch".to_string(),
@@ -398,5 +441,30 @@ pub(crate) fn tool_public_message(
             "walkdir error".to_string()
         }
         _ => tool.code().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PathRedaction, RedactionMode, format_path_for_error_with_mode};
+    use std::path::{Path, PathBuf};
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "strict redaction requires path redaction")]
+    fn strict_requires_redact_paths_in_debug() {
+        let _ = RedactionMode::from_flags(false, true);
+    }
+
+    #[test]
+    fn strict_mode_never_returns_raw_path() {
+        let path = Path::new("/tmp/secret.txt");
+        let redaction = PathRedaction {
+            roots: vec![PathBuf::from("/tmp")],
+            canonical_roots: Vec::new(),
+        };
+        let formatted =
+            format_path_for_error_with_mode(path, Some(&redaction), RedactionMode::Strict);
+        assert_eq!(formatted, "<redacted>");
     }
 }

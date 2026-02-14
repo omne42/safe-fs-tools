@@ -30,7 +30,9 @@ mod write;
 pub use copy_file::{CopyFileRequest, CopyFileResponse, copy_file};
 pub use delete::{DeleteRequest, DeleteResponse, delete};
 pub use edit::{EditRequest, EditResponse, edit_range};
+#[cfg(feature = "glob")]
 pub use glob::{GlobRequest, GlobResponse, glob_paths};
+#[cfg(feature = "grep")]
 pub use grep::{GrepMatch, GrepRequest, GrepResponse, grep};
 pub use list_dir::{ListDirEntry, ListDirRequest, ListDirResponse, list_dir};
 pub use mkdir::{MkdirRequest, MkdirResponse, mkdir};

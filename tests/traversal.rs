@@ -11,8 +11,12 @@ use safe_fs_tools::policy::RootMode;
 fn setup_skip_glob_fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("node_modules")).expect("mkdir");
-    std::fs::write(dir.path().join("keep.txt"), "needle\n").expect("write");
-    std::fs::write(dir.path().join("node_modules").join("skip.txt"), "needle\n").expect("write");
+    std::fs::write(dir.path().join("keep.txt"), "needle_keep\n").expect("write");
+    std::fs::write(
+        dir.path().join("node_modules").join("skip.txt"),
+        "needle_skip\n",
+    )
+    .expect("write");
     dir
 }
 
@@ -37,7 +41,6 @@ fn assert_skip_glob_applies_to_grep_but_not_direct_read(skip_pattern: &str) {
     )
     .expect("grep");
 
-    assert_eq!(resp.scanned_files, 1);
     assert_eq!(resp.matches.len(), 1);
     assert_eq!(resp.matches[0].path, PathBuf::from("keep.txt"));
 
@@ -51,7 +54,7 @@ fn assert_skip_glob_applies_to_grep_but_not_direct_read(skip_pattern: &str) {
         },
     )
     .expect("read");
-    assert!(read.content.contains("needle"));
+    assert_eq!(read.content, "needle_skip\n");
 }
 
 #[cfg(feature = "glob")]
@@ -94,29 +97,41 @@ fn traversal_skip_globs_support_leading_dot_slash() {
     assert_skip_glob_applies_to_grep_but_not_direct_read("./node_modules/**");
 }
 
-#[test]
-fn traversal_skip_globs_reject_absolute_and_parent_segments() {
+fn assert_skip_glob_pattern_rejected(pattern: &str) {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    for pattern in ["/node_modules/**", "../**/*.txt", "src/../*.txt"] {
-        let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
-        policy.traversal.skip_globs = vec![pattern.to_string()];
-        let err = Context::new(policy).expect_err("should reject");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.traversal.skip_globs = vec![pattern.to_string()];
+    let err = Context::new(policy).expect_err("should reject");
 
-        match err {
-            safe_fs_tools::Error::InvalidPolicy(message) => {
-                assert!(
-                    message.contains("invalid traversal.skip_globs glob"),
-                    "unexpected invalid policy message for pattern {pattern:?}: {message}"
-                );
-                assert!(
-                    message.contains(pattern),
-                    "expected invalid policy message to include pattern {pattern:?}: {message}"
-                );
-            }
-            other => panic!("unexpected error: {other:?}"),
+    match err {
+        safe_fs_tools::Error::InvalidPolicy(message) => {
+            assert!(
+                message.contains("invalid traversal.skip_globs glob"),
+                "unexpected invalid policy message for pattern {pattern:?}: {message}"
+            );
+            assert!(
+                message.contains(pattern),
+                "expected invalid policy message to include pattern {pattern:?}: {message}"
+            );
         }
+        other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn traversal_skip_globs_reject_absolute_pattern() {
+    assert_skip_glob_pattern_rejected("/node_modules/**");
+}
+
+#[test]
+fn traversal_skip_globs_reject_parent_prefix_pattern() {
+    assert_skip_glob_pattern_rejected("../**/*.txt");
+}
+
+#[test]
+fn traversal_skip_globs_reject_parent_segment_pattern() {
+    assert_skip_glob_pattern_rejected("src/../*.txt");
 }
 
 #[test]

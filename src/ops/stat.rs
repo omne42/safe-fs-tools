@@ -1,4 +1,6 @@
 use std::fs;
+use std::io::ErrorKind;
+use std::path::Path;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -45,6 +47,18 @@ fn system_time_to_millis(value: std::time::SystemTime) -> Option<u64> {
         .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
+fn metadata_time_to_millis(
+    relative: &Path,
+    op: &'static str,
+    value: std::io::Result<std::time::SystemTime>,
+) -> Result<Option<u64>> {
+    match value {
+        Ok(time) => Ok(system_time_to_millis(time)),
+        Err(err) if err.kind() == ErrorKind::Unsupported => Ok(None),
+        Err(err) => Err(Error::io_path(op, relative, err)),
+    }
+}
+
 pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
     if !ctx.policy.permissions.stat {
         return Err(Error::NotPermitted(
@@ -55,8 +69,9 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
     let (path, relative, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
-    let meta =
-        fs::symlink_metadata(&path).map_err(|err| Error::io_path("metadata", &relative, err))?;
+    let meta = fs::symlink_metadata(&path)
+        .map_err(|err| Error::io_path("symlink_metadata", &relative, err))?;
+    // This only detects final-component symlink races; it is not full TOCTOU protection.
     if meta.file_type().is_symlink() {
         return Err(Error::InvalidPath(format!(
             "path {} changed during operation",
@@ -73,9 +88,9 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
 
     let size_bytes = if meta.is_file() { meta.len() } else { 0 };
 
-    let modified_ms = meta.modified().ok().and_then(system_time_to_millis);
-    let accessed_ms = meta.accessed().ok().and_then(system_time_to_millis);
-    let created_ms = meta.created().ok().and_then(system_time_to_millis);
+    let modified_ms = metadata_time_to_millis(&relative, "metadata.modified", meta.modified())?;
+    let accessed_ms = metadata_time_to_millis(&relative, "metadata.accessed", meta.accessed())?;
+    let created_ms = metadata_time_to_millis(&relative, "metadata.created", meta.created())?;
     let readonly = meta.permissions().readonly();
 
     Ok(StatResponse {

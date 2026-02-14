@@ -7,6 +7,25 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
+fn revalidate_parent_before_move(
+    ctx: &Context,
+    root_id: &str,
+    requested_parent: &Path,
+    expected_parent: &Path,
+    requested_path: &Path,
+    side: &str,
+) -> Result<PathBuf> {
+    let rechecked_parent = ctx.ensure_dir_under_root(root_id, requested_parent, false)?;
+    if rechecked_parent == expected_parent {
+        Ok(rechecked_parent)
+    } else {
+        Err(Error::InvalidPath(format!(
+            "{side} path {} changed during move; refusing to continue",
+            requested_path.display()
+        )))
+    }
+}
+
 #[cfg(unix)]
 fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -118,7 +137,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
                 path: requested_from.clone(),
             })?;
 
-    let from_relative = from_relative_parent.join(from_name);
+    let mut from_relative = from_relative_parent.join(from_name);
     let mut to_relative = requested_to.clone();
 
     if ctx.redactor.is_path_denied(&from_relative) {
@@ -234,6 +253,43 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         }
     }
 
+    let rechecked_from_parent = revalidate_parent_before_move(
+        ctx,
+        &request.root_id,
+        from_parent_rel,
+        &from_parent,
+        &requested_from,
+        "source",
+    )?;
+    let rechecked_to_parent = revalidate_parent_before_move(
+        ctx,
+        &request.root_id,
+        to_parent_rel,
+        &to_parent,
+        &requested_to,
+        "destination",
+    )?;
+    let rechecked_from_relative_parent =
+        crate::path_utils::strip_prefix_case_insensitive(&rechecked_from_parent, &canonical_root)
+            .ok_or_else(|| Error::OutsideRoot {
+            root_id: request.root_id.clone(),
+            path: requested_from.clone(),
+        })?;
+    from_relative = rechecked_from_relative_parent.join(from_name);
+    let rechecked_to_relative_parent =
+        crate::path_utils::strip_prefix_case_insensitive(&rechecked_to_parent, &canonical_root)
+            .ok_or_else(|| Error::OutsideRoot {
+                root_id: request.root_id.clone(),
+                path: requested_to.clone(),
+            })?;
+    to_relative = rechecked_to_relative_parent.join(to_name);
+    if ctx.redactor.is_path_denied(&from_relative) {
+        return Err(Error::SecretPathDenied(from_relative));
+    }
+    if ctx.redactor.is_path_denied(&to_relative) {
+        return Err(Error::SecretPathDenied(to_relative));
+    }
+
     let replace_existing = request.overwrite;
     super::io::rename_replace(&source, &destination, replace_existing).map_err(|err| {
         if !replace_existing && err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -244,7 +300,19 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
                 "overwrite=false move is unsupported on this platform".to_string(),
             );
         }
-        Error::io_path("rename", &to_relative, err)
+        let source_missing = matches!(
+            fs::symlink_metadata(&source),
+            Err(source_err) if source_err.kind() == std::io::ErrorKind::NotFound
+        );
+        if source_missing {
+            return Error::io_path("rename", &from_relative, err);
+        }
+        let rename_context = PathBuf::from(format!(
+            "{} -> {}",
+            from_relative.display(),
+            to_relative.display()
+        ));
+        Error::io_path("rename", rename_context, err)
     })?;
 
     Ok(MovePathResponse {

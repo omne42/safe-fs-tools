@@ -8,6 +8,23 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
+#[cfg(unix)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(windows)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
+    true
+}
+
 fn ensure_target_dir_within_root(
     root_id: &str,
     canonical_root: &Path,
@@ -25,6 +42,56 @@ fn ensure_target_dir_within_root(
         });
     }
     Ok(())
+}
+
+fn ensure_parent_dir_unchanged(
+    canonical_parent: &Path,
+    relative_parent: &Path,
+    expected_parent_meta: &fs::Metadata,
+) -> Result<()> {
+    let current_parent_meta = fs::symlink_metadata(canonical_parent)
+        .map_err(|err| Error::io_path("symlink_metadata", relative_parent, err))?;
+    if current_parent_meta.file_type().is_symlink() || !current_parent_meta.is_dir() {
+        return Err(Error::InvalidPath(format!(
+            "parent path {} changed during operation",
+            relative_parent.display()
+        )));
+    }
+    if !metadata_same_file(expected_parent_meta, &current_parent_meta) {
+        return Err(Error::InvalidPath(format!(
+            "parent path {} changed during operation",
+            relative_parent.display()
+        )));
+    }
+    Ok(())
+}
+
+fn cleanup_created_target_dir(
+    target: &Path,
+    relative: &Path,
+    created_target_meta: &fs::Metadata,
+    validation_err: &Error,
+) -> Result<()> {
+    let current_target_meta = fs::symlink_metadata(target)
+        .map_err(|err| Error::io_path("symlink_metadata", relative, err))?;
+    if current_target_meta.file_type().is_symlink()
+        || !current_target_meta.is_dir()
+        || !metadata_same_file(created_target_meta, &current_target_meta)
+    {
+        return Err(Error::InvalidPath(format!(
+            "path {} changed before cleanup",
+            relative.display()
+        )));
+    }
+    fs::remove_dir(target).map_err(|cleanup_err| {
+        let cleanup_context = std::io::Error::new(
+            cleanup_err.kind(),
+            format!(
+                "mkdir post-create validation failed ({validation_err}); cleanup failed: {cleanup_err}"
+            ),
+        );
+        Error::io_path("remove_dir", relative, cleanup_context)
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,9 +128,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
     let dir_name = super::path_validation::ensure_non_root_leaf(
         &requested_path,
         &request.path,
-        "mkdir",
-        "directory name",
-        "refusing to create the root directory",
+        super::path_validation::LeafOp::Mkdir,
     )?;
 
     let requested_parent = requested_path
@@ -86,6 +151,14 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 root_id: request.root_id.clone(),
                 path: requested_path.clone(),
             })?;
+    let canonical_parent_meta = fs::symlink_metadata(&canonical_parent)
+        .map_err(|err| Error::io_path("symlink_metadata", &relative_parent, err))?;
+    if canonical_parent_meta.file_type().is_symlink() || !canonical_parent_meta.is_dir() {
+        return Err(Error::InvalidPath(format!(
+            "parent path {} changed during operation",
+            relative_parent.display()
+        )));
+    }
     let relative = relative_parent.join(dir_name);
 
     if ctx.redactor.is_path_denied(&relative) {
@@ -129,6 +202,11 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
             ))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            ensure_parent_dir_unchanged(
+                &canonical_parent,
+                &relative_parent,
+                &canonical_parent_meta,
+            )?;
             if let Err(err) = fs::create_dir(&target) {
                 if err.kind() == std::io::ErrorKind::AlreadyExists {
                     let existing = fs::symlink_metadata(&target)
@@ -161,6 +239,14 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 }
                 return Err(Error::io_path("create_dir", &relative, err));
             }
+            let created_target_meta = fs::symlink_metadata(&target)
+                .map_err(|meta_err| Error::io_path("symlink_metadata", &relative, meta_err))?;
+            if created_target_meta.file_type().is_symlink() || !created_target_meta.is_dir() {
+                return Err(Error::InvalidPath(format!(
+                    "path {} changed during operation",
+                    relative.display()
+                )));
+            }
             if let Err(validation_err) = ensure_target_dir_within_root(
                 &request.root_id,
                 &canonical_root,
@@ -168,14 +254,13 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 &relative,
                 &requested_path,
             ) {
-                if let Err(cleanup_err) = fs::remove_dir(&target) {
-                    let cleanup_context = std::io::Error::new(
-                        cleanup_err.kind(),
-                        format!(
-                            "mkdir post-create validation failed ({validation_err}); cleanup failed: {cleanup_err}"
-                        ),
-                    );
-                    return Err(Error::io_path("remove_dir", &relative, cleanup_context));
+                if let Err(cleanup_err) = cleanup_created_target_dir(
+                    &target,
+                    &relative,
+                    &created_target_meta,
+                    &validation_err,
+                ) {
+                    return Err(cleanup_err);
                 }
                 return Err(validation_err);
             }

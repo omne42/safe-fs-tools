@@ -42,7 +42,9 @@ fn read_handles_large_file_within_limit() {
     let content = "0123456789abcdef\n".repeat(52_000);
     std::fs::write(&path, &content).expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_read_bytes = u64::try_from(content.len()).expect("content len fits u64");
+    let ctx = Context::new(policy).expect("ctx");
     let resp = read_file(
         &ctx,
         ReadRequest {
@@ -58,6 +60,6 @@ fn read_handles_large_file_within_limit() {
         resp.bytes_read,
         u64::try_from(content.len()).expect("content len fits u64")
     );
-    assert_eq!(resp.content.len(), content.len());
+    assert_eq!(resp.content, content);
     assert!(!resp.truncated);
 }

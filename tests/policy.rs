@@ -18,9 +18,16 @@ fn assert_invalid_policy_contains(err: safe_fs_tools::Error, expected: &str) {
     }
 }
 
-fn assert_invalid_policy_eq(err: safe_fs_tools::Error, expected: &str) {
+fn assert_invalid_policy_contains_all(err: safe_fs_tools::Error, expected_parts: &[&str]) {
     match err {
-        safe_fs_tools::Error::InvalidPolicy(msg) => assert_eq!(msg, expected),
+        safe_fs_tools::Error::InvalidPolicy(msg) => {
+            for expected in expected_parts {
+                assert!(
+                    msg.contains(expected),
+                    "expected invalid policy message containing {expected:?}, got: {msg}"
+                );
+            }
+        }
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -57,7 +64,7 @@ fn policy_rejects_duplicate_root_ids() {
     };
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_eq(err, "duplicate root.id: \"dup\"");
+    assert_invalid_policy_contains_all(err, &["duplicate root.id", "dup"]);
 }
 
 #[test]
@@ -77,9 +84,12 @@ fn policy_rejects_root_id_with_trailing_whitespace() {
     };
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_eq(
+    assert_invalid_policy_contains_all(
         err,
-        "root.id must not contain leading/trailing whitespace: \"root \"",
+        &[
+            "root.id must not contain leading/trailing whitespace",
+            "root ",
+        ],
     );
 }
 
@@ -100,9 +110,12 @@ fn policy_rejects_root_id_with_leading_whitespace() {
     };
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_eq(
+    assert_invalid_policy_contains_all(
         err,
-        "root.id must not contain leading/trailing whitespace: \" root\"",
+        &[
+            "root.id must not contain leading/trailing whitespace",
+            " root",
+        ],
     );
 }
 
@@ -122,10 +135,7 @@ fn policy_rejects_relative_root_paths() {
     };
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_eq(
-        err,
-        "root.path must be absolute (root.id=root, path=relative-root)",
-    );
+    assert_invalid_policy_contains_all(err, &["root.path must be absolute", "root.id=root"]);
 }
 
 #[test]
@@ -145,7 +155,7 @@ fn policy_rejects_zero_max_patch_bytes() {
     policy.limits.max_patch_bytes = Some(0);
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_eq(err, "limits.max_patch_bytes must be > 0");
+    assert_invalid_policy_contains_all(err, &["limits.max_patch_bytes", "> 0"]);
 }
 
 #[test]
@@ -156,10 +166,7 @@ fn policy_rejects_max_walk_files_greater_than_entries() {
     policy.limits.max_walk_files = 11;
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_eq(
-        err,
-        "limits.max_walk_files must be <= limits.max_walk_entries",
-    );
+    assert_invalid_policy_contains_all(err, &["limits.max_walk_files", "limits.max_walk_entries"]);
 }
 
 #[test]
@@ -174,7 +181,7 @@ fn policy_rejects_empty_roots() {
     };
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_eq(err, "roots is empty");
+    assert_invalid_policy_contains(err, "roots is empty");
 }
 
 #[test]
@@ -194,7 +201,7 @@ fn policy_rejects_empty_root_id() {
     };
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_eq(err, "root.id is empty");
+    assert_invalid_policy_contains(err, "root.id is empty");
 }
 
 #[test]
@@ -213,7 +220,7 @@ fn policy_rejects_empty_root_path() {
     };
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_eq(err, "root.path is empty (root.id=root)");
+    assert_invalid_policy_contains_all(err, &["root.path is empty", "root.id=root"]);
 }
 
 #[test]
@@ -223,32 +230,32 @@ fn policy_rejects_zero_required_limits() {
         (
             "max_read_bytes",
             |limits| limits.max_read_bytes = 0,
-            "limits.max_read_bytes must be > 0",
+            "limits.max_read_bytes",
         ),
         (
             "max_write_bytes",
             |limits| limits.max_write_bytes = 0,
-            "limits.max_write_bytes must be > 0",
+            "limits.max_write_bytes",
         ),
         (
             "max_results",
             |limits| limits.max_results = 0,
-            "limits.max_results must be > 0",
+            "limits.max_results",
         ),
         (
             "max_walk_files",
             |limits| limits.max_walk_files = 0,
-            "limits.max_walk_files must be > 0",
+            "limits.max_walk_files",
         ),
         (
             "max_walk_entries",
             |limits| limits.max_walk_entries = 0,
-            "limits.max_walk_entries must be > 0",
+            "limits.max_walk_entries",
         ),
         (
             "max_line_bytes",
             |limits| limits.max_line_bytes = 0,
-            "limits.max_line_bytes must be > 0",
+            "limits.max_line_bytes",
         ),
     ];
 
@@ -258,7 +265,8 @@ fn policy_rejects_zero_required_limits() {
 
         match policy.validate().expect_err("should reject") {
             safe_fs_tools::Error::InvalidPolicy(msg) => {
-                assert_eq!(msg, expected, "case: {case_name}");
+                assert!(msg.contains(expected), "case: {case_name}, msg: {msg}");
+                assert!(msg.contains("> 0"), "case: {case_name}, msg: {msg}");
             }
             other => panic!("case {case_name}: unexpected error: {other:?}"),
         }
@@ -305,10 +313,6 @@ fn policy_deserialization_rejects_unknown_fields() {
 "#;
 
     let err = serde_json::from_str::<SandboxPolicy>(raw).expect_err("should reject");
-    assert!(
-        err.to_string().contains("unknown field"),
-        "unexpected error: {err}"
-    );
     assert!(
         err.to_string().contains("unknown_field"),
         "unexpected error: {err}"

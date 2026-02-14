@@ -97,6 +97,9 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
                 }
                 if current_line <= end_line {
                     out.extend_from_slice(&buf);
+                    if current_line == end_line {
+                        break;
+                    }
                 }
             }
 

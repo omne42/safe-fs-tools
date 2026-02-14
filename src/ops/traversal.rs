@@ -84,11 +84,22 @@ pub(super) fn elapsed_ms(started: &Instant) -> u64 {
 pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
     #[cfg(windows)]
     {
-        let raw = path.to_string_lossy();
-        if !raw.contains('\\') {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        const BACKSLASH: u16 = b'\\' as u16;
+        const SLASH: u16 = b'/' as u16;
+
+        let mut normalized_wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if !normalized_wide.contains(&BACKSLASH) {
             return glob.is_match(path);
         }
-        let normalized = raw.replace('\\', "/");
+        for unit in &mut normalized_wide {
+            if *unit == BACKSLASH {
+                *unit = SLASH;
+            }
+        }
+        let normalized = OsString::from_wide(&normalized_wide);
         return glob.is_match(Path::new(&normalized));
     }
     #[cfg(not(windows))]

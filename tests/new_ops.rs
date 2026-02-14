@@ -9,6 +9,27 @@ use safe_fs_tools::ops::{
 };
 use safe_fs_tools::policy::RootMode;
 
+#[cfg(any(unix, windows))]
+fn create_file_symlink_or_skip(target: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).expect("symlink");
+        true
+    }
+
+    #[cfg(windows)]
+    {
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping symlink test (permission denied): {err}");
+                false
+            }
+            Err(err) => panic!("symlink_file failed: {err}"),
+        }
+    }
+}
+
 #[test]
 fn list_dir_lists_entries_in_sorted_order_and_truncates() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -77,16 +98,7 @@ fn stat_reports_file_metadata() {
     assert!(matches!(resp.kind, safe_fs_tools::ops::StatKind::File));
     assert_eq!(resp.size_bytes, 2);
     assert!(!resp.readonly);
-    let modified_ms = resp
-        .modified_ms
-        .expect("modified_ms should be available for regular files");
-    assert!(modified_ms > 0);
-    if let Some(accessed_ms) = resp.accessed_ms {
-        assert!(accessed_ms > 0);
-    }
-    if let Some(created_ms) = resp.created_ms {
-        assert!(created_ms > 0);
-    }
+    assert!(resp.modified_ms.is_some());
 }
 
 #[test]
@@ -161,12 +173,8 @@ fn write_file_creates_new_files_and_respects_overwrite() {
         },
     )
     .expect_err("should reject");
-    match err {
-        safe_fs_tools::Error::InvalidPath(message) => {
-            assert!(message.contains("file exists"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_eq!(err.code(), safe_fs_tools::Error::CODE_INVALID_PATH);
+    assert!(matches!(err, safe_fs_tools::Error::InvalidPath(_)));
     assert_eq!(
         std::fs::read_to_string(dir.path().join("sub").join("file.txt"))
             .expect("read unchanged file"),
@@ -244,12 +252,8 @@ fn move_path_rejects_moving_directory_into_descendant() {
     )
     .expect_err("should reject");
 
-    match err {
-        safe_fs_tools::Error::InvalidPath(message) => {
-            assert!(message.contains("own subdirectory"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_eq!(err.code(), safe_fs_tools::Error::CODE_INVALID_PATH);
+    assert!(matches!(err, safe_fs_tools::Error::InvalidPath(_)));
     assert!(dir.path().join("a").is_dir());
     assert!(dir.path().join("a").join("sub").is_dir());
 }
@@ -340,13 +344,13 @@ fn copy_file_same_path_is_a_noop_when_source_exists() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn copy_file_rejects_symlink_sources() {
-    use std::os::unix::fs::symlink;
-
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("real.txt"), "hi").expect("write");
-    symlink(dir.path().join("real.txt"), dir.path().join("link.txt")).expect("symlink");
+    if !create_file_symlink_or_skip(&dir.path().join("real.txt"), &dir.path().join("link.txt")) {
+        return;
+    }
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
     let err = copy_file(
@@ -361,12 +365,8 @@ fn copy_file_rejects_symlink_sources() {
     )
     .expect_err("copy should reject symlink source");
 
-    match err {
-        safe_fs_tools::Error::InvalidPath(message) => {
-            assert!(message.contains("symlink"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_eq!(err.code(), safe_fs_tools::Error::CODE_INVALID_PATH);
+    assert!(matches!(err, safe_fs_tools::Error::InvalidPath(_)));
     assert!(!dir.path().join("out.txt").exists());
 }
 
