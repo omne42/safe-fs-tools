@@ -95,6 +95,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             "grep is disabled by policy".to_string(),
         ));
     }
+    if request.query.trim().is_empty() {
+        return Err(Error::InvalidPath(
+            "grep query must not be empty".to_string(),
+        ));
+    }
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();

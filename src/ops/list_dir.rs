@@ -71,8 +71,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let max_entries = request
         .max_entries
         .unwrap_or(ctx.policy.limits.max_results)
-        .min(ctx.policy.limits.max_results)
-        .max(1);
+        .min(ctx.policy.limits.max_results);
 
     let (dir, relative_dir, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;

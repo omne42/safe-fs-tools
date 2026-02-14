@@ -184,6 +184,29 @@ fn edit_preserves_crlf() {
 }
 
 #[test]
+fn edit_with_empty_replacement_deletes_line_without_inserting_blank_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("file.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    edit_range(
+        &ctx,
+        EditRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            start_line: 2,
+            end_line: 2,
+            replacement: String::new(),
+        },
+    )
+    .expect("edit");
+
+    let out = std::fs::read_to_string(&path).expect("read");
+    assert_eq!(out, "one\nthree\n");
+}
+
+#[test]
 fn edit_respects_max_write_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("small.txt");

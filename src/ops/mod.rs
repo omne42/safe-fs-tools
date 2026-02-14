@@ -42,13 +42,21 @@ pub use write::{WriteFileRequest, WriteFileResponse, write_file};
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug)]
 pub struct Context {
     policy: SandboxPolicy,
     redactor: SecretRedactor,
     canonical_roots: HashMap<String, PathBuf>,
     #[cfg(any(feature = "glob", feature = "grep"))]
     traversal_skip_globs: Option<GlobSet>,
+}
+
+impl std::fmt::Debug for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Context")
+            .field("roots", &self.canonical_roots.keys().collect::<Vec<_>>())
+            .field("permissions", &self.policy.permissions)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

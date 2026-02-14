@@ -8,10 +8,10 @@ pub fn create_fifo(path: &std::path::Path) {
     // the pointer remains valid for the duration of the call.
     let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
     if rc != 0 {
-        panic!(
-            "mkfifo failed for {}: {}",
-            path.display(),
-            std::io::Error::last_os_error()
-        );
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EEXIST) {
+            return;
+        }
+        panic!("mkfifo failed for {}: {}", path.display(), err);
     }
 }

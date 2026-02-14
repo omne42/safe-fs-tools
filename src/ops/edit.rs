@@ -76,7 +76,7 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
 
     let mut replacement = normalize_replacement_line_endings(&request.replacement, newline);
 
-    if !newline.is_empty() && !replacement.ends_with(newline) {
+    if !replacement.is_empty() && !newline.is_empty() && !replacement.ends_with(newline) {
         replacement.push_str(newline);
     }
 

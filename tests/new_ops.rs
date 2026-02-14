@@ -34,6 +34,26 @@ fn list_dir_lists_entries_in_sorted_order_and_truncates() {
 }
 
 #[test]
+fn list_dir_allows_zero_max_entries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = list_dir(
+        &ctx,
+        ListDirRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("."),
+            max_entries: Some(0),
+        },
+    )
+    .expect("list");
+
+    assert!(resp.entries.is_empty());
+    assert!(resp.truncated);
+}
+
+#[test]
 fn stat_reports_file_metadata() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "hi").expect("write");

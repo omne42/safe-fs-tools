@@ -393,6 +393,19 @@ fn write_ops_are_disallowed_on_readonly_root() {
     )
     .expect_err("should reject");
     assert_not_permitted(err);
+
+    assert!(
+        !dir.path().join("file.txt").exists(),
+        "readonly write ops must not create file.txt"
+    );
+    assert!(
+        !dir.path().join("sub").exists(),
+        "readonly write ops must not create sub/"
+    );
+    assert!(
+        !dir.path().join("b.txt").exists(),
+        "readonly write ops must not create b.txt"
+    );
 }
 
 #[test]

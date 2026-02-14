@@ -103,6 +103,33 @@ fn grep_globs_reject_absolute_and_parent_segments() {
 }
 
 #[test]
+fn grep_rejects_empty_query() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    for query in ["", "   \t"] {
+        let err = grep(
+            &ctx,
+            GrepRequest {
+                root_id: "root".to_string(),
+                query: query.to_string(),
+                regex: false,
+                glob: None,
+            },
+        )
+        .expect_err("empty query should be rejected");
+
+        match err {
+            safe_fs_tools::Error::InvalidPath(msg) => {
+                assert!(msg.contains("must not be empty"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn grep_skips_dangling_symlink_targets() {
     use std::os::unix::fs::symlink;
@@ -375,6 +402,10 @@ fn grep_honors_max_walk_entries() {
     assert_eq!(resp.scanned_files, 1);
     assert!(resp.scan_limit_reached);
     assert!(resp.truncated);
+    assert_eq!(
+        resp.scan_limit_reason,
+        Some(safe_fs_tools::ops::ScanLimitReason::Entries)
+    );
 }
 
 #[test]

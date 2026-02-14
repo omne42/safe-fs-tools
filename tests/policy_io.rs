@@ -7,6 +7,38 @@ mod unix_helpers;
 mod policy_io {
     use safe_fs_tools::ops::Context;
     use safe_fs_tools::policy::{Permissions, Root, RootMode, SandboxPolicy};
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct TomlRoot {
+        id: String,
+        path: String,
+        mode: String,
+    }
+
+    #[derive(Serialize)]
+    struct TomlPermissions {
+        read: bool,
+    }
+
+    #[derive(Serialize)]
+    struct TomlPolicyDoc {
+        roots: Vec<TomlRoot>,
+        permissions: TomlPermissions,
+    }
+
+    fn write_readonly_toml_policy(policy_path: &std::path::Path, root_path: &std::path::Path) {
+        let doc = TomlPolicyDoc {
+            roots: vec![TomlRoot {
+                id: "workspace".to_string(),
+                path: root_path.display().to_string(),
+                mode: "read_only".to_string(),
+            }],
+            permissions: TomlPermissions { read: true },
+        };
+        let encoded = toml::to_string(&doc).expect("serialize toml");
+        std::fs::write(policy_path, encoded).expect("write toml");
+    }
 
     #[test]
     fn load_policy_toml_and_json() {
@@ -17,22 +49,7 @@ mod policy_io {
         let toml_path = dir.path().join("policy.toml");
         let json_path = dir.path().join("policy.json");
 
-        std::fs::write(
-            &toml_path,
-            format!(
-                r#"
-[[roots]]
-id = "workspace"
-path = '{}'
-mode = "read_only"
-
-[permissions]
-read = true
-"#,
-                root_path.display()
-            ),
-        )
-        .expect("write toml");
+        write_readonly_toml_policy(&toml_path, &root_path);
 
         std::fs::write(
             &json_path,
@@ -112,22 +129,7 @@ read = true
         std::fs::create_dir_all(&root_path).expect("mkdir");
 
         let real_policy = dir.path().join("real.toml");
-        std::fs::write(
-            &real_policy,
-            format!(
-                r#"
-[[roots]]
-id = "workspace"
-path = '{}'
-mode = "read_only"
-
-[permissions]
-read = true
-"#,
-                root_path.display()
-            ),
-        )
-        .expect("write toml");
+        write_readonly_toml_policy(&real_policy, &root_path);
 
         let link_policy = dir.path().join("policy.toml");
         symlink(&real_policy, &link_policy).expect("symlink");

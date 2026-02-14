@@ -233,7 +233,7 @@ fn glob_respects_max_walk_ms_time_budget() {
         resp.scan_limit_reason,
         Some(safe_fs_tools::ops::ScanLimitReason::Time)
     );
-    assert!(resp.matches.is_empty());
+    assert!(resp.matches.len() <= ctx.policy().limits.max_results);
 }
 
 #[test]

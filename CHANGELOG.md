@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Review follow-up hardening: `grep` now rejects empty/whitespace-only queries, `list_dir` now honors explicit `max_entries=0`, and `edit` no longer inserts an extra blank line when replacement text is empty.
+- CI/release reproducibility and least-privilege updates: release workflow now defaults to `contents: read` (publish job keeps write), and release/docs cargo commands now run with `--locked`.
+- Hook robustness: `githooks/pre-commit` now protects released changelog sections by diffing all non-`[Unreleased]` content instead of relying on a numeric version-heading regex.
+- Tests: tightened regression coverage for `grep` entry-limit reason, `list_dir max_entries=0`, empty-line replacement semantics, readonly write side effects, and TOML policy fixture serialization.
+
 - Hooks/tests hardening from full-file review: tightened `commit-msg` subject validation, strengthened `pre-commit` staged-diff failure handling, and added regression assertions for failure-side-effect invariants.
 - Error/CLI contract: `tool_error_details*` now always returns a JSON object, and `patch` error details/messages are path-redaction aware.
 - API typing: `stat` response `type` is now modeled by `StatKind` enum in Rust while preserving lowercase JSON serialization.

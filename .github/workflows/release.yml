@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-binaries:
@@ -28,7 +28,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build (release)
-        run: cargo build --release -p safe-fs-tools-cli
+        run: cargo build --locked --release -p safe-fs-tools-cli
 
       - name: Package (tar.gz)
         if: runner.os != 'Windows'
@@ -98,14 +98,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run workspace tests
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       - name: Verify tag matches crate versions
         shell: bash
         run: |
           set -euo pipefail
           metadata_json="$(mktemp)"
-          cargo metadata --no-deps --format-version 1 >"$metadata_json"
+          cargo metadata --locked --no-deps --format-version 1 >"$metadata_json"
           python3 - "$metadata_json" <<'PY'
           import json
           import os

@@ -8,6 +8,7 @@ on:
       - "cli/**"
       - "docs/**"
       - "Cargo.toml"
+      - "Cargo.lock"
       - "cli/Cargo.toml"
       - "README.md"
       - "rust-toolchain.toml"
@@ -39,7 +40,7 @@ jobs:
       - name: Build rustdoc
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc -p safe-fs-tools --no-deps --all-features
+        run: cargo doc --locked -p safe-fs-tools --no-deps --all-features
 
       - name: Add root index.html
         shell: bash
