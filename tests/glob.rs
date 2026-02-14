@@ -225,7 +225,7 @@ fn glob_does_not_follow_symlink_root_prefix() {
         safe_fs_tools::Error::OutsideRoot { root_id, path } => {
             assert_eq!(root_id, "root");
             assert!(!path.is_absolute());
-            assert_eq!(path, &PathBuf::from("sub"));
+            assert_eq!(path.as_path(), Path::new("sub"));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -300,7 +300,7 @@ fn glob_root_walkdir_error_does_not_leak_absolute_paths() {
     match &err {
         safe_fs_tools::Error::WalkDirRoot { path, .. } => {
             assert!(!path.is_absolute());
-            assert_eq!(path, &PathBuf::from("blocked"));
+            assert_eq!(path.as_path(), Path::new("blocked"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

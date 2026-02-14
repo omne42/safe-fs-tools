@@ -309,7 +309,7 @@ fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
     match &err {
         safe_fs_tools::Error::WalkDirRoot { path, .. } => {
             assert!(!path.is_absolute());
-            assert_eq!(path, &PathBuf::from("blocked"));
+            assert_eq!(path.as_path(), Path::new("blocked"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

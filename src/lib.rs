@@ -6,7 +6,7 @@
 //! feature is disabled, calls return `Error::NotPermitted`.
 
 mod error;
-mod ops;
+pub mod ops;
 pub mod path_utils;
 
 pub(crate) mod path_utils_internal {
