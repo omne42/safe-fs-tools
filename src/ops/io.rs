@@ -32,48 +32,6 @@ impl FileIdentity {
 }
 
 #[cfg(unix)]
-fn is_symlink_open_error(err: &std::io::Error) -> bool {
-    err.raw_os_error() == Some(libc::ELOOP)
-}
-
-#[cfg(not(unix))]
-fn is_symlink_open_error(_err: &std::io::Error) -> bool {
-    false
-}
-
-#[cfg(unix)]
-fn open_readonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let mut options = fs::OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    options.open(path)
-}
-
-#[cfg(windows)]
-fn open_readonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-
-    let mut options = fs::OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    options.open(path)
-}
-
-#[cfg(all(not(unix), not(windows)))]
-fn open_readonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
-    let _ = path;
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "platform does not support atomic no-follow reads",
-    ))
-}
-
-#[cfg(unix)]
 fn open_writeonly_nofollow(path: &Path) -> std::io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -109,8 +67,8 @@ pub(super) fn open_regular_file_for_read(
     path: &Path,
     relative: &Path,
 ) -> Result<(fs::File, fs::Metadata)> {
-    let file = open_readonly_nofollow(path).map_err(|err| {
-        if is_symlink_open_error(&err) {
+    let file = crate::platform_open::open_readonly_nofollow(path).map_err(|err| {
+        if crate::platform_open::is_symlink_open_error(&err) {
             return Error::InvalidPath(format!("path {} is a symlink", relative.display()));
         }
         Error::io_path("open", relative, err)
@@ -129,7 +87,7 @@ pub(super) fn open_regular_file_for_read(
 
 fn open_regular_file_for_write(path: &Path, relative: &Path) -> Result<(fs::File, fs::Metadata)> {
     let file = open_writeonly_nofollow(path).map_err(|err| {
-        if is_symlink_open_error(&err) {
+        if crate::platform_open::is_symlink_open_error(&err) {
             return Error::InvalidPath(format!("path {} is a symlink", relative.display()));
         }
         Error::io_path("open_for_write", relative, err)

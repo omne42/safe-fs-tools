@@ -19,6 +19,7 @@ mod list_dir;
 mod mkdir;
 mod move_path;
 mod patch;
+mod path_validation;
 mod read;
 mod resolve;
 mod stat;

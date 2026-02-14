@@ -109,6 +109,16 @@ impl Error {
 mod tests {
     use super::*;
 
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    fn sample_walkdir_error() -> walkdir::Error {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing");
+        walkdir::WalkDir::new(&missing)
+            .into_iter()
+            .find_map(|entry| entry.err())
+            .expect("walk error")
+    }
+
     #[test]
     fn code_covers_variants() {
         let cases = vec![
@@ -154,27 +164,19 @@ mod tests {
                 },
                 "input_too_large",
             ),
+            #[cfg(any(feature = "glob", feature = "grep"))]
+            (Error::WalkDir(sample_walkdir_error()), "walkdir"),
+            #[cfg(any(feature = "glob", feature = "grep"))]
+            (
+                Error::WalkDirRoot {
+                    path: PathBuf::from("x"),
+                    source: std::io::Error::from_raw_os_error(2),
+                },
+                "walkdir_root",
+            ),
         ];
         for (error, code) in cases {
             assert_eq!(error.code(), code);
-        }
-
-        #[cfg(any(feature = "glob", feature = "grep"))]
-        {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let missing = dir.path().join("missing");
-            let walk_err = walkdir::WalkDir::new(&missing)
-                .into_iter()
-                .find_map(|entry| entry.err())
-                .expect("walk error");
-            let walk = Error::WalkDir(walk_err);
-            assert_eq!(walk.code(), "walkdir");
-
-            let walk_root = Error::WalkDirRoot {
-                path: PathBuf::from("x"),
-                source: std::io::Error::from_raw_os_error(2),
-            };
-            assert_eq!(walk_root.code(), "walkdir_root");
         }
     }
 }

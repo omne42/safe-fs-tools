@@ -11,66 +11,35 @@ pub enum PolicyFormat {
     Json,
 }
 
-#[cfg(unix)]
-fn is_symlink_open_error(err: &std::io::Error) -> bool {
-    err.raw_os_error() == Some(libc::ELOOP)
-}
-
-#[cfg(not(unix))]
-fn is_symlink_open_error(_err: &std::io::Error) -> bool {
-    false
-}
-
-#[cfg(unix)]
 fn open_policy_file(path: &Path) -> Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let mut options = std::fs::OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    options.open(path).map_err(|err| {
-        if is_symlink_open_error(&err) {
+    let file = crate::platform_open::open_readonly_nofollow(path).map_err(|err| {
+        if crate::platform_open::is_symlink_open_error(&err) {
             return Error::InvalidPath(format!(
                 "path {} is a symlink; refusing to load policy from symlink paths",
                 path.display()
             ));
         }
+        if err.kind() == std::io::ErrorKind::Unsupported {
+            return Error::InvalidPath(
+                "loading policy files on this platform requires an atomic no-follow open primitive"
+                    .to_string(),
+            );
+        }
         Error::io_path("open", path, err)
-    })
-}
-
-#[cfg(windows)]
-fn open_policy_file(path: &Path) -> Result<std::fs::File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-
-    let mut options = std::fs::OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    let file = options
-        .open(path)
-        .map_err(|err| Error::io_path("open", path, err))?;
-    let meta = file
-        .metadata()
-        .map_err(|err| Error::io_path("metadata", path, err))?;
-    if meta.file_type().is_symlink() {
-        return Err(Error::InvalidPath(format!(
-            "path {} is a symlink; refusing to load policy from symlink paths",
-            path.display()
-        )));
+    })?;
+    #[cfg(windows)]
+    {
+        let meta = file
+            .metadata()
+            .map_err(|err| Error::io_path("metadata", path, err))?;
+        if meta.file_type().is_symlink() {
+            return Err(Error::InvalidPath(format!(
+                "path {} is a symlink; refusing to load policy from symlink paths",
+                path.display()
+            )));
+        }
     }
     Ok(file)
-}
-
-#[cfg(all(not(unix), not(windows)))]
-fn open_policy_file(path: &Path) -> Result<std::fs::File> {
-    let _ = path;
-    Err(Error::InvalidPath(
-        "loading policy files on this platform requires an atomic no-follow open primitive"
-            .to_string(),
-    ))
 }
 
 pub fn parse_policy(raw: &str, format: PolicyFormat) -> Result<SandboxPolicy> {

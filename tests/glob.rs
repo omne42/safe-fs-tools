@@ -88,6 +88,47 @@ fn glob_patterns_reject_absolute_and_parent_segments() {
 }
 
 #[test]
+fn glob_missing_prefix_returns_empty_without_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "missing/**/*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert!(resp.matches.is_empty());
+    assert_eq!(resp.scanned_entries, 0);
+    assert_eq!(resp.scanned_files, 0);
+    assert_eq!(resp.skipped_walk_errors, 0);
+}
+
+#[test]
+fn glob_dot_pattern_is_stable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: ".".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert!(resp.matches.is_empty());
+    assert!(!resp.truncated);
+    assert!(!resp.scan_limit_reached);
+}
+
+#[test]
 #[cfg(unix)]
 fn glob_skips_dangling_symlink_targets() {
     use std::os::unix::fs::symlink;

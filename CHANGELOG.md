@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Internal dedup: extracted shared no-follow read-open helpers (`platform_open`) used by `policy-io`, CLI text-input loading, and core read paths; extracted shared non-root leaf validation for `write`/`delete`.
+- Internal refactor: split `resolve` directory-walk enforcement into `src/ops/resolve/dir_ops.rs`, split traversal internals into `src/ops/traversal/{compile,walk}.rs`, and moved CLI command dispatch/validation into `cli/src/command_exec.rs`.
 - CI supply-chain hardening: all third-party GitHub Actions in `ci/docs/release` workflows are now pinned to immutable commit SHAs (with version comments for auditability).
 - Docs wording cleanup: README and DB-VFS notes now use neutral “future work” wording instead of ad-hoc TODO markers in examples/headings.
 - Review follow-up hardening: `grep` now rejects empty/whitespace-only queries, `list_dir` now honors explicit `max_entries=0`, and `edit` no longer inserts an extra blank line when replacement text is empty.
@@ -50,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tests: expanded `glob` edge coverage for missing derived prefixes and `.` pattern stability.
 - CLI tests: Unix FIFO helper now treats `EEXIST` as success, reducing flaky failures in retry/parallel test scenarios.
 - `write_file` overwrite path now re-checks canonicalized relative paths against `secrets.deny_globs`, and size conversions avoid lossy `as u64` casts.
 - `delete(ignore_missing=true)` now consistently handles `NotFound` races during `remove_file`/`remove_dir_all`.

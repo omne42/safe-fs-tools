@@ -54,27 +54,13 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         });
     }
 
-    let requested_is_root = requested_path
-        .components()
-        .all(|component| matches!(component, std::path::Component::CurDir));
-    if requested_is_root {
-        return Err(Error::InvalidPath(
-            "refusing to write to the root directory".to_string(),
-        ));
-    }
-
-    let file_name = requested_path.file_name().ok_or_else(|| {
-        Error::InvalidPath(format!(
-            "invalid write path {:?}: missing final file name",
-            request.path
-        ))
-    })?;
-    if file_name == std::ffi::OsStr::new(".") || file_name == std::ffi::OsStr::new("..") {
-        return Err(Error::InvalidPath(format!(
-            "invalid write path {:?}",
-            request.path
-        )));
-    }
+    let file_name = super::path_validation::ensure_non_root_leaf(
+        &requested_path,
+        &request.path,
+        "write",
+        "file name",
+        "refusing to write to the root directory",
+    )?;
 
     let requested_parent = requested_path.parent().unwrap_or_else(|| Path::new(""));
     let canonical_parent =

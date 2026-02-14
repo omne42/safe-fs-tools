@@ -40,27 +40,13 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
     let canonical_root = resolved.canonical_root;
     let requested_path = resolved.requested_path;
 
-    let requested_is_root = requested_path
-        .components()
-        .all(|component| matches!(component, std::path::Component::CurDir));
-    if requested_is_root {
-        return Err(Error::InvalidPath(
-            "refusing to delete the root directory".to_string(),
-        ));
-    }
-
-    let file_name = requested_path.file_name().ok_or_else(|| {
-        Error::InvalidPath(format!(
-            "invalid delete path {:?}: missing final path segment",
-            request.path
-        ))
-    })?;
-    if file_name == std::ffi::OsStr::new(".") || file_name == std::ffi::OsStr::new("..") {
-        return Err(Error::InvalidPath(format!(
-            "invalid delete path {:?}",
-            request.path
-        )));
-    }
+    let file_name = super::path_validation::ensure_non_root_leaf(
+        &requested_path,
+        &request.path,
+        "delete",
+        "path segment",
+        "refusing to delete the root directory",
+    )?;
 
     let requested_parent = requested_path.parent().unwrap_or_else(|| Path::new(""));
     let requested_relative = requested_parent.join(file_name);

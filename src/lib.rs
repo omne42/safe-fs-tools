@@ -1,6 +1,13 @@
+//! `safe-fs-tools` provides policy-bounded filesystem operations for local tooling.
+//!
+//! The crate enforces an explicit root/permission policy in-process and offers stable request/
+//! response types for operations like read/write/edit/delete/glob/grep.
+
 mod error;
 pub mod ops;
 pub mod path_utils;
+#[doc(hidden)]
+pub mod platform_open;
 pub mod policy;
 #[cfg(feature = "policy-io")]
 pub mod policy_io;
