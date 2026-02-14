@@ -19,6 +19,7 @@ use std::path::{Component, Path, PathBuf};
 use globset::GlobBuilder;
 
 #[cfg(windows)]
+#[inline]
 pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
     if !pattern.contains('\\') {
         return Cow::Borrowed(pattern);
@@ -27,6 +28,7 @@ pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
 }
 
 #[cfg(not(windows))]
+#[inline]
 pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
     Cow::Borrowed(pattern)
 }
@@ -134,11 +136,13 @@ pub(crate) fn normalize_path_lexical(path: &Path) -> PathBuf {
 }
 
 #[cfg(windows)]
+#[inline]
 fn lower(s: &OsStr) -> String {
     s.to_string_lossy().to_lowercase()
 }
 
 #[cfg(windows)]
+#[inline]
 fn prefixes_eq(a: std::path::Prefix<'_>, b: std::path::Prefix<'_>) -> bool {
     use std::path::Prefix::*;
 
@@ -160,6 +164,7 @@ fn prefixes_eq(a: std::path::Prefix<'_>, b: std::path::Prefix<'_>) -> bool {
 }
 
 #[cfg(windows)]
+#[inline]
 fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
     match (a, b) {
         (Component::Prefix(a), Component::Prefix(b)) => prefixes_eq(a.kind(), b.kind()),
@@ -174,6 +179,7 @@ fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
 /// A case-insensitive `Path::starts_with` for Windows paths.
 ///
 /// On non-Windows platforms this is equivalent to `Path::starts_with`.
+#[inline]
 pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
     #[cfg(windows)]
     {
@@ -201,6 +207,7 @@ pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
 /// A case-insensitive `Path::strip_prefix` for Windows paths.
 ///
 /// On non-Windows platforms this is equivalent to `Path::strip_prefix`.
+#[inline]
 pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     {

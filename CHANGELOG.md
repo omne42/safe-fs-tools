@@ -14,9 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI: add commands `list-dir`, `stat`, `mkdir`, `write`, `move`, `copy-file` and extend `delete` with `--recursive` and `--ignore-missing`.
 - Dev: add GitHub Actions workflows (CI/docs/release) and a shared `scripts/gate.sh`.
 - Tests: add a Windows regression test for `rename_replace` overwrite semantics.
+- Tests: add large-directory/large-file integration scenarios to exercise `list_dir` and `read` under heavier inputs.
 
 ### Changed
 
+- Internal refactor: flattened traversal walk error/symlink handling into focused helpers in `src/ops/traversal/walk.rs` to reduce nested control flow.
+- `list_dir` now uses a dedicated count-only fast path for `max_entries=0`, avoiding unnecessary entry materialization.
+- `stat` responses now include optional `accessed_ms`/`created_ms` timestamps and a `readonly` flag.
+- Path utils: mark hot short helpers with `#[inline]` for lower call overhead in tight path-processing loops.
 - Internal dedup: extracted shared no-follow read-open helpers (`platform_open`) used by `policy-io`, CLI text-input loading, and core read paths; extracted shared non-root leaf validation for `write`/`delete`.
 - Internal refactor: split `resolve` directory-walk enforcement into `src/ops/resolve/dir_ops.rs`, split traversal internals into `src/ops/traversal/{compile,walk}.rs`, and moved CLI command dispatch/validation into `cli/src/command_exec.rs`.
 - CI supply-chain hardening: all third-party GitHub Actions in `ci/docs/release` workflows are now pinned to immutable commit SHAs (with version comments for auditability).

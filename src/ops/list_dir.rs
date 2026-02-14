@@ -61,6 +61,40 @@ impl Ord for Candidate {
     }
 }
 
+fn scan_dir_entry_counts(
+    ctx: &Context,
+    dir: &std::path::Path,
+    relative_dir: &std::path::Path,
+    root_path: &std::path::Path,
+) -> Result<(usize, u64)> {
+    let mut matched_entries: usize = 0;
+    let mut skipped_io_errors: u64 = 0;
+
+    for entry in fs::read_dir(dir).map_err(|err| Error::io_path("read_dir", relative_dir, err))? {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                skipped_io_errors = skipped_io_errors.saturating_add(1);
+                continue;
+            }
+        };
+        let path = entry.path();
+        let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, root_path) {
+            Some(relative) => relative,
+            None => {
+                skipped_io_errors = skipped_io_errors.saturating_add(1);
+                continue;
+            }
+        };
+        if ctx.redactor.is_path_denied(&relative) {
+            continue;
+        }
+        matched_entries = matched_entries.saturating_add(1);
+    }
+
+    Ok((matched_entries, skipped_io_errors))
+}
+
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
     if !ctx.policy.permissions.list_dir {
         return Err(Error::NotPermitted(
@@ -85,6 +119,19 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     }
 
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
+
+    if max_entries == 0 {
+        let (matched_entries, skipped_io_errors) =
+            scan_dir_entry_counts(ctx, &dir, &relative_dir, &root_path)?;
+        return Ok(ListDirResponse {
+            path: relative_dir,
+            requested_path: Some(requested_path),
+            entries: Vec::new(),
+            truncated: matched_entries > 0,
+            skipped_io_errors,
+        });
+    }
+
     let mut heap = BinaryHeap::<Candidate>::new();
     let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;

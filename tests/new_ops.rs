@@ -70,7 +70,10 @@ fn stat_reports_file_metadata() {
 
     assert!(matches!(resp.kind, safe_fs_tools::ops::StatKind::File));
     assert_eq!(resp.size_bytes, 2);
+    assert!(!resp.readonly);
     let _ = resp.modified_ms;
+    let _ = resp.accessed_ms;
+    let _ = resp.created_ms;
 }
 
 #[test]

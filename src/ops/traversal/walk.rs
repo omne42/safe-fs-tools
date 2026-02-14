@@ -76,6 +76,136 @@ pub(super) fn walkdir_traversal_iter<'a>(
         })
 }
 
+#[derive(Debug)]
+enum WalkEntryAction {
+    Continue,
+    Break,
+    Entry(walkdir::DirEntry),
+}
+
+fn consume_walk_entry(diag: &mut TraversalDiagnostics, max_walk_entries: u64) -> bool {
+    if diag.scanned_entries >= max_walk_entries {
+        diag.mark_limit_reached(ScanLimitReason::Entries);
+        return false;
+    }
+    diag.scanned_entries = diag.scanned_entries.saturating_add(1);
+    true
+}
+
+fn classify_walkdir_entry(
+    entry: walkdir::Result<walkdir::DirEntry>,
+    root_path: &Path,
+    walk_root: &Path,
+    diag: &mut TraversalDiagnostics,
+    max_walk_entries: u64,
+) -> Result<WalkEntryAction> {
+    match entry {
+        Ok(entry) => {
+            if entry.depth() > 0 && !consume_walk_entry(diag, max_walk_entries) {
+                return Ok(WalkEntryAction::Break);
+            }
+            Ok(WalkEntryAction::Entry(entry))
+        }
+        Err(err) => {
+            if err.depth() == 0 {
+                return Err(walkdir_root_error(root_path, walk_root, err));
+            }
+            if !consume_walk_entry(diag, max_walk_entries) {
+                return Ok(WalkEntryAction::Break);
+            }
+            diag.skipped_walk_errors = diag.skipped_walk_errors.saturating_add(1);
+            Ok(WalkEntryAction::Continue)
+        }
+    }
+}
+
+fn relative_from_walk_entry(
+    entry: &walkdir::DirEntry,
+    root_path: &Path,
+    diag: &mut TraversalDiagnostics,
+) -> Option<PathBuf> {
+    let relative = crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path);
+    if relative.is_none() {
+        diag.skipped_walk_errors = diag.skipped_walk_errors.saturating_add(1);
+    }
+    relative
+}
+
+fn resolve_symlink_traversal_file(
+    ctx: &Context,
+    root_id: &str,
+    relative: PathBuf,
+    diag: &mut TraversalDiagnostics,
+) -> Result<Option<TraversalFile>> {
+    let (canonical, _canonical_relative, _requested_path) =
+        match ctx.canonical_path_in_root(root_id, &relative) {
+            Ok(ok) => ok,
+            Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => return Ok(None),
+            Err(Error::IoPath {
+                op: "canonicalize",
+                source,
+                ..
+            }) if source.kind() == std::io::ErrorKind::NotFound => {
+                diag.skipped_dangling_symlink_targets =
+                    diag.skipped_dangling_symlink_targets.saturating_add(1);
+                return Ok(None);
+            }
+            Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+                diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
+
+    let opened = super::super::io::open_regular_file_for_read(&canonical, &relative);
+    match opened {
+        Ok(ok) => {
+            let _ = ok;
+            Ok(Some(TraversalFile {
+                path: canonical,
+                relative_path: relative,
+            }))
+        }
+        Err(Error::IoPath {
+            source, op: "open", ..
+        }) if source.kind() == std::io::ErrorKind::NotFound => {
+            diag.skipped_dangling_symlink_targets =
+                diag.skipped_dangling_symlink_targets.saturating_add(1);
+            Ok(None)
+        }
+        Err(Error::InvalidPath(_)) => Ok(None),
+        Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+            diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn traversal_file_from_entry(
+    ctx: &Context,
+    root_id: &str,
+    root_path: &Path,
+    entry: &walkdir::DirEntry,
+    diag: &mut TraversalDiagnostics,
+) -> Result<Option<TraversalFile>> {
+    let Some(relative) = relative_from_walk_entry(entry, root_path, diag) else {
+        return Ok(None);
+    };
+    if ctx.redactor.is_path_denied(&relative) {
+        return Ok(None);
+    }
+
+    if entry.file_type().is_symlink() {
+        return resolve_symlink_traversal_file(ctx, root_id, relative, diag);
+    }
+
+    Ok(Some(TraversalFile {
+        path: entry.path().to_path_buf(),
+        relative_path: relative,
+    }))
+}
+
 pub(super) fn walk_traversal_files(
     ctx: &Context,
     root_id: &str,
@@ -104,29 +234,13 @@ pub(super) fn walk_traversal_files(
             break;
         }
 
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                if err.depth() == 0 {
-                    return Err(walkdir_root_error(root_path, walk_root, err));
-                }
-                if diag.scanned_entries >= max_walk_entries {
-                    diag.mark_limit_reached(ScanLimitReason::Entries);
-                    break;
-                }
-                diag.scanned_entries = diag.scanned_entries.saturating_add(1);
-                diag.skipped_walk_errors = diag.skipped_walk_errors.saturating_add(1);
-                continue;
-            }
-        };
-
-        if entry.depth() > 0 {
-            if diag.scanned_entries >= max_walk_entries {
-                diag.mark_limit_reached(ScanLimitReason::Entries);
-                break;
-            }
-            diag.scanned_entries = diag.scanned_entries.saturating_add(1);
-        }
+        let entry =
+            match classify_walkdir_entry(entry, root_path, walk_root, &mut diag, max_walk_entries)?
+            {
+                WalkEntryAction::Continue => continue,
+                WalkEntryAction::Break => break,
+                WalkEntryAction::Entry(entry) => entry,
+            };
 
         let file_type = entry.file_type();
         if !(file_type.is_file() || file_type.is_symlink()) {
@@ -138,62 +252,9 @@ pub(super) fn walk_traversal_files(
         }
         diag.scanned_files = diag.scanned_files.saturating_add(1);
 
-        let Some(relative) =
-            crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path)
+        let Some(file) = traversal_file_from_entry(ctx, root_id, root_path, &entry, &mut diag)?
         else {
-            diag.skipped_walk_errors = diag.skipped_walk_errors.saturating_add(1);
             continue;
-        };
-        if ctx.redactor.is_path_denied(&relative) {
-            continue;
-        }
-
-        let file = if file_type.is_symlink() {
-            let (canonical, _canonical_relative, _requested_path) =
-                match ctx.canonical_path_in_root(root_id, &relative) {
-                    Ok(ok) => ok,
-                    Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => continue,
-                    Err(Error::IoPath {
-                        op: "canonicalize",
-                        source,
-                        ..
-                    }) if source.kind() == std::io::ErrorKind::NotFound => {
-                        diag.skipped_dangling_symlink_targets =
-                            diag.skipped_dangling_symlink_targets.saturating_add(1);
-                        continue;
-                    }
-                    Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
-                        diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
-                        continue;
-                    }
-                    Err(err) => return Err(err),
-                };
-            let opened = match super::super::io::open_regular_file_for_read(&canonical, &relative) {
-                Ok(ok) => ok,
-                Err(Error::IoPath {
-                    source, op: "open", ..
-                }) if source.kind() == std::io::ErrorKind::NotFound => {
-                    diag.skipped_dangling_symlink_targets =
-                        diag.skipped_dangling_symlink_targets.saturating_add(1);
-                    continue;
-                }
-                Err(Error::InvalidPath(_)) => continue,
-                Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
-                    diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
-                    continue;
-                }
-                Err(err) => return Err(err),
-            };
-            let _ = opened;
-            TraversalFile {
-                path: canonical,
-                relative_path: relative,
-            }
-        } else {
-            TraversalFile {
-                path: entry.path().to_path_buf(),
-                relative_path: relative,
-            }
         };
 
         match on_file(file, &mut diag)? {

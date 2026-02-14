@@ -31,6 +31,18 @@ pub struct StatResponse {
     pub size_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessed_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_ms: Option<u64>,
+    pub readonly: bool,
+}
+
+fn system_time_to_millis(value: std::time::SystemTime) -> Option<u64> {
+    value
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
 pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
@@ -54,11 +66,10 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
 
     let size_bytes = if meta.is_file() { meta.len() } else { 0 };
 
-    let modified_ms = meta
-        .modified()
-        .ok()
-        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|value| value.as_millis().min(u128::from(u64::MAX)) as u64);
+    let modified_ms = meta.modified().ok().and_then(system_time_to_millis);
+    let accessed_ms = meta.accessed().ok().and_then(system_time_to_millis);
+    let created_ms = meta.created().ok().and_then(system_time_to_millis);
+    let readonly = meta.permissions().readonly();
 
     Ok(StatResponse {
         path: relative,
@@ -66,5 +77,8 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
         kind,
         size_bytes,
         modified_ms,
+        accessed_ms,
+        created_ms,
+        readonly,
     })
 }
