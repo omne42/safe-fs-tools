@@ -58,6 +58,15 @@ pub struct Context {
     traversal_skip_globs: Option<GlobSet>,
 }
 
+/// Builder for [`Context`].
+///
+/// Currently this is equivalent to `Context::new(policy)` and exists to provide
+/// a forward-compatible construction entrypoint.
+#[derive(Debug)]
+pub struct ContextBuilder {
+    policy: SandboxPolicy,
+}
+
 #[derive(Debug)]
 struct RootRuntime {
     canonical_path: PathBuf,

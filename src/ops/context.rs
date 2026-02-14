@@ -8,10 +8,10 @@ use crate::policy::{RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
 
 use super::{
-    Context, CopyFileRequest, CopyFileResponse, DeleteRequest, DeleteResponse, EditRequest,
-    EditResponse, ListDirRequest, ListDirResponse, MkdirRequest, MkdirResponse, MovePathRequest,
-    MovePathResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse, RootRuntime,
-    StatRequest, StatResponse, WriteFileRequest, WriteFileResponse,
+    Context, ContextBuilder, CopyFileRequest, CopyFileResponse, DeleteRequest, DeleteResponse,
+    EditRequest, EditResponse, ListDirRequest, ListDirResponse, MkdirRequest, MkdirResponse,
+    MovePathRequest, MovePathResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse,
+    RootRuntime, StatRequest, StatResponse, WriteFileRequest, WriteFileResponse,
 };
 #[cfg(feature = "glob")]
 use super::{GlobRequest, GlobResponse};
@@ -20,6 +20,14 @@ use super::{GrepRequest, GrepResponse};
 
 impl Context {
     pub fn new(policy: SandboxPolicy) -> Result<Self> {
+        Self::builder(policy).build()
+    }
+
+    pub fn builder(policy: SandboxPolicy) -> ContextBuilder {
+        ContextBuilder::new(policy)
+    }
+
+    fn build_from_policy(policy: SandboxPolicy) -> Result<Self> {
         policy.validate()?;
         let redactor = SecretRedactor::from_rules(&policy.secrets)?;
 
@@ -192,6 +200,16 @@ impl Context {
             )));
         }
         Ok(())
+    }
+}
+
+impl ContextBuilder {
+    pub fn new(policy: SandboxPolicy) -> Self {
+        Self { policy }
+    }
+
+    pub fn build(self) -> Result<Context> {
+        Context::build_from_policy(self.policy)
     }
 }
 

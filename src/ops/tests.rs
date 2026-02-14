@@ -367,6 +367,30 @@ fn requested_path_for_dot_is_not_empty() {
 }
 
 #[test]
+fn context_builder_build_matches_context_new() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+
+    let new_ctx = Context::new(policy.clone()).expect("ctx from new");
+    let builder_ctx = Context::builder(policy).build().expect("ctx from builder");
+
+    assert_eq!(
+        new_ctx.policy().roots.len(),
+        builder_ctx.policy().roots.len()
+    );
+    assert_eq!(
+        new_ctx.policy().roots[0].id,
+        builder_ctx.policy().roots[0].id
+    );
+    assert_eq!(
+        new_ctx.canonical_root("root").expect("root from new"),
+        builder_ctx
+            .canonical_root("root")
+            .expect("root from builder")
+    );
+}
+
+#[test]
 #[cfg(windows)]
 fn normalize_path_lexical_preserves_prefix_root() {
     assert_eq!(
