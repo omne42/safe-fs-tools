@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CI supply-chain hardening: all third-party GitHub Actions in `ci/docs/release` workflows are now pinned to immutable commit SHAs (with version comments for auditability).
+- Docs wording cleanup: README and DB-VFS notes now use neutral “future work” wording instead of ad-hoc TODO markers in examples/headings.
 - Review follow-up hardening: `grep` now rejects empty/whitespace-only queries, `list_dir` now honors explicit `max_entries=0`, and `edit` no longer inserts an extra blank line when replacement text is empty.
 - CI/release reproducibility and least-privilege updates: release workflow now defaults to `contents: read` (publish job keeps write), and release/docs cargo commands now run with `--locked`.
 - Hook robustness: `githooks/pre-commit` now protects released changelog sections by diffing all non-`[Unreleased]` content instead of relying on a numeric version-heading regex.

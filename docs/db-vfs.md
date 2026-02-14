@@ -122,7 +122,7 @@ Budgets to enforce:
 
 - `max_files`, `max_bytes_per_file`, `max_matches`, `max_ms`
 
-## Future work (TODO)
+## Future work
 
 1. **Streaming and quotas**:
    - Cursor/pagination for `grep` (and optionally `glob`).

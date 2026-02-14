@@ -100,7 +100,7 @@ Note: `--redact-paths` uses the configured root paths (and best-effort canonical
 safe-fs-tools --policy policy.toml read  --root workspace path/to/file.txt
 safe-fs-tools --policy policy.toml read  --root workspace path/to/file.txt --start-line 10 --end-line 20
 safe-fs-tools --policy policy.toml glob  --root workspace "**/*.rs"
-safe-fs-tools --policy policy.toml grep  --root workspace "TODO" --glob "**/*.rs"
+safe-fs-tools --policy policy.toml grep  --root workspace "needle" --glob "**/*.rs"
 safe-fs-tools --policy policy.toml edit  --root workspace path/to/file.txt --start-line 3 --end-line 4 "replacement\n"
 safe-fs-tools --policy policy.toml patch --root workspace path/to/file.txt ./change.diff
 # or from stdin:
@@ -175,7 +175,7 @@ cargo test --workspace
 ```
 
 See `docs/example-survey.md` for notes on how similar projects model filesystem tool boundaries.
-See `docs/db-vfs.md` for the DB-backed VFS (DB-VFS) decision + TODOs.
+See `docs/db-vfs.md` for the DB-backed VFS (DB-VFS) decision and future-work notes.
 
 Build/run the CLI from source:
 
