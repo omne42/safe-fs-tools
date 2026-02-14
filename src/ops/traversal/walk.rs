@@ -84,7 +84,7 @@ enum WalkEntryAction {
 }
 
 fn consume_walk_entry(diag: &mut TraversalDiagnostics, max_walk_entries: u64) -> bool {
-    if diag.scanned_entries >= max_walk_entries {
+    if diag.scanned_entries() >= max_walk_entries {
         diag.mark_limit_reached(ScanLimitReason::Entries);
         return false;
     }
@@ -221,61 +221,43 @@ pub(super) fn walk_traversal_files(
         &mut TraversalDiagnostics,
     ) -> Result<std::ops::ControlFlow<()>>,
 ) -> Result<TraversalDiagnostics> {
-    let normalized_root_path = crate::path_utils::normalize_path_lexical(root_path);
-    let normalized_walk_root = crate::path_utils::normalize_path_lexical(walk_root);
+    let normalized_root_path = crate::path_utils_internal::normalize_path_lexical(root_path);
+    let normalized_walk_root = crate::path_utils_internal::normalize_path_lexical(walk_root);
 
-    let walk_root_relative = crate::path_utils::strip_prefix_case_insensitive(
+    if crate::path_utils::strip_prefix_case_insensitive(
         &normalized_walk_root,
         &normalized_root_path,
     )
-    .ok_or_else(|| {
-        Error::InvalidPath("derived traversal root escapes selected root".to_string())
-    })?;
-    let walk_root_relative = if walk_root_relative.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        walk_root_relative
-    };
-
-    let canonical_walk_root = match ctx.canonical_path_in_root(root_id, &walk_root_relative) {
-        Ok((canonical, _relative, _requested)) => canonical,
-        Err(Error::IoPath {
-            op: "canonicalize",
-            source,
-            ..
-        }) if source.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(TraversalDiagnostics::default());
-        }
-        Err(err) => return Err(err),
-    };
+    .is_none()
+    {
+        return Err(Error::InvalidPath(
+            "derived traversal root escapes selected root".to_string(),
+        ));
+    }
 
     let mut diag = TraversalDiagnostics::default();
     let max_walk_entries = u64::try_from(ctx.policy.limits.max_walk_entries).unwrap_or(u64::MAX);
     let max_walk_files = u64::try_from(ctx.policy.limits.max_walk_files).unwrap_or(u64::MAX);
 
-    for entry in walkdir_traversal_iter(ctx, root_path, &canonical_walk_root) {
+    for entry in walkdir_traversal_iter(ctx, root_path, walk_root) {
         if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
             diag.mark_limit_reached(ScanLimitReason::Time);
             break;
         }
 
-        let entry = match classify_walkdir_entry(
-            entry,
-            root_path,
-            &canonical_walk_root,
-            &mut diag,
-            max_walk_entries,
-        )? {
-            WalkEntryAction::Continue => continue,
-            WalkEntryAction::Break => break,
-            WalkEntryAction::Entry(entry) => entry,
-        };
+        let entry =
+            match classify_walkdir_entry(entry, root_path, walk_root, &mut diag, max_walk_entries)?
+            {
+                WalkEntryAction::Continue => continue,
+                WalkEntryAction::Break => break,
+                WalkEntryAction::Entry(entry) => entry,
+            };
 
         let file_type = entry.file_type();
         if !(file_type.is_file() || file_type.is_symlink()) {
             continue;
         }
-        if diag.scanned_files >= max_walk_files {
+        if diag.scanned_files() >= max_walk_files {
             diag.mark_limit_reached(ScanLimitReason::Files);
             break;
         }

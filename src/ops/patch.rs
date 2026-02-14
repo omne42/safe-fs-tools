@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use super::Context;
 
 #[cfg(feature = "patch")]
-use diffy::{Patch, apply};
+use diffy::{Line, Patch, apply};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchRequest {
@@ -69,6 +69,18 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         &relative,
         ctx.policy.limits.max_read_bytes,
     )?;
+    let estimated_updated_len =
+        estimate_patched_content_len(content.len(), &parsed).ok_or_else(|| {
+            Error::Patch(format!("{}: patch size delta overflow", relative.display()))
+        })?;
+    if estimated_updated_len > ctx.policy.limits.max_write_bytes {
+        return Err(Error::FileTooLarge {
+            path: relative.clone(),
+            size_bytes: estimated_updated_len,
+            max_bytes: ctx.policy.limits.max_write_bytes,
+        });
+    }
+
     let updated = apply(&content, &parsed)
         .map_err(|err| Error::Patch(format!("{}: {err}", relative.display())))?;
 
@@ -99,7 +111,10 @@ fn ensure_patch_headers_match_target(
     relative: &Path,
 ) -> Result<()> {
     if patch_uses_diffy_default_filenames(patch) {
-        return Ok(());
+        return Err(Error::Patch(format!(
+            "{}: patch headers must include target path; default 'original'/'modified' headers are not allowed",
+            relative.display()
+        )));
     }
 
     let original_header = required_patch_header("original", patch.original(), relative)?;
@@ -138,10 +153,33 @@ fn patch_uses_diffy_default_filenames(patch: &Patch<'_, str>) -> bool {
 }
 
 #[cfg(feature = "patch")]
+fn estimate_patched_content_len(content_len: usize, patch: &Patch<'_, str>) -> Option<u64> {
+    let mut delta: i128 = 0;
+    for hunk in patch.hunks() {
+        for line in hunk.lines() {
+            let signed_len = match line {
+                Line::Context(_) => 0,
+                Line::Insert(text) => i128::try_from(text.len()).ok()?,
+                Line::Delete(text) => -i128::try_from(text.len()).ok()?,
+            };
+            delta = delta.checked_add(signed_len)?;
+        }
+    }
+
+    let content_len = i128::try_from(content_len).ok()?;
+    let estimated = content_len.checked_add(delta)?;
+    if estimated < 0 {
+        return None;
+    }
+    u64::try_from(estimated).ok()
+}
+
+#[cfg(feature = "patch")]
 fn patch_header_matches_path(header: &str, requested_path: &Path) -> bool {
-    let normalized_header =
-        crate::path_utils::normalize_path_lexical(Path::new(strip_common_patch_prefix(header)));
-    let normalized_requested = crate::path_utils::normalize_path_lexical(requested_path);
+    let normalized_header = crate::path_utils_internal::normalize_path_lexical(Path::new(
+        strip_common_patch_prefix(header),
+    ));
+    let normalized_requested = crate::path_utils_internal::normalize_path_lexical(requested_path);
     normalized_paths_match(&normalized_header, &normalized_requested)
 }
 
@@ -190,6 +228,68 @@ mod tests {
             "a/./nested/file.txt",
             Path::new("nested/file.txt")
         ));
+    }
+
+    #[test]
+    fn diffy_default_headers_are_rejected() {
+        let patch = Patch::from_str(
+            "\
+--- original
++++ modified
+@@ -1 +1 @@
+-one
++ONE
+",
+        )
+        .expect("parse patch");
+
+        let err =
+            ensure_patch_headers_match_target(&patch, Path::new("file.txt"), Path::new("file.txt"))
+                .expect_err("default headers should be rejected");
+        match err {
+            Error::Patch(msg) => assert!(
+                msg.contains("default 'original'/'modified' headers are not allowed"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn path_bound_headers_with_common_prefixes_are_accepted() {
+        let patch = Patch::from_str(
+            "\
+--- a/./nested/file.txt
++++ b/nested/file.txt
+@@ -1 +1 @@
+-one
++ONE
+",
+        )
+        .expect("parse patch");
+
+        ensure_patch_headers_match_target(
+            &patch,
+            Path::new("nested/file.txt"),
+            Path::new("nested/file.txt"),
+        )
+        .expect("headers should match target path");
+    }
+
+    #[test]
+    fn estimate_patched_content_len_tracks_insert_delete_delta() {
+        let patch = Patch::from_str(
+            "\
+--- a/file.txt
++++ b/file.txt
+@@ -1 +1,2 @@
+ one
++two
+",
+        )
+        .expect("parse patch");
+
+        assert_eq!(estimate_patched_content_len(4, &patch), Some(8));
     }
 
     #[cfg(windows)]

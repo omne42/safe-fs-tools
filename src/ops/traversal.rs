@@ -57,11 +57,9 @@ pub(super) fn walk_traversal_files(
     max_walk: Option<std::time::Duration>,
     on_file: impl FnMut(TraversalFile, &mut TraversalDiagnostics) -> Result<std::ops::ControlFlow<()>>,
 ) -> Result<TraversalDiagnostics> {
-    let mut diag = walk::walk_traversal_files(
+    walk::walk_traversal_files(
         ctx, root_id, root_path, walk_root, started, max_walk, on_file,
-    )?;
-    diag.normalize_limit_state();
-    Ok(diag)
+    )
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -111,18 +109,50 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
 #[cfg(any(feature = "glob", feature = "grep"))]
 #[derive(Debug, Default, Clone)]
 pub(super) struct TraversalDiagnostics {
-    pub(super) truncated: bool,
-    pub(super) scanned_files: u64,
-    pub(super) scanned_entries: u64,
-    pub(super) scan_limit_reached: bool,
-    pub(super) scan_limit_reason: Option<ScanLimitReason>,
-    pub(super) skipped_walk_errors: u64,
-    pub(super) skipped_io_errors: u64,
-    pub(super) skipped_dangling_symlink_targets: u64,
+    truncated: bool,
+    scanned_files: u64,
+    scanned_entries: u64,
+    scan_limit_reached: bool,
+    scan_limit_reason: Option<ScanLimitReason>,
+    skipped_walk_errors: u64,
+    skipped_io_errors: u64,
+    skipped_dangling_symlink_targets: u64,
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 impl TraversalDiagnostics {
+    pub(super) fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    pub(super) fn scanned_files(&self) -> u64 {
+        self.scanned_files
+    }
+
+    pub(super) fn scanned_entries(&self) -> u64 {
+        self.scanned_entries
+    }
+
+    pub(super) fn scan_limit_reached(&self) -> bool {
+        self.scan_limit_reached
+    }
+
+    pub(super) fn scan_limit_reason(&self) -> Option<ScanLimitReason> {
+        self.scan_limit_reason
+    }
+
+    pub(super) fn skipped_walk_errors(&self) -> u64 {
+        self.skipped_walk_errors
+    }
+
+    pub(super) fn skipped_io_errors(&self) -> u64 {
+        self.skipped_io_errors
+    }
+
+    pub(super) fn skipped_dangling_symlink_targets(&self) -> u64 {
+        self.skipped_dangling_symlink_targets
+    }
+
     pub(super) fn mark_limit_reached(&mut self, reason: ScanLimitReason) {
         if self.scan_limit_reason.is_none() {
             self.scan_limit_reason = Some(reason);
@@ -151,7 +181,7 @@ impl TraversalDiagnostics {
             self.skipped_dangling_symlink_targets.saturating_add(1);
     }
 
-    pub(super) fn normalize_limit_state(&mut self) {
+    fn normalize_limit_state(&mut self) {
         self.scan_limit_reached = self.scan_limit_reason.is_some();
         if self.scan_limit_reached {
             self.truncated = true;

@@ -34,14 +34,16 @@ pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
 }
 
 pub(crate) fn normalize_glob_pattern_for_matching(pattern: &str) -> String {
-    let mut normalized = normalize_glob_pattern(pattern).into_owned();
-    while normalized.starts_with("./") {
-        normalized.drain(..2);
+    let normalized = normalize_glob_pattern(pattern);
+    let mut trimmed = normalized.as_ref();
+    while let Some(rest) = trimmed.strip_prefix("./") {
+        trimmed = rest;
     }
-    if normalized.is_empty() {
-        normalized.push('.');
+    if trimmed.is_empty() {
+        ".".to_string()
+    } else {
+        trimmed.to_string()
     }
-    normalized
 }
 
 pub(crate) fn validate_root_relative_glob_pattern(
@@ -221,6 +223,11 @@ fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
     }
 }
 
+#[inline]
+fn is_lexically_normalized_for_boundary(path: &Path) -> bool {
+    path.as_os_str().is_empty() || normalize_path_lexical(path) == path
+}
+
 /// A case-insensitive `Path::starts_with` for Windows paths.
 ///
 /// This function is purely lexical and does not resolve `.`/`..` or symlinks.
@@ -229,6 +236,15 @@ fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
 /// On non-Windows platforms this is equivalent to `Path::starts_with`.
 #[inline]
 pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
+    debug_assert!(
+        is_lexically_normalized_for_boundary(path),
+        "starts_with_case_insensitive requires normalized `path` input, got: {path:?}"
+    );
+    debug_assert!(
+        is_lexically_normalized_for_boundary(prefix),
+        "starts_with_case_insensitive requires normalized `prefix` input, got: {prefix:?}"
+    );
+
     #[cfg(windows)]
     {
         use std::path::Component;
@@ -260,6 +276,15 @@ pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
 /// On non-Windows platforms this is equivalent to `Path::strip_prefix`.
 #[inline]
 pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
+    debug_assert!(
+        is_lexically_normalized_for_boundary(path),
+        "strip_prefix_case_insensitive requires normalized `path` input, got: {path:?}"
+    );
+    debug_assert!(
+        is_lexically_normalized_for_boundary(prefix),
+        "strip_prefix_case_insensitive requires normalized `prefix` input, got: {prefix:?}"
+    );
+
     #[cfg(windows)]
     {
         let mut path_components = path.components();
@@ -328,6 +353,28 @@ mod tests {
             Path::new("a/b"),
             Path::new("a/b/c")
         ));
+    }
+
+    #[test]
+    fn normalize_glob_pattern_for_matching_collapses_leading_dot_segments() {
+        assert_eq!(normalize_glob_pattern_for_matching("././a/b"), "a/b");
+        assert_eq!(normalize_glob_pattern_for_matching("././"), ".");
+        let long = format!("{}file", "./".repeat(1024));
+        assert_eq!(normalize_glob_pattern_for_matching(&long), "file");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "requires normalized `path` input")]
+    fn starts_with_case_insensitive_panics_on_unnormalized_path_in_debug() {
+        let _ = starts_with_case_insensitive(Path::new("a/./b"), Path::new("a"));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "requires normalized `prefix` input")]
+    fn strip_prefix_case_insensitive_panics_on_unnormalized_prefix_in_debug() {
+        let _ = strip_prefix_case_insensitive(Path::new("a/b"), Path::new("a/./b"));
     }
 
     #[test]

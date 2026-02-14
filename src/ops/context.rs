@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,8 +10,8 @@ use crate::redaction::SecretRedactor;
 use super::{
     Context, CopyFileRequest, CopyFileResponse, DeleteRequest, DeleteResponse, EditRequest,
     EditResponse, ListDirRequest, ListDirResponse, MkdirRequest, MkdirResponse, MovePathRequest,
-    MovePathResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse, StatRequest,
-    StatResponse, WriteFileRequest, WriteFileResponse,
+    MovePathResponse, PatchRequest, PatchResponse, ReadRequest, ReadResponse, RootRuntime,
+    StatRequest, StatResponse, WriteFileRequest, WriteFileResponse,
 };
 #[cfg(feature = "glob")]
 use super::{GlobRequest, GlobResponse};
@@ -22,7 +23,7 @@ impl Context {
         policy.validate()?;
         let redactor = SecretRedactor::from_rules(&policy.secrets)?;
 
-        let mut canonical_roots = HashMap::<String, PathBuf>::new();
+        let mut roots = HashMap::<String, RootRuntime>::new();
         for root in &policy.roots {
             let canonical = root.path.canonicalize().map_err(|err| {
                 Error::InvalidPolicy(format!(
@@ -45,12 +46,21 @@ impl Context {
                     canonical.display()
                 )));
             }
-            let previous = canonical_roots.insert(root.id.clone(), canonical);
-            if previous.is_some() {
-                return Err(Error::InvalidPolicy(format!(
-                    "duplicate root.id: {:?}",
-                    root.id
-                )));
+            match roots.entry(root.id.clone()) {
+                Entry::Vacant(slot) => {
+                    slot.insert(RootRuntime {
+                        canonical_path: canonical,
+                        mode: root.mode,
+                    });
+                }
+                Entry::Occupied(_) => {
+                    // `SandboxPolicy::validate` is the single source of truth for duplicate ids.
+                    debug_assert!(
+                        false,
+                        "duplicate root.id was not rejected by policy.validate: {:?}",
+                        root.id
+                    );
+                }
             }
         }
 
@@ -61,7 +71,7 @@ impl Context {
         Ok(Self {
             policy,
             redactor,
-            canonical_roots,
+            roots,
             #[cfg(any(feature = "glob", feature = "grep"))]
             traversal_skip_globs,
         })
@@ -127,11 +137,15 @@ impl Context {
         super::copy_file(self, request)
     }
 
-    pub(super) fn canonical_root(&self, root_id: &str) -> Result<&Path> {
-        self.canonical_roots
+    fn root_runtime(&self, root_id: &str) -> Result<&RootRuntime> {
+        self.roots
             .get(root_id)
-            .map(PathBuf::as_path)
             .ok_or_else(|| Error::RootNotFound(root_id.to_string()))
+    }
+
+    pub(super) fn canonical_root(&self, root_id: &str) -> Result<&Path> {
+        self.root_runtime(root_id)
+            .map(|root| root.canonical_path.as_path())
     }
 
     #[cfg(any(feature = "glob", feature = "grep"))]
@@ -149,7 +163,7 @@ impl Context {
     }
 
     pub(super) fn ensure_can_write(&self, root_id: &str, op: &str) -> Result<()> {
-        let root = self.policy.root(root_id)?;
+        let root = self.root_runtime(root_id)?;
         if !matches!(root.mode, RootMode::ReadWrite) {
             return Err(Error::NotPermitted(format!(
                 "{op} is not allowed: root {root_id} is read_only"

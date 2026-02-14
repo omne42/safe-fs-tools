@@ -6,7 +6,17 @@ use std::path::Path;
 /// `InvalidPath("... is a symlink")` style policy error.
 #[cfg(unix)]
 pub fn is_symlink_open_error(err: &io::Error) -> bool {
-    err.raw_os_error() == Some(libc::ELOOP)
+    match err.raw_os_error() {
+        Some(libc::ELOOP) => true,
+        #[cfg(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        ))]
+        Some(libc::EMLINK) => true,
+        _ => false,
+    }
 }
 
 /// Returns `true` when an open failure should be mapped to an
@@ -90,6 +100,32 @@ mod tests {
 
         let err = open_readonly_nofollow(&link).expect_err("symlink open should fail");
         assert!(is_symlink_open_error(&err));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_eloop_errno_is_classified_as_symlink_error() {
+        let err = io::Error::from_raw_os_error(libc::ELOOP);
+        assert!(is_symlink_open_error(&err));
+    }
+
+    #[cfg(any(
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
+    #[test]
+    fn bsd_emlink_errno_is_classified_as_symlink_error() {
+        let err = io::Error::from_raw_os_error(libc::EMLINK);
+        assert!(is_symlink_open_error(&err));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_non_symlink_errno_is_not_classified_as_symlink_error() {
+        let err = io::Error::from_raw_os_error(libc::ENOENT);
+        assert!(!is_symlink_open_error(&err));
     }
 
     #[cfg(windows)]

@@ -7,6 +7,11 @@ use regex::{NoExpand, Regex};
 use crate::error::{Error, Result};
 use crate::policy::SecretRules;
 
+const MAX_REDACT_REGEXES: usize = 128;
+const MAX_REPLACEMENT_BYTES: usize = 1024;
+const MAX_REDACTED_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+const REDACTION_OUTPUT_LIMIT_MARKER: &str = "[REDACTION_OUTPUT_LIMIT_EXCEEDED]";
+
 #[derive(Debug)]
 pub struct SecretRedactor {
     deny: GlobSet,
@@ -16,6 +21,19 @@ pub struct SecretRedactor {
 
 impl SecretRedactor {
     pub fn from_rules(rules: &SecretRules) -> Result<Self> {
+        if rules.redact_regexes.len() > MAX_REDACT_REGEXES {
+            return Err(Error::InvalidPolicy(format!(
+                "invalid secrets.redact_regexes: too many patterns ({} > {MAX_REDACT_REGEXES})",
+                rules.redact_regexes.len()
+            )));
+        }
+        if rules.replacement.len() > MAX_REPLACEMENT_BYTES {
+            return Err(Error::InvalidPolicy(format!(
+                "invalid secrets.replacement: too long ({} bytes > {MAX_REPLACEMENT_BYTES} bytes)",
+                rules.replacement.len()
+            )));
+        }
+
         let mut deny_builder = GlobSetBuilder::new();
         for pattern in &rules.deny_globs {
             if pattern.trim().is_empty() {
@@ -23,12 +41,13 @@ impl SecretRedactor {
                     "invalid secrets.deny_globs glob {pattern:?}: glob pattern must not be empty"
                 )));
             }
-            let normalized = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
-            crate::path_utils::validate_root_relative_glob_pattern(&normalized).map_err(|msg| {
-                Error::InvalidPolicy(format!("invalid deny glob {pattern:?}: {msg}"))
-            })?;
-            let glob =
-                crate::path_utils::build_glob_from_normalized(&normalized).map_err(|err| {
+            let normalized =
+                crate::path_utils_internal::normalize_glob_pattern_for_matching(pattern);
+            crate::path_utils_internal::validate_root_relative_glob_pattern(&normalized).map_err(
+                |msg| Error::InvalidPolicy(format!("invalid deny glob {pattern:?}: {msg}")),
+            )?;
+            let glob = crate::path_utils_internal::build_glob_from_normalized(&normalized)
+                .map_err(|err| {
                     Error::InvalidPolicy(format!("invalid deny glob {pattern:?}: {err}"))
                 })?;
             deny_builder.add(glob);
@@ -80,14 +99,52 @@ impl SecretRedactor {
     pub fn redact_text_cow<'a>(&self, input: &'a str) -> Cow<'a, str> {
         let mut current: Cow<'_, str> = Cow::Borrowed(input);
         for regex in &self.redact {
+            let (matched, projected_len) =
+                match projected_redacted_len(current.as_ref(), regex, self.replacement.len()) {
+                    Some(value) => value,
+                    None => return Cow::Owned(REDACTION_OUTPUT_LIMIT_MARKER.to_string()),
+                };
+            if !matched {
+                continue;
+            }
+            if projected_len > MAX_REDACTED_OUTPUT_BYTES {
+                return Cow::Owned(REDACTION_OUTPUT_LIMIT_MARKER.to_string());
+            }
             let replaced = regex.replace_all(current.as_ref(), NoExpand(&self.replacement));
             if matches!(replaced, Cow::Borrowed(_)) {
                 continue;
             }
-            current = Cow::Owned(replaced.into_owned());
+            let owned = replaced.into_owned();
+            if owned.len() > MAX_REDACTED_OUTPUT_BYTES {
+                return Cow::Owned(REDACTION_OUTPUT_LIMIT_MARKER.to_string());
+            }
+            current = Cow::Owned(owned);
         }
         current
     }
+}
+
+fn projected_redacted_len(
+    input: &str,
+    regex: &Regex,
+    replacement_len: usize,
+) -> Option<(bool, usize)> {
+    let mut matched = false;
+    let mut match_count = 0usize;
+    let mut matched_bytes = 0usize;
+    for found in regex.find_iter(input) {
+        matched = true;
+        match_count = match_count.checked_add(1)?;
+        matched_bytes = matched_bytes.checked_add(found.len())?;
+    }
+    if !matched {
+        return Some((false, input.len()));
+    }
+
+    let unmatched = input.len().checked_sub(matched_bytes)?;
+    let replacement_bytes = replacement_len.checked_mul(match_count)?;
+    let projected = unmatched.checked_add(replacement_bytes)?;
+    Some((true, projected))
 }
 
 fn is_root_relative(path: &Path) -> bool {
@@ -119,13 +176,15 @@ fn normalize_relative_path(path: &Path) -> Cow<'_, Path> {
     if !needs_normalization {
         return Cow::Borrowed(path);
     }
-    Cow::Owned(crate::path_utils::normalize_path_lexical(path))
+    Cow::Owned(crate::path_utils_internal::normalize_path_lexical(path))
 }
 
 #[cfg(windows)]
 fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
     debug_assert!(is_root_relative(path));
     let path = normalize_relative_path(path);
+    // Fail closed on non-Unicode Windows paths: lossy conversion would change bytes and
+    // could cause silent allow-on-mismatch behavior for glob checks.
     let raw = path.to_string_lossy();
     if matches!(raw, Cow::Owned(_)) {
         return None;
@@ -270,5 +329,71 @@ mod tests {
 
         let redacted = redactor.redact_text_cow("abc");
         assert_eq!(redacted.as_ref(), "Xc");
+    }
+
+    #[test]
+    fn too_many_redact_regexes_are_rejected() {
+        let err = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: (0..=MAX_REDACT_REGEXES)
+                .map(|idx| format!("token{idx}"))
+                .collect(),
+            replacement: "***".to_string(),
+        })
+        .expect_err("too many redact regexes should be rejected");
+
+        match err {
+            Error::InvalidPolicy(msg) => assert!(msg.contains("too many patterns")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn oversized_replacement_is_rejected() {
+        let err = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: vec![".".to_string()],
+            replacement: "X".repeat(MAX_REPLACEMENT_BYTES + 1),
+        })
+        .expect_err("oversized replacement should be rejected");
+
+        match err {
+            Error::InvalidPolicy(msg) => assert!(msg.contains("secrets.replacement")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn redaction_output_is_capped() {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: vec![".".to_string()],
+            replacement: "X".repeat(MAX_REPLACEMENT_BYTES),
+        })
+        .expect("redactor");
+
+        let input = "a".repeat((MAX_REDACTED_OUTPUT_BYTES / MAX_REPLACEMENT_BYTES) + 1);
+        let redacted = redactor.redact_text_cow(&input);
+        assert_eq!(redacted.as_ref(), REDACTION_OUTPUT_LIMIT_MARKER);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn non_unicode_windows_path_is_denied_fail_closed() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+        use std::path::PathBuf;
+
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: Vec::new(),
+            replacement: "***".to_string(),
+        })
+        .expect("redactor");
+
+        let path = PathBuf::from(OsString::from_wide(&[0xD800, b'a' as u16]));
+        assert!(is_root_relative(&path));
+        assert!(normalize_path_for_glob(&path).is_none());
+        assert!(redactor.is_path_denied(&path));
     }
 }

@@ -130,13 +130,13 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         }
     }
 
+    ensure_destination_parent_identity_verification_supported()?;
     let destination_parent_meta = capture_destination_parent_identity(
         &destination.parent,
         &destination.to_effective_relative,
     )?;
     let (tmp_path, bytes) = copy_to_temp(
         &mut input,
-        &source_meta,
         &destination.parent,
         &paths.from_relative,
         &destination.to_effective_relative,
@@ -149,6 +149,7 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         &destination_parent_meta,
         &destination.to_effective_relative,
         request.overwrite,
+        &source_meta,
     )?;
 
     Ok(CopyFileResponse {
@@ -303,7 +304,6 @@ fn prepare_destination(
 
 fn copy_to_temp(
     input: &mut fs::File,
-    source_meta: &fs::Metadata,
     destination_parent: &Path,
     from_relative: &Path,
     to_effective_relative: &Path,
@@ -332,8 +332,6 @@ fn copy_to_temp(
         .map_err(|err| Error::io_path("sync", to_effective_relative, err))?;
 
     let tmp_path = tmp_file.into_temp_path();
-    fs::set_permissions(&tmp_path, source_meta.permissions())
-        .map_err(|err| Error::io_path("set_permissions", to_effective_relative, err))?;
     Ok((tmp_path, bytes))
 }
 
@@ -344,6 +342,7 @@ fn commit_replace(
     expected_parent_meta: &fs::Metadata,
     to_effective_relative: &Path,
     overwrite: bool,
+    source_meta: &fs::Metadata,
 ) -> Result<()> {
     verify_destination_parent_identity(
         destination_parent,
@@ -354,9 +353,29 @@ fn commit_replace(
         if !overwrite && err.kind() == std::io::ErrorKind::AlreadyExists {
             return Error::InvalidPath("destination exists".to_string());
         }
+        if !overwrite && err.kind() == std::io::ErrorKind::Unsupported {
+            return Error::InvalidPath(
+                "overwrite=false copy is unsupported on this platform".to_string(),
+            );
+        }
         Error::io_path("rename", to_effective_relative, err)
     })?;
+    fs::set_permissions(destination, source_meta.permissions())
+        .map_err(|err| Error::io_path("set_permissions", to_effective_relative, err))?;
     Ok(())
+}
+
+#[cfg(any(unix, windows))]
+fn ensure_destination_parent_identity_verification_supported() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn ensure_destination_parent_identity_verification_supported() -> Result<()> {
+    Err(Error::InvalidPath(
+        "copy_file is unsupported on this platform: cannot verify destination parent identity"
+            .to_string(),
+    ))
 }
 
 fn capture_destination_parent_identity(
@@ -373,6 +392,7 @@ fn capture_destination_parent_identity(
     Ok(meta)
 }
 
+#[cfg(any(unix, windows))]
 fn verify_destination_parent_identity(
     destination_parent: &Path,
     expected_parent_meta: &fs::Metadata,
@@ -399,11 +419,15 @@ fn destination_parent_identity_matches(
 }
 
 #[cfg(not(any(unix, windows)))]
-fn destination_parent_identity_matches(
+fn verify_destination_parent_identity(
+    _destination_parent: &Path,
     _expected_parent_meta: &fs::Metadata,
-    _actual_parent_meta: &fs::Metadata,
-) -> bool {
-    true
+    _to_effective_relative: &Path,
+) -> Result<()> {
+    Err(Error::InvalidPath(
+        "copy_file is unsupported on this platform: cannot verify destination parent identity"
+            .to_string(),
+    ))
 }
 
 fn noop_response(

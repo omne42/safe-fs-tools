@@ -10,7 +10,7 @@ fn compile_validated_glob(
 ) -> Result<globset::Glob> {
     let normalized = normalize_and_validate_root_relative_glob_pattern(pattern)
         .map_err(|msg| invalid_err(msg))?;
-    crate::path_utils::build_glob_from_normalized(&normalized)
+    crate::path_utils_internal::build_glob_from_normalized(&normalized)
         .map_err(|err| invalid_err(err.to_string()))
 }
 
@@ -58,8 +58,8 @@ fn normalize_and_validate_root_relative_glob_pattern(
         return Err("glob pattern must not be empty".to_string());
     }
 
-    let normalized = crate::path_utils::normalize_glob_pattern_for_matching(pattern);
-    crate::path_utils::validate_root_relative_glob_pattern(&normalized)
+    let normalized = crate::path_utils_internal::normalize_glob_pattern_for_matching(pattern);
+    crate::path_utils_internal::validate_root_relative_glob_pattern(&normalized)
         .map_err(|msg| msg.to_string())?;
     Ok(normalized)
 }
@@ -75,7 +75,7 @@ fn collect_literal_traversal_prefix(pattern: &str) -> Option<PathBuf> {
             return None;
         }
 
-        if segment_contains_glob_meta(segment) {
+        if !segment_is_strict_literal(segment) {
             break;
         }
         out.push(segment);
@@ -88,12 +88,19 @@ fn collect_literal_traversal_prefix(pattern: &str) -> Option<PathBuf> {
     }
 }
 
-fn segment_contains_glob_meta(segment: &str) -> bool {
-    // Keep this in sync with the glob syntax we treat as non-literal when deriving
-    // a conservative traversal prefix.
-    segment
-        .chars()
-        .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
+fn segment_is_strict_literal(segment: &str) -> bool {
+    // Be intentionally conservative: only treat segments as literal when every byte
+    // is known to be non-special in glob syntax. This avoids syntax drift turning a
+    // meta segment into an accidentally narrowed traversal prefix.
+    !segment.is_empty() && segment.bytes().all(is_always_literal_glob_byte)
+}
+
+#[inline]
+const fn is_always_literal_glob_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'_' | b'-'
+    )
 }
 
 #[cfg(windows)]

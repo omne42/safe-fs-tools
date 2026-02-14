@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::ffi::CString;
 use std::io::{self, ErrorKind};
 use std::os::unix::ffi::OsStrExt;
@@ -10,7 +12,7 @@ pub fn create_fifo(path: &Path) {
     });
 }
 
-pub fn create_fifo_result(path: &Path) -> io::Result<()> {
+fn create_fifo_result(path: &Path) -> io::Result<()> {
     let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
         io::Error::new(
             ErrorKind::InvalidInput,
@@ -18,7 +20,7 @@ pub fn create_fifo_result(path: &Path) -> io::Result<()> {
         )
     })?;
 
-    loop {
+    'mkfifo: loop {
         // Safety: `CString::new` guarantees a NUL-terminated C string with no interior NUL bytes,
         // and the pointer remains valid for the duration of each call.
         let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
@@ -30,14 +32,34 @@ pub fn create_fifo_result(path: &Path) -> io::Result<()> {
         match err.raw_os_error() {
             Some(libc::EINTR) => continue,
             Some(libc::EEXIST) => {
-                let metadata = std::fs::symlink_metadata(path)?;
-                if metadata.file_type().is_fifo() {
-                    return Ok(());
+                let mut metadata_not_found_retries = 0;
+                loop {
+                    match std::fs::symlink_metadata(path) {
+                        Ok(metadata) => {
+                            if metadata.file_type().is_fifo() {
+                                return Ok(());
+                            }
+                            return Err(io::Error::new(
+                                ErrorKind::AlreadyExists,
+                                format!(
+                                    "mkfifo target exists but is not a fifo: {}",
+                                    path.display()
+                                ),
+                            ));
+                        }
+                        Err(meta_err)
+                            if meta_err.kind() == ErrorKind::NotFound
+                                && metadata_not_found_retries < 2 =>
+                        {
+                            metadata_not_found_retries += 1;
+                            continue;
+                        }
+                        Err(meta_err) if meta_err.kind() == ErrorKind::NotFound => {
+                            continue 'mkfifo;
+                        }
+                        Err(meta_err) => return Err(meta_err),
+                    }
                 }
-                return Err(io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    format!("mkfifo target exists but is not a fifo: {}", path.display()),
-                ));
             }
             _ => return Err(err),
         }

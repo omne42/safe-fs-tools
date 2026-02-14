@@ -169,10 +169,26 @@ fn main() -> ExitCode {
 }
 
 fn run() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => return handle_parse_error(err),
+    };
     let error_format = cli.error_format;
     let redact_paths = cli.redact_paths || cli.redact_paths_strict;
     let strict_redact_paths = cli.redact_paths_strict;
+    if let Err(err) = validate_error_render_mode(error_format, redact_paths) {
+        emit_error(
+            &err,
+            ErrorRenderCfg {
+                format: error_format,
+                pretty: cli.pretty,
+                redact_paths,
+                strict_redact_paths,
+                redaction: None,
+            },
+        );
+        return ExitCode::FAILURE;
+    }
     let mut redaction = None::<PathRedaction>;
 
     let result = match safe_fs_tools::policy_io::load_policy(&cli.policy) {
@@ -184,7 +200,7 @@ fn run() -> ExitCode {
     };
 
     if let Err(err) = result {
-        let rendered = render_error(
+        emit_error(
             &err,
             ErrorRenderCfg {
                 format: error_format,
@@ -194,13 +210,129 @@ fn run() -> ExitCode {
                 redaction: redaction.as_ref(),
             },
         );
-        if write_stderr_line(&rendered).is_err() {
-            write_stderr_fallback();
-        }
         return ExitCode::FAILURE;
     }
 
     ExitCode::SUCCESS
+}
+
+fn handle_parse_error(err: clap::Error) -> ExitCode {
+    use clap::error::ErrorKind;
+
+    if matches!(
+        err.kind(),
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+    ) {
+        return print_clap_message(err);
+    }
+
+    let cfg = parse_error_render_cfg_from_env();
+    let cli_err = match validate_error_render_mode(cfg.format, cfg.redact_paths) {
+        Ok(()) => clap_parse_error(err),
+        Err(render_mode_err) => render_mode_err,
+    };
+    emit_error(&cli_err, cfg);
+    ExitCode::FAILURE
+}
+
+fn print_clap_message(err: clap::Error) -> ExitCode {
+    let message = err.to_string();
+    let trimmed = message.trim_end_matches('\n');
+    let write_result = if err.use_stderr() {
+        write_stderr_line(trimmed)
+    } else {
+        write_stdout_line(trimmed)
+    };
+    if write_result.is_err() {
+        write_stderr_fallback();
+    }
+    if err.exit_code() == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn parse_error_render_cfg_from_env() -> ErrorRenderCfg<'static> {
+    let mut format = ErrorFormat::Text;
+    let mut pretty = false;
+    let mut redact_paths = false;
+    let mut strict_redact_paths = false;
+
+    let args = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--pretty" => {
+                pretty = true;
+            }
+            "--redact-paths" => {
+                redact_paths = true;
+            }
+            "--redact-paths-strict" => {
+                redact_paths = true;
+                strict_redact_paths = true;
+            }
+            "--error-format" => {
+                if let Some(value) = args.get(idx + 1).and_then(|arg| parse_error_format(arg)) {
+                    format = value;
+                }
+                idx += 1;
+            }
+            other => {
+                if let Some(value) = other.strip_prefix("--error-format=") {
+                    if let Some(parsed) = parse_error_format(value) {
+                        format = parsed;
+                    }
+                }
+            }
+        }
+        idx += 1;
+    }
+
+    ErrorRenderCfg {
+        format,
+        pretty,
+        redact_paths,
+        strict_redact_paths,
+        redaction: None,
+    }
+}
+
+fn parse_error_format(raw: &str) -> Option<ErrorFormat> {
+    if raw.eq_ignore_ascii_case("text") {
+        Some(ErrorFormat::Text)
+    } else if raw.eq_ignore_ascii_case("json") {
+        Some(ErrorFormat::Json)
+    } else {
+        None
+    }
+}
+
+fn clap_parse_error(err: clap::Error) -> CliError {
+    CliError::Tool(safe_fs_tools::Error::InvalidPath(err.to_string()))
+}
+
+fn validate_error_render_mode(
+    error_format: ErrorFormat,
+    redact_paths: bool,
+) -> Result<(), CliError> {
+    if redact_paths && !matches!(error_format, ErrorFormat::Json) {
+        return Err(CliError::Tool(safe_fs_tools::Error::InvalidPath(
+            "--redact-paths/--redact-paths-strict require --error-format json".to_string(),
+        )));
+    }
+    Ok(())
+}
+
+fn emit_error(err: &CliError, cfg: ErrorRenderCfg<'_>) {
+    let rendered = render_error(err, cfg);
+    if write_stderr_line(&rendered).is_err() {
+        write_stderr_fallback();
+    }
 }
 
 fn build_redaction(

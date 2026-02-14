@@ -82,6 +82,55 @@ fn load_text_limited_rejects_symlink_paths() {
 }
 
 #[test]
+#[cfg(windows)]
+fn load_text_limited_rejects_symlink_paths() {
+    use std::io::ErrorKind;
+    use std::os::windows::fs::symlink_file;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real.diff");
+    let link = dir.path().join("link.diff");
+    std::fs::write(&real, "ok\n").expect("write");
+
+    match symlink_file(&real, &link) {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+            let ci = std::env::var("CI").unwrap_or_default();
+            if ci.eq_ignore_ascii_case("true") || ci == "1" {
+                panic!(
+                    "symlink test requires Windows symlink privileges in CI (set Developer Mode or grant SeCreateSymbolicLinkPrivilege): {err}"
+                );
+            }
+            eprintln!("skipping symlink test (permission denied): {err}");
+            return;
+        }
+        Err(err) => panic!("symlink_file failed: {err}"),
+    }
+
+    let err = super::input::load_text_limited(&link, 16).expect_err("should reject");
+    match &err {
+        safe_fs_tools::Error::InvalidPath(message) => {
+            assert!(message.contains("symlink"), "unexpected message: {message}");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let details = tool_error_details_with(&err, None, true, true);
+    assert_eq!(
+        details.get("kind").and_then(|v| v.as_str()),
+        Some("invalid_path")
+    );
+    assert_eq!(
+        details.get("message").and_then(|v| v.as_str()),
+        Some("invalid path")
+    );
+    assert!(
+        !json_contains_string(&details, &dir.path().display().to_string()),
+        "expected redacted details to not contain absolute path: {details}"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn load_text_limited_rejects_fifo_special_files() {
     use std::sync::mpsc;
@@ -433,6 +482,44 @@ fn tool_error_details_includes_io_path_details_when_not_redacting() {
 }
 
 #[test]
+fn tool_error_details_strict_redacts_io_path_details() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
+        "root",
+        dir.path(),
+        safe_fs_tools::policy::RootMode::ReadOnly,
+    );
+    let redaction = PathRedaction::from_policy(&policy);
+
+    let err = safe_fs_tools::Error::IoPath {
+        op: "open",
+        path: dir.path().join("file.txt"),
+        source: std::io::Error::from_raw_os_error(2),
+    };
+    let details = tool_error_details_with(&err, Some(&redaction), true, true);
+    assert_eq!(
+        details.get("kind").and_then(|v| v.as_str()),
+        Some("io_path")
+    );
+    assert_eq!(details.get("op").and_then(|v| v.as_str()), Some("open"));
+    assert_eq!(
+        details.get("path").and_then(|v| v.as_str()),
+        Some("<redacted>")
+    );
+    assert!(
+        details.get("message").is_none(),
+        "expected message omitted in redacted mode"
+    );
+    assert!(
+        !json_contains_string(&details, &dir.path().display().to_string()),
+        "expected strict redacted details to not contain absolute root path: {details}"
+    );
+
+    let message = tool_public_message(&err, Some(&redaction), true, true);
+    assert_eq!(message, "io error during open (<redacted>)");
+}
+
+#[test]
 fn tool_error_details_redacts_patch_message() {
     let raw = "/abs/path/file.txt: bad patch";
     let err = safe_fs_tools::Error::Patch(raw.to_string());
@@ -495,4 +582,124 @@ fn tool_public_message_redacts_not_permitted_message() {
     let err = safe_fs_tools::Error::NotPermitted("/abs/path denied".to_string());
     let message = tool_public_message(&err, None, true, false);
     assert_eq!(message, "not permitted");
+}
+
+#[test]
+fn tool_error_details_strict_redacts_walkdir_message() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
+        "root",
+        dir.path(),
+        safe_fs_tools::policy::RootMode::ReadOnly,
+    );
+    let redaction = PathRedaction::from_policy(&policy);
+
+    let missing = dir.path().join("missing");
+    let walk_err = walkdir::WalkDir::new(&missing)
+        .into_iter()
+        .filter_map(|entry| entry.err())
+        .next()
+        .expect("walkdir error");
+    let err = safe_fs_tools::Error::WalkDir(walk_err);
+
+    let details = tool_error_details_with(&err, Some(&redaction), true, true);
+    assert_eq!(
+        details.get("kind").and_then(|v| v.as_str()),
+        Some("walkdir")
+    );
+    assert!(
+        details.get("message").is_none(),
+        "expected walkdir message omitted in redacted mode"
+    );
+    assert_eq!(
+        details.get("path").and_then(|v| v.as_str()),
+        Some("<redacted>")
+    );
+    assert!(
+        !json_contains_string(&details, "missing"),
+        "expected strict redaction to hide file names: {details}"
+    );
+    assert!(
+        !json_contains_string(&details, &dir.path().display().to_string()),
+        "expected strict redacted details to not contain absolute root path: {details}"
+    );
+
+    let message = tool_public_message(&err, Some(&redaction), true, true);
+    assert_eq!(message, "walkdir error");
+}
+
+#[test]
+fn tool_error_details_strict_redacts_outside_root_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let other = tempfile::tempdir().expect("tempdir");
+    let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
+        "root",
+        dir.path(),
+        safe_fs_tools::policy::RootMode::ReadOnly,
+    );
+    let redaction = PathRedaction::from_policy(&policy);
+
+    let blocked = other.path().join("secret.txt");
+    let err = safe_fs_tools::Error::OutsideRoot {
+        root_id: "root".to_string(),
+        path: blocked.clone(),
+    };
+    let details = tool_error_details_with(&err, Some(&redaction), true, true);
+    assert_eq!(
+        details.get("kind").and_then(|v| v.as_str()),
+        Some("outside_root")
+    );
+    assert_eq!(
+        details.get("root_id").and_then(|v| v.as_str()),
+        Some("root")
+    );
+    assert_eq!(
+        details.get("path").and_then(|v| v.as_str()),
+        Some("<redacted>")
+    );
+    assert!(
+        !json_contains_string(&details, "secret.txt"),
+        "expected strict redaction to hide file names: {details}"
+    );
+    assert!(
+        !json_contains_string(&details, &blocked.display().to_string()),
+        "expected strict redacted details to not contain absolute path: {details}"
+    );
+
+    let message = tool_public_message(&err, Some(&redaction), true, true);
+    assert_eq!(message, "path resolves outside root 'root'");
+}
+
+#[test]
+fn tool_error_details_strict_redacts_secret_path_denied_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let policy = safe_fs_tools::policy::SandboxPolicy::single_root(
+        "root",
+        dir.path(),
+        safe_fs_tools::policy::RootMode::ReadOnly,
+    );
+    let redaction = PathRedaction::from_policy(&policy);
+
+    let denied = dir.path().join(".env");
+    let err = safe_fs_tools::Error::SecretPathDenied(denied.clone());
+    let details = tool_error_details_with(&err, Some(&redaction), true, true);
+    assert_eq!(
+        details.get("kind").and_then(|v| v.as_str()),
+        Some("secret_path_denied")
+    );
+    assert_eq!(
+        details.get("path").and_then(|v| v.as_str()),
+        Some("<redacted>")
+    );
+    assert!(
+        !json_contains_string(&details, ".env"),
+        "expected strict redaction to hide file names: {details}"
+    );
+    assert!(
+        !json_contains_string(&details, &denied.display().to_string()),
+        "expected strict redacted details to not contain absolute path: {details}"
+    );
+
+    let message = tool_public_message(&err, Some(&redaction), true, true);
+    assert_eq!(message, "path is denied by secret rules: <redacted>");
 }

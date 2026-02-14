@@ -12,27 +12,57 @@ use safe_fs_tools::policy::{RootMode, SandboxPolicy};
 use safe_fs_tools::ops::{GlobRequest, glob_paths};
 
 fn toggle_drive_letter_case(path: &std::path::Path) -> Option<PathBuf> {
-    let mut raw = path.to_string_lossy().into_owned();
-    let idx = if raw.starts_with(r"\\?\") && raw.len() >= 5 {
-        Some(4)
-    } else if raw.len() >= 2 && raw.as_bytes()[1] == b':' {
-        Some(0)
-    } else {
-        None
-    }?;
+    use std::path::{Component, Prefix};
 
-    let ch = raw.as_bytes().get(idx).copied().map(char::from)?;
-    if !ch.is_ascii_alphabetic() {
-        return None;
+    fn toggle_ascii_letter(ch: char) -> Option<char> {
+        if !ch.is_ascii_alphabetic() {
+            return None;
+        }
+        Some(if ch.is_ascii_lowercase() {
+            ch.to_ascii_uppercase()
+        } else {
+            ch.to_ascii_lowercase()
+        })
     }
 
-    let toggled = if ch.is_ascii_lowercase() {
-        ch.to_ascii_uppercase()
-    } else {
-        ch.to_ascii_lowercase()
+    fn toggle_first_ascii_letter(input: &str) -> Option<String> {
+        let (idx, ch) = input
+            .char_indices()
+            .find(|(_, ch)| ch.is_ascii_alphabetic())?;
+        let toggled = toggle_ascii_letter(ch)?;
+        let mut out = input.to_string();
+        out.replace_range(idx..idx + ch.len_utf8(), &toggled.to_string());
+        Some(out)
+    }
+
+    let mut components = path.components();
+    let prefix = match components.next()? {
+        Component::Prefix(prefix) => prefix,
+        _ => return None,
     };
-    raw.replace_range(idx..idx + 1, &toggled.to_string());
-    Some(PathBuf::from(raw))
+    let suffix = components.as_path().to_string_lossy();
+    let toggled_prefix = match prefix.kind() {
+        Prefix::Disk(letter) => {
+            let toggled = toggle_ascii_letter(char::from(letter))?;
+            format!("{toggled}:")
+        }
+        Prefix::VerbatimDisk(letter) => {
+            let toggled = toggle_ascii_letter(char::from(letter))?;
+            format!(r"\\?\{toggled}:")
+        }
+        Prefix::UNC(server, share) => {
+            let server = server.to_string_lossy();
+            let server = toggle_first_ascii_letter(server.as_ref())?;
+            format!(r"\\{server}\{}", share.to_string_lossy())
+        }
+        Prefix::VerbatimUNC(server, share) => {
+            let server = server.to_string_lossy();
+            let server = toggle_first_ascii_letter(server.as_ref())?;
+            format!(r"\\?\UNC\{server}\{}", share.to_string_lossy())
+        }
+        _ => return None,
+    };
+    Some(PathBuf::from(format!("{toggled_prefix}{suffix}")))
 }
 
 #[test]
@@ -173,6 +203,11 @@ fn windows_prefix_matching_matrix_is_case_insensitive() {
             r"\\server\share\Root\Missing\file.txt",
             r"\\SERVER\SHARE\root",
         ),
+        (
+            "verbatim-unc",
+            r"\\?\UNC\Server\Share\Root\Missing\file.txt",
+            r"\\server\share\root",
+        ),
     ];
 
     for (name, full, prefix) in cases {
@@ -196,6 +231,11 @@ fn windows_prefix_matching_matrix_is_case_insensitive() {
         (
             "unc-share-boundary",
             r"\\server\sharex\root\a.txt",
+            r"\\server\share\root",
+        ),
+        (
+            "verbatim-unc-share-boundary",
+            r"\\?\UNC\Server\ShareX\Root\a.txt",
             r"\\server\share\root",
         ),
         ("shorter-full", r"C:\root", r"C:\root\sub"),

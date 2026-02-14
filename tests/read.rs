@@ -15,7 +15,9 @@ fn read_redacts_matches() {
     let path = dir.path().join("hello.txt");
     std::fs::write(&path, "API_KEY=abc123\nhello\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.redact_regexes = vec!["API_KEY=([A-Za-z0-9_]+)".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
     let response = read_file(
         &ctx,
         ReadRequest {
@@ -42,7 +44,9 @@ fn read_absolute_paths_return_root_relative_requested_path() {
     let abs_path = dir.path().join("hello.txt");
     std::fs::write(&abs_path, "hello\n").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.paths.allow_absolute = true;
+    let ctx = Context::new(policy).expect("ctx");
     let response = read_file(
         &ctx,
         ReadRequest {
@@ -119,7 +123,9 @@ fn read_rejects_outside_root() {
     let outside = tempfile::NamedTempFile::new().expect("tmp");
     std::fs::write(outside.path(), "hello").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.paths.allow_absolute = true;
+    let ctx = Context::new(policy).expect("ctx");
     let err = read_file(
         &ctx,
         ReadRequest {
@@ -146,7 +152,9 @@ fn read_rejects_missing_absolute_paths_outside_root_as_outside_root() {
     let outside = tempfile::tempdir().expect("outside");
     let missing = outside.path().join("missing.txt");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.paths.allow_absolute = true;
+    let ctx = Context::new(policy).expect("ctx");
     let err = read_file(
         &ctx,
         ReadRequest {
@@ -219,7 +227,7 @@ fn read_supports_line_ranges() {
     assert_eq!(response.start_line, Some(2));
     assert_eq!(response.end_line, Some(3));
     assert!(!response.truncated);
-    assert_eq!(response.bytes_read, 19);
+    assert_eq!(response.bytes_read, 14);
 }
 
 #[test]
@@ -266,7 +274,7 @@ fn read_rejects_non_utf8_file_full_read() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::InvalidUtf8(path) => {
+        safe_fs_tools::Error::InvalidUtf8 { path, .. } => {
             assert_eq!(path, PathBuf::from("invalid.txt"));
         }
         other => panic!("unexpected error: {other:?}"),
@@ -292,7 +300,7 @@ fn read_rejects_non_utf8_file_line_range_read() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::InvalidUtf8(path) => {
+        safe_fs_tools::Error::InvalidUtf8 { path, .. } => {
             assert_eq!(path, PathBuf::from("invalid.txt"));
         }
         other => panic!("unexpected error: {other:?}"),

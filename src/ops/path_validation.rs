@@ -44,13 +44,8 @@ fn validate_requested_path_contract(
     raw_input_path: &Path,
     spec: LeafValidationSpec,
 ) -> Result<()> {
-    let normalized = crate::path_utils::normalize_path_lexical(requested_path);
+    let normalized = crate::path_utils_internal::normalize_path_lexical(requested_path);
     if normalized != requested_path {
-        debug_assert_eq!(
-            normalized, requested_path,
-            "invalid {} path contract: requested path must be normalized root-relative; raw={raw_input_path:?}, requested={requested_path:?}, normalized={normalized:?}",
-            spec.op_name
-        );
         return Err(Error::InvalidPath(format!(
             "invalid {} path {:?}: internal contract violation: requested path must be normalized root-relative",
             spec.op_name, raw_input_path
@@ -64,11 +59,6 @@ fn validate_requested_path_contract(
         )
     });
     if has_non_relative_components {
-        debug_assert!(
-            !has_non_relative_components,
-            "invalid {} path contract: requested path must stay root-relative; raw={raw_input_path:?}, requested={requested_path:?}",
-            spec.op_name
-        );
         return Err(Error::InvalidPath(format!(
             "invalid {} path {:?}: internal contract violation: requested path must stay root-relative",
             spec.op_name, raw_input_path

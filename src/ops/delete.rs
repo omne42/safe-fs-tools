@@ -108,10 +108,8 @@ fn revalidate_parent_before_delete(
                 )))
             }
         }
-        Err(Error::IoPath { op, source, .. })
-            if request.ignore_missing
-                && op == "metadata"
-                && source.kind() == std::io::ErrorKind::NotFound =>
+        Err(Error::IoPath { source, .. })
+            if request.ignore_missing && source.kind() == std::io::ErrorKind::NotFound =>
         {
             Ok(Some(missing_response(requested_path)))
         }
@@ -148,10 +146,8 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
     let canonical_parent =
         match ctx.ensure_dir_under_root(&request.root_id, requested_parent, false) {
             Ok(path) => path,
-            Err(Error::IoPath { op, source, .. })
-                if request.ignore_missing
-                    && op == "metadata"
-                    && source.kind() == std::io::ErrorKind::NotFound =>
+            Err(Error::IoPath { source, .. })
+                if request.ignore_missing && source.kind() == std::io::ErrorKind::NotFound =>
             {
                 // If the parent directory doesn't exist, the target doesn't exist either.
                 return Ok(missing_response(&requested_path));

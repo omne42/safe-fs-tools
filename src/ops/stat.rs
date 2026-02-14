@@ -1,6 +1,4 @@
 use std::fs;
-use std::io::ErrorKind;
-use std::path::Path;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -47,16 +45,8 @@ fn system_time_to_millis(value: std::time::SystemTime) -> Option<u64> {
         .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
-fn metadata_time_to_millis(
-    relative: &Path,
-    op: &'static str,
-    value: std::io::Result<std::time::SystemTime>,
-) -> Result<Option<u64>> {
-    match value {
-        Ok(time) => Ok(system_time_to_millis(time)),
-        Err(err) if err.kind() == ErrorKind::Unsupported => Ok(None),
-        Err(err) => Err(Error::io_path(op, relative, err)),
-    }
+fn metadata_time_to_millis(value: std::io::Result<std::time::SystemTime>) -> Option<u64> {
+    value.ok().and_then(system_time_to_millis)
 }
 
 pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
@@ -88,9 +78,10 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
 
     let size_bytes = if meta.is_file() { meta.len() } else { 0 };
 
-    let modified_ms = metadata_time_to_millis(&relative, "metadata.modified", meta.modified())?;
-    let accessed_ms = metadata_time_to_millis(&relative, "metadata.accessed", meta.accessed())?;
-    let created_ms = metadata_time_to_millis(&relative, "metadata.created", meta.created())?;
+    // Time fields are best-effort metadata; stat should not fail if a filesystem cannot provide them.
+    let modified_ms = metadata_time_to_millis(meta.modified());
+    let accessed_ms = metadata_time_to_millis(meta.accessed());
+    let created_ms = metadata_time_to_millis(meta.created());
     let readonly = meta.permissions().readonly();
 
     Ok(StatResponse {

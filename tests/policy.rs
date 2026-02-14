@@ -8,16 +8,6 @@ use safe_fs_tools::policy::{
     Limits, PathRules, Permissions, Root, RootMode, SandboxPolicy, SecretRules, TraversalRules,
 };
 
-fn assert_invalid_policy_contains(err: safe_fs_tools::Error, expected: &str) {
-    match err {
-        safe_fs_tools::Error::InvalidPolicy(msg) => assert!(
-            msg.contains(expected),
-            "expected invalid policy message containing {expected:?}, got: {msg}"
-        ),
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
 fn assert_invalid_policy_contains_all(err: safe_fs_tools::Error, expected_parts: &[&str]) {
     match err {
         safe_fs_tools::Error::InvalidPolicy(msg) => {
@@ -145,7 +135,7 @@ fn policy_rejects_invalid_redact_regexes() {
     policy.secrets.redact_regexes = vec!["[".to_string()];
 
     let err = Context::new(policy).expect_err("should reject");
-    assert_invalid_policy_contains(err, "secrets.redact_regexes");
+    assert_invalid_policy_contains_all(err, &["secrets.redact_regexes", "regex"]);
 }
 
 #[test]
@@ -181,7 +171,7 @@ fn policy_rejects_empty_roots() {
     };
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_contains(err, "roots is empty");
+    assert_invalid_policy_contains_all(err, &["roots", "empty"]);
 }
 
 #[test]
@@ -201,7 +191,7 @@ fn policy_rejects_empty_root_id() {
     };
 
     let err = policy.validate().expect_err("should reject");
-    assert_invalid_policy_contains(err, "root.id is empty");
+    assert_invalid_policy_contains_all(err, &["root.id", "empty"]);
 }
 
 #[test]
@@ -293,28 +283,102 @@ fn context_rejects_file_roots() {
     };
 
     let err = Context::new(policy).expect_err("should reject");
-    assert_invalid_policy_contains(err, "is not a directory");
+    assert_invalid_policy_contains_all(err, &["root", "is not a directory"]);
+}
+
+#[test]
+fn validate_only_checks_policy_shape_not_filesystem_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing_root = dir.path().join("missing-root");
+
+    let policy = SandboxPolicy {
+        roots: vec![Root {
+            id: "root".to_string(),
+            path: missing_root,
+            mode: RootMode::ReadOnly,
+        }],
+        permissions: Permissions::default(),
+        limits: Limits::default(),
+        secrets: SecretRules::default(),
+        traversal: TraversalRules::default(),
+        paths: PathRules::default(),
+    };
+
+    policy
+        .validate()
+        .expect("validate should stay structural and avoid filesystem IO");
+    let err = Context::new(policy).expect_err("context should reject missing roots");
+    assert_invalid_policy_contains_all(err, &["failed to canonicalize root", "root"]);
 }
 
 #[test]
 fn policy_deserialization_rejects_unknown_fields() {
-    let raw = r#"
-{
-  "roots": [
-    {
-      "id": "root",
-      "path": "/",
-      "mode": "read_only",
-      "unknown_field": true
-    }
-  ],
+    let cases = [
+        (
+            "unknown root field",
+            r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only", "unknown_root": true}],
   "permissions": { "read": true }
-}
-"#;
+}"#,
+            "unknown_root",
+        ),
+        (
+            "unknown top-level field",
+            r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}],
+  "unknown_top": true
+}"#,
+            "unknown_top",
+        ),
+        (
+            "unknown permissions field",
+            r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}],
+  "permissions": { "read": true, "unknown_permissions": true }
+}"#,
+            "unknown_permissions",
+        ),
+        (
+            "unknown limits field",
+            r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}],
+  "limits": { "unknown_limits": 1 }
+}"#,
+            "unknown_limits",
+        ),
+        (
+            "unknown secrets field",
+            r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}],
+  "secrets": { "unknown_secrets": true }
+}"#,
+            "unknown_secrets",
+        ),
+        (
+            "unknown traversal field",
+            r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}],
+  "traversal": { "unknown_traversal": true }
+}"#,
+            "unknown_traversal",
+        ),
+        (
+            "unknown paths field",
+            r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}],
+  "paths": { "unknown_paths": true }
+}"#,
+            "unknown_paths",
+        ),
+    ];
 
-    let err = serde_json::from_str::<SandboxPolicy>(raw).expect_err("should reject");
-    assert!(
-        err.to_string().contains("unknown_field"),
-        "unexpected error: {err}"
-    );
+    for (case_name, raw, unknown_field) in cases {
+        let err = serde_json::from_str::<SandboxPolicy>(raw).expect_err("should reject");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown field"),
+            "case: {case_name}, msg: {msg}"
+        );
+        assert!(msg.contains(unknown_field), "case: {case_name}, msg: {msg}");
+    }
 }

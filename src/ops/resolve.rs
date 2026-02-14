@@ -11,9 +11,10 @@ pub(super) fn derive_requested_path(
     canonical_root: &Path,
     resolved: &Path,
 ) -> Result<PathBuf> {
-    let normalized_resolved = crate::path_utils::normalize_path_lexical(resolved);
-    let normalized_root_path = crate::path_utils::normalize_path_lexical(root_path);
-    let normalized_canonical_root = crate::path_utils::normalize_path_lexical(canonical_root);
+    let normalized_resolved = crate::path_utils_internal::normalize_path_lexical(resolved);
+    let normalized_root_path = crate::path_utils_internal::normalize_path_lexical(root_path);
+    let normalized_canonical_root =
+        crate::path_utils_internal::normalize_path_lexical(canonical_root);
 
     let relative_requested = crate::path_utils::strip_prefix_case_insensitive(
         &normalized_resolved,
@@ -27,7 +28,7 @@ pub(super) fn derive_requested_path(
     })
     .ok_or_else(|| outside_root_error(root_id, &normalized_resolved))?;
 
-    let normalized = crate::path_utils::normalize_path_lexical(&relative_requested);
+    let normalized = crate::path_utils_internal::normalize_path_lexical(&relative_requested);
     if normalized.as_os_str().is_empty() {
         Ok(PathBuf::from("."))
     } else {
@@ -80,7 +81,8 @@ fn classify_notfound_escape(
             } else {
                 current.join(symlink_target)
             };
-            let resolved_target = crate::path_utils::normalize_path_lexical(&resolved_target);
+            let resolved_target =
+                crate::path_utils_internal::normalize_path_lexical(&resolved_target);
             if !crate::path_utils::starts_with_case_insensitive(&resolved_target, canonical_root) {
                 return Err(outside_root_error(root_id, requested_path));
             }
@@ -102,6 +104,17 @@ fn classify_notfound_escape(
     }
 
     Ok(())
+}
+
+fn classify_canonicalize_failure_escape(
+    root_id: &str,
+    canonical_root: &Path,
+    requested_path: &Path,
+) -> Result<()> {
+    match classify_notfound_escape(root_id, canonical_root, requested_path) {
+        Err(err @ Error::OutsideRoot { .. }) => Err(err),
+        Ok(()) | Err(_) => Ok(()),
+    }
 }
 
 // IMPORTANT DESIGN NOTE:
@@ -127,9 +140,11 @@ pub(super) fn resolve_path_in_root_lexically(
     let root = ctx.policy.root(root_id)?;
     let canonical_root = ctx.canonical_root(root_id)?.to_path_buf();
 
-    let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
-    let normalized_root_path = crate::path_utils::normalize_path_lexical(&root.path);
-    let normalized_canonical_root = crate::path_utils::normalize_path_lexical(&canonical_root);
+    let normalized_resolved = crate::path_utils_internal::normalize_path_lexical(&resolved);
+    let normalized_requested = crate::path_utils_internal::normalize_path_lexical(path);
+    let normalized_root_path = crate::path_utils_internal::normalize_path_lexical(&root.path);
+    let normalized_canonical_root =
+        crate::path_utils_internal::normalize_path_lexical(&canonical_root);
 
     let lexically_in_root = crate::path_utils::starts_with_case_insensitive(
         &normalized_resolved,
@@ -140,7 +155,7 @@ pub(super) fn resolve_path_in_root_lexically(
     );
 
     if !lexically_in_root {
-        return Err(outside_root_error(root_id, &normalized_resolved));
+        return Err(outside_root_error(root_id, &normalized_requested));
     }
 
     let requested_path = ctx.reject_secret_path(derive_requested_path(
@@ -175,6 +190,12 @@ impl super::Context {
             Err(err) => {
                 if err.kind() == std::io::ErrorKind::NotFound {
                     classify_notfound_escape(root_id, &canonical_root, &requested_path)?;
+                } else {
+                    classify_canonicalize_failure_escape(
+                        root_id,
+                        &canonical_root,
+                        &requested_path,
+                    )?;
                 }
                 return Err(Error::io_path("canonicalize", requested_path, err));
             }

@@ -12,18 +12,29 @@ fn revalidate_parent_before_move(
     root_id: &str,
     requested_parent: &Path,
     expected_parent: &Path,
+    expected_parent_meta: &fs::Metadata,
     requested_path: &Path,
     side: &str,
 ) -> Result<PathBuf> {
     let rechecked_parent = ctx.ensure_dir_under_root(root_id, requested_parent, false)?;
-    if rechecked_parent == expected_parent {
-        Ok(rechecked_parent)
-    } else {
-        Err(Error::InvalidPath(format!(
+    if rechecked_parent != expected_parent {
+        return Err(Error::InvalidPath(format!(
             "{side} path {} changed during move; refusing to continue",
             requested_path.display()
-        )))
+        )));
     }
+
+    let rechecked_parent_meta = fs::symlink_metadata(&rechecked_parent)
+        .map_err(|err| Error::io_path("symlink_metadata", requested_parent, err))?;
+    if !rechecked_parent_meta.is_dir()
+        || !metadata_same_file(expected_parent_meta, &rechecked_parent_meta)
+    {
+        return Err(Error::InvalidPath(format!(
+            "{side} parent identity changed during move; refusing to continue"
+        )));
+    }
+
+    Ok(rechecked_parent)
 }
 
 #[cfg(unix)]
@@ -41,6 +52,49 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 #[cfg(not(any(unix, windows)))]
 fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
     false
+}
+
+#[cfg(any(unix, windows))]
+fn ensure_move_identity_verification_supported() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn ensure_move_identity_verification_supported() -> Result<()> {
+    Err(Error::InvalidPath(
+        "move is unsupported on this platform: cannot verify file identity".to_string(),
+    ))
+}
+
+fn capture_parent_identity(
+    parent: &Path,
+    parent_relative: &Path,
+    side: &str,
+) -> Result<fs::Metadata> {
+    let parent_meta = fs::symlink_metadata(parent)
+        .map_err(|err| Error::io_path("symlink_metadata", parent_relative, err))?;
+    if !parent_meta.is_dir() {
+        return Err(Error::InvalidPath(format!(
+            "{side} parent path {} is not a directory",
+            parent_relative.display()
+        )));
+    }
+    Ok(parent_meta)
+}
+
+fn revalidate_source_before_move(
+    source: &Path,
+    source_relative: &Path,
+    expected_source_meta: &fs::Metadata,
+) -> Result<()> {
+    let current_source_meta = fs::symlink_metadata(source)
+        .map_err(|err| Error::io_path("metadata", source_relative, err))?;
+    if !metadata_same_file(expected_source_meta, &current_source_meta) {
+        return Err(Error::InvalidPath(
+            "source identity changed during move; refusing to continue".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +127,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
             "move is disabled by policy".to_string(),
         ));
     }
+    ensure_move_identity_verification_supported()?;
     ctx.ensure_can_write(&request.root_id, "move")?;
 
     let from_resolved =
@@ -120,6 +175,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     let to_parent_rel = requested_to.parent().unwrap_or_else(|| Path::new(""));
 
     let from_parent = ctx.ensure_dir_under_root(&request.root_id, from_parent_rel, false)?;
+    let from_parent_meta = capture_parent_identity(&from_parent, from_parent_rel, "source")?;
     let mut to_parent = match ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, false) {
         Ok(path) => Some(path),
         Err(Error::IoPath { source, .. })
@@ -167,6 +223,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     let to_parent = to_parent.ok_or_else(|| {
         Error::InvalidPath("failed to prepare destination parent directory".to_string())
     })?;
+    let to_parent_meta = capture_parent_identity(&to_parent, to_parent_rel, "destination")?;
     let to_relative_parent =
         crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root).ok_or_else(
             || Error::OutsideRoot {
@@ -206,8 +263,9 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     }
 
     if source_meta.is_dir() {
-        let normalized_source = crate::path_utils::normalize_path_lexical(&source);
-        let normalized_destination = crate::path_utils::normalize_path_lexical(&destination);
+        let normalized_source = crate::path_utils_internal::normalize_path_lexical(&source);
+        let normalized_destination =
+            crate::path_utils_internal::normalize_path_lexical(&destination);
         if normalized_destination != normalized_source
             && crate::path_utils::starts_with_case_insensitive(
                 &normalized_destination,
@@ -258,6 +316,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         &request.root_id,
         from_parent_rel,
         &from_parent,
+        &from_parent_meta,
         &requested_from,
         "source",
     )?;
@@ -266,6 +325,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         &request.root_id,
         to_parent_rel,
         &to_parent,
+        &to_parent_meta,
         &requested_to,
         "destination",
     )?;
@@ -289,6 +349,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     if ctx.redactor.is_path_denied(&to_relative) {
         return Err(Error::SecretPathDenied(to_relative));
     }
+    revalidate_source_before_move(&source, &from_relative, &source_meta)?;
 
     let replace_existing = request.overwrite;
     super::io::rename_replace(&source, &destination, replace_existing).map_err(|err| {

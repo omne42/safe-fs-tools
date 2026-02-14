@@ -78,17 +78,17 @@ fn build_grep_response(
     matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
     GrepResponse {
         matches,
-        truncated: diag.truncated,
+        truncated: diag.truncated(),
         skipped_too_large_files: counters.skipped_too_large_files,
         skipped_non_utf8_files: counters.skipped_non_utf8_files,
-        scanned_files: diag.scanned_files,
-        scan_limit_reached: diag.scan_limit_reached,
-        scan_limit_reason: diag.scan_limit_reason,
+        scanned_files: diag.scanned_files(),
+        scan_limit_reached: diag.scan_limit_reached(),
+        scan_limit_reason: diag.scan_limit_reason(),
         elapsed_ms: elapsed_ms(started),
-        scanned_entries: diag.scanned_entries,
-        skipped_walk_errors: diag.skipped_walk_errors,
-        skipped_io_errors: diag.skipped_io_errors,
-        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
+        scanned_entries: diag.scanned_entries(),
+        skipped_walk_errors: diag.skipped_walk_errors(),
+        skipped_io_errors: diag.skipped_io_errors(),
+        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets(),
     }
 }
 
@@ -120,6 +120,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut matches = Vec::<GrepMatch>::new();
     let mut counters = GrepSkipCounters::default();
     let mut diag = TraversalDiagnostics::default();
+    let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
     let walk_root = match request
         .glob
         .as_deref()
@@ -139,12 +140,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         None => root_path.clone(),
     };
 
-    let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
-
     let regex = if request.regex {
-        Some(regex::Regex::new(&request.query).map_err(|err| {
-            Error::InvalidRegex(format!("invalid grep regex {:?}: {err}", request.query))
-        })?)
+        Some(
+            regex::Regex::new(&request.query)
+                .map_err(|err| Error::invalid_regex(request.query.clone(), err))?,
+        )
     } else {
         None
     };
@@ -175,7 +175,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
                 Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
-                    diag.skipped_io_errors = diag.skipped_io_errors.saturating_add(1);
+                    diag.inc_skipped_io_errors();
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
                 Err(err) => return Err(err),
@@ -229,7 +229,10 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         },
     ) {
         Ok(diag) => diag,
-        Err(Error::WalkDirRoot { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+        Err(Error::WalkDirRoot { path, source })
+            if source.kind() == std::io::ErrorKind::NotFound
+                && path.as_path() != std::path::Path::new(".") =>
+        {
             return Ok(build_grep_response(matches, diag, counters, &started));
         }
         Err(err) => return Err(err),

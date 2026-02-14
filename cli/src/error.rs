@@ -79,10 +79,6 @@ enum RedactionMode {
 
 impl RedactionMode {
     fn from_flags(redact_paths: bool, strict_redact_paths: bool) -> Self {
-        debug_assert!(
-            !strict_redact_paths || redact_paths,
-            "strict redaction requires path redaction"
-        );
         if strict_redact_paths {
             Self::Strict
         } else if redact_paths {
@@ -286,7 +282,7 @@ fn tool_error_details_with_mode(
             "size_bytes": size_bytes,
             "max_bytes": max_bytes,
         }),
-        safe_fs_tools::Error::InvalidUtf8(path) => serde_json::json!({
+        safe_fs_tools::Error::InvalidUtf8 { path, .. } => serde_json::json!({
             "kind": "invalid_utf8",
             "path": format_path_for_error_with_mode(path, redaction, mode),
         }),
@@ -302,14 +298,14 @@ fn tool_error_details_with_mode(
                 })
             }
         }
-        safe_fs_tools::Error::InvalidRegex(message) => {
+        safe_fs_tools::Error::InvalidRegex { pattern, source } => {
             let mut out = details_map("invalid_regex");
             out.insert(
                 "message".to_string(),
                 serde_json::Value::String(if redact_paths {
                     "invalid regex".to_string()
                 } else {
-                    message.clone()
+                    format!("invalid regex pattern {pattern:?}: {source}")
                 }),
             );
             serde_json::Value::Object(out)
@@ -430,12 +426,12 @@ fn tool_public_message_with_mode(
             let path = format_path_for_error_with_mode(path, redaction, mode);
             format!("file is too large ({size_bytes} bytes; max {max_bytes} bytes): {path}")
         }
-        safe_fs_tools::Error::InvalidUtf8(path) => {
+        safe_fs_tools::Error::InvalidUtf8 { path, .. } => {
             let path = format_path_for_error_with_mode(path, redaction, mode);
             format!("invalid utf-8 in file: {path}")
         }
         safe_fs_tools::Error::Patch(_) => "failed to apply patch".to_string(),
-        safe_fs_tools::Error::InvalidRegex(_) => "invalid regex".to_string(),
+        safe_fs_tools::Error::InvalidRegex { .. } => "invalid regex".to_string(),
         safe_fs_tools::Error::InputTooLarge { .. } => tool.to_string(),
         safe_fs_tools::Error::WalkDirRoot { .. } | safe_fs_tools::Error::WalkDir(_) => {
             "walkdir error".to_string()
@@ -449,11 +445,11 @@ mod tests {
     use super::{PathRedaction, RedactionMode, format_path_for_error_with_mode};
     use std::path::{Path, PathBuf};
 
-    #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "strict redaction requires path redaction")]
-    fn strict_requires_redact_paths_in_debug() {
-        let _ = RedactionMode::from_flags(false, true);
+    fn strict_flag_without_redact_paths_still_uses_strict_mode() {
+        let mode = RedactionMode::from_flags(false, true);
+        assert_eq!(mode, RedactionMode::Strict);
+        assert!(mode.redact_paths());
     }
 
     #[test]

@@ -3,6 +3,14 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+pub enum Utf8Source {
+    #[error(transparent)]
+    Utf8(#[from] std::str::Utf8Error),
+    #[error(transparent)]
+    FromUtf8(#[from] std::string::FromUtf8Error),
+}
+
+#[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
     #[error("io error: {0}")]
@@ -53,14 +61,22 @@ pub enum Error {
         max_bytes: u64,
     },
 
-    #[error("invalid utf-8 in file: {0}")]
-    InvalidUtf8(PathBuf),
+    #[error("invalid utf-8 in file: {path}: {source}")]
+    InvalidUtf8 {
+        path: PathBuf,
+        #[source]
+        source: Utf8Source,
+    },
 
     #[error("failed to apply patch: {0}")]
     Patch(String),
 
-    #[error("invalid regex: {0}")]
-    InvalidRegex(String),
+    #[error("invalid regex pattern {pattern:?}: {source}")]
+    InvalidRegex {
+        pattern: String,
+        #[source]
+        source: regex::Error,
+    },
 
     #[error("input is too large ({size_bytes} bytes; max {max_bytes} bytes)")]
     InputTooLarge { size_bytes: u64, max_bytes: u64 },
@@ -99,6 +115,20 @@ impl Error {
         }
     }
 
+    pub(crate) fn invalid_utf8(path: impl Into<PathBuf>, source: impl Into<Utf8Source>) -> Self {
+        Self::InvalidUtf8 {
+            path: path.into(),
+            source: source.into(),
+        }
+    }
+
+    pub(crate) fn invalid_regex(pattern: impl Into<String>, source: regex::Error) -> Self {
+        Self::InvalidRegex {
+            pattern: pattern.into(),
+            source,
+        }
+    }
+
     /// A stable, programmatic error code for callers that need to classify failures.
     pub fn code(&self) -> &'static str {
         match self {
@@ -115,9 +145,9 @@ impl Error {
             Error::NotPermitted(_) => Self::CODE_NOT_PERMITTED,
             Error::SecretPathDenied(_) => Self::CODE_SECRET_PATH_DENIED,
             Error::FileTooLarge { .. } => Self::CODE_FILE_TOO_LARGE,
-            Error::InvalidUtf8(_) => Self::CODE_INVALID_UTF8,
+            Error::InvalidUtf8 { .. } => Self::CODE_INVALID_UTF8,
             Error::Patch(_) => Self::CODE_PATCH,
-            Error::InvalidRegex(_) => Self::CODE_INVALID_REGEX,
+            Error::InvalidRegex { .. } => Self::CODE_INVALID_REGEX,
             Error::InputTooLarge { .. } => Self::CODE_INPUT_TOO_LARGE,
         }
     }
@@ -140,6 +170,18 @@ mod tests {
             .into_iter()
             .find_map(|entry| entry.err())
             .expect("walk error")
+    }
+
+    fn sample_utf8_error() -> std::str::Utf8Error {
+        std::str::from_utf8(b"\xFF").expect_err("invalid utf8")
+    }
+
+    fn sample_from_utf8_error() -> std::string::FromUtf8Error {
+        String::from_utf8(vec![0xFF]).expect_err("invalid utf8")
+    }
+
+    fn sample_regex_error() -> regex::Error {
+        regex::Regex::new("[").expect_err("invalid regex")
     }
 
     #[test]
@@ -177,9 +219,15 @@ mod tests {
                 },
                 "file_too_large",
             ),
-            (Error::InvalidUtf8(PathBuf::from("x")), "invalid_utf8"),
+            (
+                Error::invalid_utf8(PathBuf::from("x"), sample_utf8_error()),
+                "invalid_utf8",
+            ),
             (Error::Patch("x".to_string()), "patch"),
-            (Error::InvalidRegex("x".to_string()), "invalid_regex"),
+            (
+                Error::invalid_regex("x".to_string(), sample_regex_error()),
+                "invalid_regex",
+            ),
             (
                 Error::InputTooLarge {
                     size_bytes: 2,
@@ -207,5 +255,21 @@ mod tests {
     fn io_error_exposes_source() {
         let error = Error::Io(not_found_error());
         assert!(error.source().is_some());
+    }
+
+    #[test]
+    fn invalid_utf8_exposes_source_and_context() {
+        let error = Error::invalid_utf8(PathBuf::from("x.txt"), sample_from_utf8_error());
+        assert!(error.source().is_some());
+        assert_eq!(error.code(), Error::CODE_INVALID_UTF8);
+        assert!(error.to_string().contains("x.txt"));
+    }
+
+    #[test]
+    fn invalid_regex_exposes_source_and_context() {
+        let error = Error::invalid_regex("[".to_string(), sample_regex_error());
+        assert!(error.source().is_some());
+        assert_eq!(error.code(), Error::CODE_INVALID_REGEX);
+        assert!(error.to_string().contains("["));
     }
 }

@@ -44,16 +44,51 @@ fn create_file_symlink_or_skip(target: &Path, link: &Path) -> bool {
         match std::os::windows::fs::symlink_file(target, link) {
             Ok(()) => true,
             Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                let ci = std::env::var("CI").unwrap_or_default();
-                if ci.eq_ignore_ascii_case("true") || ci == "1" {
-                    panic!(
-                        "symlink test requires Windows symlink privileges in CI (set Developer Mode or grant SeCreateSymbolicLinkPrivilege): {err}"
-                    );
+                let allow_skip = std::env::var("SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP")
+                    .map(|value| value == "1")
+                    .unwrap_or(false);
+                if allow_skip {
+                    eprintln!("skipping symlink test (permission denied): {err}");
+                    return false;
                 }
-                eprintln!("skipping symlink test (permission denied): {err}");
-                false
+                panic!(
+                    "symlink test requires Windows symlink privileges (set Developer Mode or grant \
+                     SeCreateSymbolicLinkPrivilege). Set SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP=1 to \
+                     explicitly allow skipping: {err}"
+                );
             }
             Err(err) => panic!("symlink_file failed: {err}"),
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn create_dir_symlink_or_skip(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).expect("symlink");
+        true
+    }
+
+    #[cfg(windows)]
+    {
+        match std::os::windows::fs::symlink_dir(target, link) {
+            Ok(()) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                let allow_skip = std::env::var("SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP")
+                    .map(|value| value == "1")
+                    .unwrap_or(false);
+                if allow_skip {
+                    eprintln!("skipping symlink test (permission denied): {err}");
+                    return false;
+                }
+                panic!(
+                    "symlink test requires Windows symlink privileges (set Developer Mode or grant \
+                     SeCreateSymbolicLinkPrivilege). Set SAFE_FS_TOOLS_ALLOW_SYMLINK_SKIP=1 to \
+                     explicitly allow skipping: {err}"
+                );
+            }
+            Err(err) => panic!("symlink_dir failed: {err}"),
         }
     }
 }
@@ -165,6 +200,25 @@ fn deny_glob_blocks_regular_path_that_symlinks_into_git() {
     let ctx = Context::new(policy).expect("ctx");
 
     assert_secret_path_denied(&ctx, "public-link.txt", ".git/config");
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn deny_glob_blocks_regular_dir_path_that_symlinks_into_git() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("mkdir");
+    std::fs::write(dir.path().join(".git").join("config"), "secret\n").expect("write");
+    let target = dir.path().join(".git");
+    let link = dir.path().join("public-dir");
+    if !create_dir_symlink_or_skip(&target, &link) {
+        return;
+    }
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.deny_globs = vec![".git/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    assert_secret_path_denied(&ctx, "public-dir/config", ".git/config");
 }
 
 #[test]

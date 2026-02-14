@@ -5,14 +5,16 @@ use std::path::PathBuf;
 use globset::GlobSet;
 use serde::{Deserialize, Serialize};
 
-use crate::policy::SandboxPolicy;
+use crate::policy::{RootMode, SandboxPolicy};
 use crate::redaction::SecretRedactor;
 
 mod context;
 mod copy_file;
 mod delete;
 mod edit;
+#[cfg(feature = "glob")]
 mod glob;
+#[cfg(feature = "grep")]
 mod grep;
 mod io;
 mod list_dir;
@@ -28,7 +30,7 @@ mod traversal;
 mod write;
 
 pub use copy_file::{CopyFileRequest, CopyFileResponse, copy_file};
-pub use delete::{DeleteRequest, DeleteResponse, delete};
+pub use delete::{DeleteKind, DeleteRequest, DeleteResponse, delete};
 pub use edit::{EditRequest, EditResponse, edit_range};
 #[cfg(feature = "glob")]
 pub use glob::{GlobRequest, GlobResponse, glob_paths};
@@ -48,14 +50,20 @@ mod tests;
 pub struct Context {
     policy: SandboxPolicy,
     redactor: SecretRedactor,
-    canonical_roots: HashMap<String, PathBuf>,
+    roots: HashMap<String, RootRuntime>,
     #[cfg(any(feature = "glob", feature = "grep"))]
     traversal_skip_globs: Option<GlobSet>,
 }
 
+#[derive(Debug)]
+struct RootRuntime {
+    canonical_path: PathBuf,
+    mode: RootMode,
+}
+
 impl std::fmt::Debug for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut root_ids = self.canonical_roots.keys().collect::<Vec<_>>();
+        let mut root_ids = self.roots.keys().collect::<Vec<_>>();
         root_ids.sort_unstable();
         f.debug_struct("Context")
             .field("roots", &root_ids)

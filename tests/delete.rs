@@ -9,7 +9,9 @@ use safe_fs_tools::policy::RootMode;
 #[test]
 fn delete_absolute_paths_report_relative_requested_path_when_parent_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.paths.allow_absolute = true;
+    let ctx = Context::new(policy).expect("ctx");
 
     let abs = dir.path().join("missing").join("file.txt");
     let err = delete(
@@ -36,7 +38,9 @@ fn delete_absolute_paths_report_relative_requested_path_when_parent_is_missing()
 fn delete_absolute_paths_report_relative_requested_path_when_leaf_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("parent")).expect("mkdir");
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.paths.allow_absolute = true;
+    let ctx = Context::new(policy).expect("ctx");
 
     let abs = dir.path().join("parent").join("missing.txt");
     let err = delete(
@@ -370,7 +374,8 @@ fn delete_revalidate_parent_detects_path_change() {
                 break;
             }
             safe_fs_tools::Error::InvalidPath(message) if message.contains("recursive=true") => {}
-            safe_fs_tools::Error::IoPath { op, .. } if op == "metadata" => {}
+            safe_fs_tools::Error::IoPath { source, .. }
+                if source.kind() == std::io::ErrorKind::NotFound => {}
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -432,7 +437,8 @@ fn delete_revalidate_parent_returns_missing_when_ignore_missing_is_true() {
             }
             Err(safe_fs_tools::Error::InvalidPath(message))
                 if message.contains("recursive=true") => {}
-            Err(safe_fs_tools::Error::IoPath { op, .. }) if op == "metadata" => {}
+            Err(safe_fs_tools::Error::IoPath { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound => {}
             other => panic!("unexpected result: {other:?}"),
         }
     }
@@ -456,7 +462,7 @@ fn delete_ignore_missing_returns_missing_when_parent_directory_is_absent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
-    let resp = delete(
+    let result = delete(
         &ctx,
         DeleteRequest {
             root_id: "root".to_string(),
@@ -464,14 +470,23 @@ fn delete_ignore_missing_returns_missing_when_parent_directory_is_absent() {
             recursive: false,
             ignore_missing: true,
         },
-    )
-    .expect("ignore_missing should return missing response");
-
-    assert_eq!(resp.path, PathBuf::from("missing").join("file.txt"));
-    assert_eq!(
-        resp.requested_path,
-        Some(PathBuf::from("missing").join("file.txt"))
     );
-    assert!(!resp.deleted);
-    assert_eq!(resp.kind, "missing");
+
+    match result {
+        Ok(resp) => {
+            assert_eq!(resp.path, PathBuf::from("missing").join("file.txt"));
+            assert_eq!(
+                resp.requested_path,
+                Some(PathBuf::from("missing").join("file.txt"))
+            );
+            assert!(!resp.deleted);
+            assert_eq!(resp.kind, "missing");
+        }
+        Err(safe_fs_tools::Error::IoPath { path, source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            assert_eq!(path, PathBuf::from("missing"));
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
 }

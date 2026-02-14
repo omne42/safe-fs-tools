@@ -16,7 +16,7 @@ fn open_policy_file(path: &Path) -> Result<std::fs::File> {
     let file = crate::platform_open::open_readonly_nofollow(path).map_err(|err| {
         if crate::platform_open::is_symlink_open_error(&err) {
             return Error::InvalidPath(format!(
-                "path {} final component is a symlink; refusing to load policy via symlink final component",
+                "path {} encountered a symlink or symlink resolution loop while opening policy path",
                 path.display()
             ));
         }
@@ -102,11 +102,6 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
             "max policy bytes exceeds hard limit ({HARD_MAX_POLICY_BYTES} bytes)"
         )));
     }
-    if max_bytes >= usize::MAX as u64 {
-        return Err(Error::InvalidPolicy(
-            "max policy bytes exceeds platform limits".to_string(),
-        ));
-    }
 
     let path = path.as_ref();
     let format = detect_policy_format(path)?;
@@ -129,7 +124,7 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
     }
 
     let limit = max_bytes.saturating_add(1);
-    let mut bytes = Vec::<u8>::new();
+    let mut bytes = Vec::<u8>::with_capacity(meta_len.min(limit) as usize);
     file.take(limit)
         .read_to_end(&mut bytes)
         .map_err(|err| Error::io_path("read", path, err))?;
@@ -142,6 +137,7 @@ pub fn load_policy_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<San
         });
     }
 
-    let raw = std::str::from_utf8(&bytes).map_err(|_| Error::InvalidUtf8(path.to_path_buf()))?;
+    let raw =
+        std::str::from_utf8(&bytes).map_err(|err| Error::invalid_utf8(path.to_path_buf(), err))?;
     parse_policy(raw, format)
 }

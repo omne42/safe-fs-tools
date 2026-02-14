@@ -27,48 +27,116 @@ fn open_private_temp_file_creates_files_without_group_or_other_access() {
 #[test]
 #[cfg(any(feature = "glob", feature = "grep"))]
 fn derive_safe_traversal_prefix_is_conservative() {
-    assert_eq!(
-        traversal::derive_safe_traversal_prefix("src/**/*.rs"),
-        Some(PathBuf::from("src"))
-    );
-    assert_eq!(
-        traversal::derive_safe_traversal_prefix("./src/**/*.rs"),
-        Some(PathBuf::from("src"))
-    );
-    assert_eq!(
-        traversal::derive_safe_traversal_prefix("src/*"),
-        Some(PathBuf::from("src"))
-    );
-    assert_eq!(
-        traversal::derive_safe_traversal_prefix("src/lib.rs"),
-        Some(PathBuf::from("src/lib.rs"))
-    );
-    assert_eq!(traversal::derive_safe_traversal_prefix("**/*.rs"), None);
-    assert_eq!(traversal::derive_safe_traversal_prefix("../**/*.rs"), None);
-    assert_eq!(traversal::derive_safe_traversal_prefix("/etc/*"), None);
+    struct Case {
+        name: &'static str,
+        pattern: &'static str,
+        expected: Option<&'static str>,
+    }
+
+    let base_cases = [
+        Case {
+            name: "relative_glob",
+            pattern: "src/**/*.rs",
+            expected: Some("src"),
+        },
+        Case {
+            name: "relative_dot_prefix",
+            pattern: "./src/**/*.rs",
+            expected: Some("src"),
+        },
+        Case {
+            name: "single_segment_wildcard",
+            pattern: "src/*",
+            expected: Some("src"),
+        },
+        Case {
+            name: "concrete_file_path",
+            pattern: "src/lib.rs",
+            expected: Some("src/lib.rs"),
+        },
+        Case {
+            name: "globstar_without_prefix",
+            pattern: "**/*.rs",
+            expected: None,
+        },
+        Case {
+            name: "parent_escape",
+            pattern: "../**/*.rs",
+            expected: None,
+        },
+        Case {
+            name: "absolute_path",
+            pattern: "/etc/*",
+            expected: None,
+        },
+    ];
+    for case in base_cases {
+        assert_eq!(
+            traversal::derive_safe_traversal_prefix(case.pattern),
+            case.expected.map(PathBuf::from),
+            "case {} failed for pattern {:?}",
+            case.name,
+            case.pattern
+        );
+    }
     #[cfg(windows)]
     {
-        assert_eq!(traversal::derive_safe_traversal_prefix("C:/foo/*"), None);
-        assert_eq!(traversal::derive_safe_traversal_prefix("c:foo/*"), None);
-        assert_eq!(traversal::derive_safe_traversal_prefix("C:"), None);
-        assert_eq!(
-            traversal::derive_safe_traversal_prefix(r"src\**\*.rs"),
-            Some(PathBuf::from("src"))
-        );
-        assert_eq!(
-            traversal::derive_safe_traversal_prefix(r".\src\**\*.rs"),
-            Some(PathBuf::from("src"))
-        );
-        assert_eq!(traversal::derive_safe_traversal_prefix(r"src\..\*"), None);
-        assert_eq!(
-            traversal::derive_safe_traversal_prefix(r"src\foo\..\*.rs"),
-            None
-        );
-        assert_eq!(traversal::derive_safe_traversal_prefix("src/c:foo/*"), None);
-        assert_eq!(
-            traversal::derive_safe_traversal_prefix("a/b/c:tmp/**"),
-            None
-        );
+        let windows_cases = [
+            Case {
+                name: "drive_absolute_path",
+                pattern: "C:/foo/*",
+                expected: None,
+            },
+            Case {
+                name: "drive_relative_path",
+                pattern: "c:foo/*",
+                expected: None,
+            },
+            Case {
+                name: "drive_only",
+                pattern: "C:",
+                expected: None,
+            },
+            Case {
+                name: "backslash_glob",
+                pattern: r"src\**\*.rs",
+                expected: Some("src"),
+            },
+            Case {
+                name: "backslash_glob_with_dot_prefix",
+                pattern: r".\src\**\*.rs",
+                expected: Some("src"),
+            },
+            Case {
+                name: "backslash_parent_escape",
+                pattern: r"src\..\*",
+                expected: None,
+            },
+            Case {
+                name: "backslash_nested_parent_escape",
+                pattern: r"src\foo\..\*.rs",
+                expected: None,
+            },
+            Case {
+                name: "embedded_drive_segment",
+                pattern: "src/c:foo/*",
+                expected: None,
+            },
+            Case {
+                name: "embedded_drive_segment_nested",
+                pattern: "a/b/c:tmp/**",
+                expected: None,
+            },
+        ];
+        for case in windows_cases {
+            assert_eq!(
+                traversal::derive_safe_traversal_prefix(case.pattern),
+                case.expected.map(PathBuf::from),
+                "case {} failed for pattern {:?}",
+                case.name,
+                case.pattern
+            );
+        }
     }
 }
 
@@ -166,9 +234,20 @@ fn traversal_skip_globs_apply_to_directories_via_probe() {
             .any(|path| path.starts_with(Path::new("node_modules"))),
         "expected node_modules to be excluded via probe semantics, saw: {seen:?}"
     );
-    assert_eq!(diag.scanned_files, 1, "unexpected scanned files: {diag:?}");
+    assert_eq!(
+        seen.len(),
+        1,
+        "expected exactly one visited file, saw: {seen:?}"
+    );
+    assert_eq!(
+        diag.scanned_files(),
+        1,
+        "unexpected scanned files: {diag:?}"
+    );
+    // Directory iteration order can vary across filesystems, so allow one or two entries
+    // as long as the observed files and scanned_files invariants stay strict.
     assert!(
-        (1..=2).contains(&diag.scanned_entries),
+        (1..=2).contains(&diag.scanned_entries()),
         "unexpected scanned entries: {diag:?}"
     );
 }
@@ -177,11 +256,11 @@ fn traversal_skip_globs_apply_to_directories_via_probe() {
 #[cfg(unix)]
 fn normalize_path_lexical_does_not_escape_filesystem_root() {
     assert_eq!(
-        crate::path_utils::normalize_path_lexical(Path::new("/../etc")),
+        crate::path_utils_internal::normalize_path_lexical(Path::new("/../etc")),
         PathBuf::from("/etc")
     );
     assert_eq!(
-        crate::path_utils::normalize_path_lexical(Path::new("/a/../../b")),
+        crate::path_utils_internal::normalize_path_lexical(Path::new("/a/../../b")),
         PathBuf::from("/b")
     );
 }
@@ -189,15 +268,15 @@ fn normalize_path_lexical_does_not_escape_filesystem_root() {
 #[test]
 fn normalize_path_lexical_preserves_leading_parent_dirs() {
     assert_eq!(
-        crate::path_utils::normalize_path_lexical(Path::new("../..")),
+        crate::path_utils_internal::normalize_path_lexical(Path::new("../..")),
         PathBuf::from("../..")
     );
     assert_eq!(
-        crate::path_utils::normalize_path_lexical(Path::new("../../a/../b")),
+        crate::path_utils_internal::normalize_path_lexical(Path::new("../../a/../b")),
         PathBuf::from("../../b")
     );
     assert_eq!(
-        crate::path_utils::normalize_path_lexical(Path::new("a/../../b")),
+        crate::path_utils_internal::normalize_path_lexical(Path::new("a/../../b")),
         PathBuf::from("../b")
     );
 }
@@ -219,7 +298,7 @@ fn requested_path_for_dot_is_not_empty() {
 #[cfg(windows)]
 fn normalize_path_lexical_preserves_prefix_root() {
     assert_eq!(
-        crate::path_utils::normalize_path_lexical(Path::new(r"C:\..\foo")),
+        crate::path_utils_internal::normalize_path_lexical(Path::new(r"C:\..\foo")),
         PathBuf::from(r"C:\foo")
     );
 }
@@ -228,7 +307,7 @@ fn normalize_path_lexical_preserves_prefix_root() {
 #[cfg(windows)]
 fn normalize_path_lexical_preserves_unc_prefix_root() {
     assert_eq!(
-        crate::path_utils::normalize_path_lexical(Path::new(r"\\server\share\..\foo")),
+        crate::path_utils_internal::normalize_path_lexical(Path::new(r"\\server\share\..\foo")),
         PathBuf::from(r"\\server\share\foo")
     );
 }
@@ -237,7 +316,7 @@ fn normalize_path_lexical_preserves_unc_prefix_root() {
 #[cfg(windows)]
 fn normalize_path_lexical_preserves_verbatim_prefix_root() {
     assert_eq!(
-        crate::path_utils::normalize_path_lexical(Path::new(r"\\?\C:\..\foo")),
+        crate::path_utils_internal::normalize_path_lexical(Path::new(r"\\?\C:\..\foo")),
         PathBuf::from(r"\\?\C:\foo")
     );
 }
@@ -245,34 +324,31 @@ fn normalize_path_lexical_preserves_verbatim_prefix_root() {
 #[test]
 #[cfg(windows)]
 fn rename_replace_honors_replace_existing_flag_windows() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let src = dir.path().join("src.txt");
-    let dest = dir.path().join("dest.txt");
-
-    fs::write(&src, "new").expect("write src");
-    fs::write(&dest, "old").expect("write dest");
-
-    let err = io::rename_replace(&src, &dest, false).expect_err("should not overwrite");
-    assert!(
-        err.kind() == std::io::ErrorKind::AlreadyExists || err.raw_os_error().is_some(),
-        "unexpected error: {err:?}"
-    );
-    assert!(
-        src.exists(),
-        "source should remain when overwrite is disabled"
-    );
-    let out = fs::read_to_string(&dest).expect("read dest after failed overwrite");
-    assert_eq!(out, "old", "destination should not be replaced");
-
-    io::rename_replace(&src, &dest, true).expect("overwrite");
-    let out = fs::read_to_string(&dest).expect("read dest");
-    assert_eq!(out, "new");
-    assert!(!src.exists());
+    rename_replace_honors_replace_existing_flag_with_assertion(|err| {
+        if err.kind() != std::io::ErrorKind::AlreadyExists {
+            assert!(
+                matches!(err.raw_os_error(), Some(80 | 183)),
+                "unexpected error: {err:?}"
+            );
+        }
+    });
 }
 
 #[test]
 #[cfg(not(windows))]
 fn rename_replace_honors_replace_existing_flag_non_windows() {
+    rename_replace_honors_replace_existing_flag_with_assertion(|err| {
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "unexpected error: {err:?}"
+        );
+    });
+}
+
+fn rename_replace_honors_replace_existing_flag_with_assertion(
+    assert_error: impl FnOnce(&std::io::Error),
+) {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("src.txt");
     let dest = dir.path().join("dest.txt");
@@ -281,11 +357,7 @@ fn rename_replace_honors_replace_existing_flag_non_windows() {
     fs::write(&dest, "old").expect("write dest");
 
     let err = io::rename_replace(&src, &dest, false).expect_err("should not overwrite");
-    assert_eq!(
-        err.kind(),
-        std::io::ErrorKind::AlreadyExists,
-        "unexpected error: {err:?}"
-    );
+    assert_error(&err);
     assert!(
         src.exists(),
         "source should remain when overwrite is disabled"

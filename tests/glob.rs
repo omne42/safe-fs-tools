@@ -104,6 +104,33 @@ fn glob_patterns_reject_absolute_and_parent_segments() {
 }
 
 #[test]
+fn glob_patterns_reject_empty_and_whitespace() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+
+    for pattern in ["", "   "] {
+        let err = glob_paths(
+            &ctx,
+            GlobRequest {
+                root_id: "root".to_string(),
+                pattern: pattern.to_string(),
+            },
+        )
+        .expect_err("should reject");
+
+        match err {
+            safe_fs_tools::Error::InvalidPath(message) => {
+                assert!(
+                    message.contains("must not be empty"),
+                    "expected empty-pattern error, got {message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn glob_missing_prefix_returns_empty_without_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "a\n").expect("write");
@@ -166,10 +193,7 @@ fn glob_skips_dangling_symlink_targets() {
     .expect("glob");
 
     assert_eq!(resp.matches, vec![PathBuf::from("a.txt")]);
-    assert!(
-        resp.skipped_dangling_symlink_targets > 0,
-        "expected at least one dangling symlink target to be counted"
-    );
+    assert_eq!(resp.skipped_dangling_symlink_targets, 1);
 }
 
 #[test]
@@ -183,18 +207,33 @@ fn glob_does_not_follow_symlink_root_prefix() {
     symlink(outside.path(), dir.path().join("sub")).expect("symlink dir");
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
-    let resp = glob_paths(
+    let err = glob_paths(
         &ctx,
         GlobRequest {
             root_id: "root".to_string(),
             pattern: "sub/**/*.txt".to_string(),
         },
     )
-    .expect("glob");
+    .expect_err("should reject root-prefix symlink escaping outside root");
 
-    assert!(resp.matches.is_empty());
-    assert_eq!(resp.scanned_entries, 0);
-    assert_eq!(resp.scanned_files, 1);
+    match &err {
+        safe_fs_tools::Error::OutsideRoot { root_id, path } => {
+            assert_eq!(root_id, "root");
+            assert!(!path.is_absolute());
+            assert_eq!(path, &PathBuf::from("sub"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let rendered = err.to_string();
+    assert!(
+        !rendered.contains(&dir.path().display().to_string()),
+        "expected error to not contain absolute root path: {rendered}"
+    );
+    assert!(
+        !rendered.contains(&outside.path().display().to_string()),
+        "expected error to not contain absolute outside path: {rendered}"
+    );
 }
 
 #[test]
@@ -223,10 +262,7 @@ fn glob_skips_walkdir_errors() {
     .expect("glob");
 
     assert_eq!(resp.matches, vec![PathBuf::from("a.txt")]);
-    assert!(
-        resp.skipped_walk_errors > 0,
-        "expected at least one walk error"
-    );
+    assert_eq!(resp.skipped_walk_errors, 1, "expected one walk error");
 }
 
 #[test]

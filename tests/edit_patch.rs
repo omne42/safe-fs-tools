@@ -43,6 +43,10 @@ fn edit_rejects_symlink_escape() {
         safe_fs_tools::Error::OutsideRoot { .. } => {}
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(outside.path()).expect("read outside"),
+        "one\n"
+    );
 }
 
 #[test]
@@ -71,6 +75,10 @@ fn patch_rejects_symlink_escape() {
         safe_fs_tools::Error::OutsideRoot { .. } => {}
         other => panic!("unexpected error: {other:?}"),
     }
+    assert_eq!(
+        std::fs::read_to_string(outside.path()).expect("read outside"),
+        "one\n"
+    );
 }
 
 #[test]
@@ -533,7 +541,7 @@ fn edit_rejects_invalid_line_ranges() {
     )
     .expect_err("should reject");
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::Patch(message) => assert!(message.contains("invalid edit range")),
         other => panic!("unexpected error: {other:?}"),
     }
 
@@ -549,7 +557,7 @@ fn edit_rejects_invalid_line_ranges() {
     )
     .expect_err("should reject");
     match err {
-        safe_fs_tools::Error::InvalidPath(_) => {}
+        safe_fs_tools::Error::Patch(message) => assert!(message.contains("invalid edit range")),
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -575,7 +583,7 @@ fn edit_rejects_out_of_bounds_line_ranges() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::InvalidPath(message) => assert!(message.contains("out of bounds")),
+        safe_fs_tools::Error::Patch(message) => assert!(message.contains("out of bounds")),
         other => panic!("unexpected error: {other:?}"),
     }
 
@@ -595,7 +603,7 @@ fn edit_rejects_out_of_bounds_line_ranges() {
     .expect_err("should reject");
 
     match err {
-        safe_fs_tools::Error::InvalidPath(message) => assert!(message.contains("out of bounds")),
+        safe_fs_tools::Error::Patch(message) => assert!(message.contains("out of bounds")),
         other => panic!("unexpected error: {other:?}"),
     }
 }

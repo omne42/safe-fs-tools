@@ -15,12 +15,6 @@ use safe_fs_tools::ops::{GlobRequest, glob_paths};
 use std::os::unix::fs::PermissionsExt;
 
 #[cfg(unix)]
-fn is_running_as_root() -> bool {
-    // SAFETY: `geteuid` has no preconditions and does not dereference pointers.
-    unsafe { libc::geteuid() == 0 }
-}
-
-#[cfg(unix)]
 struct PermissionRestoreGuard {
     path: PathBuf,
     mode: u32,
@@ -52,6 +46,50 @@ impl Drop for PermissionRestoreGuard {
                 "failed to restore permissions for {}: {err}",
                 self.path.display()
             );
+        }
+    }
+}
+
+#[cfg(unix)]
+fn chmod_000_blocks_read_dir(path: &std::path::Path) -> Option<PermissionRestoreGuard> {
+    let guard = PermissionRestoreGuard::set(path, 0o000);
+    match std::fs::read_dir(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => Some(guard),
+        Ok(_) => {
+            eprintln!(
+                "skipping permission test: {} remains traversable after chmod 000",
+                path.display()
+            );
+            None
+        }
+        Err(err) => {
+            eprintln!(
+                "skipping permission test: probe read_dir({}) returned unexpected error: {err}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
+fn chmod_000_blocks_file_read(path: &std::path::Path) -> Option<PermissionRestoreGuard> {
+    let guard = PermissionRestoreGuard::set(path, 0o000);
+    match std::fs::File::open(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => Some(guard),
+        Ok(_) => {
+            eprintln!(
+                "skipping permission test: {} remains readable after chmod 000",
+                path.display()
+            );
+            None
+        }
+        Err(err) => {
+            eprintln!(
+                "skipping permission test: probe open({}) returned unexpected error: {err}",
+                path.display()
+            );
+            None
         }
     }
 }
@@ -188,17 +226,15 @@ fn grep_does_not_follow_symlink_root_prefix() {
 #[test]
 #[cfg(unix)]
 fn grep_skips_walkdir_errors() {
-    if is_running_as_root() {
-        return;
-    }
-
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
 
     let blocked = dir.path().join("blocked");
     std::fs::create_dir(&blocked).expect("mkdir");
     std::fs::write(blocked.join("b.txt"), "needle\n").expect("write");
-    let _chmod_guard = PermissionRestoreGuard::set(&blocked, 0o000);
+    let Some(_chmod_guard) = chmod_000_blocks_read_dir(&blocked) else {
+        return;
+    };
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = grep(
@@ -223,16 +259,14 @@ fn grep_skips_walkdir_errors() {
 #[test]
 #[cfg(unix)]
 fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
-    if is_running_as_root() {
-        return;
-    }
-
     let dir = tempfile::tempdir().expect("tempdir");
 
     let blocked = dir.path().join("blocked");
     std::fs::create_dir(&blocked).expect("mkdir");
     std::fs::write(blocked.join("b.txt"), "needle\n").expect("write");
-    let _chmod_guard = PermissionRestoreGuard::set(&blocked, 0o000);
+    let Some(_chmod_guard) = chmod_000_blocks_read_dir(&blocked) else {
+        return;
+    };
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let err = grep(
@@ -264,15 +298,13 @@ fn grep_root_walkdir_error_does_not_leak_absolute_paths() {
 #[test]
 #[cfg(unix)]
 fn grep_skips_unreadable_files() {
-    if is_running_as_root() {
-        return;
-    }
-
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
     let unreadable = dir.path().join("b.txt");
     std::fs::write(&unreadable, "needle\n").expect("write");
-    let _chmod_guard = PermissionRestoreGuard::set(&unreadable, 0o000);
+    let Some(_chmod_guard) = chmod_000_blocks_file_read(&unreadable) else {
+        return;
+    };
 
     let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
     let resp = grep(
@@ -297,6 +329,7 @@ fn grep_respects_max_walk_ms_time_budget() {
     std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    // Contract: max_walk_ms=0 means "immediate time limit", not "disabled".
     policy.limits.max_walk_ms = Some(0);
 
     let ctx = Context::new(policy).expect("ctx");
@@ -455,11 +488,13 @@ fn grep_honors_max_walk_files() {
 #[test]
 fn grep_honors_max_walk_entries() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("a.txt"), "hello\n").expect("write");
-    std::fs::write(dir.path().join("b.txt"), "world\n").expect("write");
+    std::fs::create_dir(dir.path().join("sub")).expect("mkdir");
+    std::fs::write(dir.path().join("sub").join("a.txt"), "hello\n").expect("write");
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
     policy.limits.max_walk_entries = 1;
+    // Keep policy valid (files <= entries), and rely on directory-first entry consumption
+    // to isolate the Entries cap from the Files cap.
     policy.limits.max_walk_files = 1;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -475,7 +510,7 @@ fn grep_honors_max_walk_entries() {
     .expect("grep");
 
     assert!(resp.matches.is_empty());
-    assert_eq!(resp.scanned_files, 1);
+    assert_eq!(resp.scanned_files, 0);
     assert!(resp.scan_limit_reached);
     assert!(resp.truncated);
     assert_eq!(

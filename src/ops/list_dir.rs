@@ -1,12 +1,29 @@
 use std::collections::BinaryHeap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
 use super::Context;
+
+#[cfg(unix)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(windows)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListDirRequest {
@@ -65,6 +82,25 @@ enum EntryOutcome {
     Accepted(ListDirEntry),
     Denied,
     SkippedIoError,
+}
+
+fn ensure_directory_identity_unchanged(
+    dir: &Path,
+    relative_dir: &Path,
+    expected_meta: &fs::Metadata,
+) -> Result<()> {
+    let current_meta = fs::symlink_metadata(dir)
+        .map_err(|err| Error::io_path("symlink_metadata", relative_dir, err))?;
+    if current_meta.file_type().is_symlink()
+        || !current_meta.is_dir()
+        || !metadata_same_file(expected_meta, &current_meta)
+    {
+        return Err(Error::InvalidPath(format!(
+            "path {} changed during list_dir; refusing to continue",
+            relative_dir.display()
+        )));
+    }
+    Ok(())
 }
 
 fn process_dir_entry(
@@ -135,8 +171,9 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let (dir, relative_dir, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
-    let meta = fs::metadata(&dir).map_err(|err| Error::io_path("metadata", &relative_dir, err))?;
-    if !meta.is_dir() {
+    let meta = fs::symlink_metadata(&dir)
+        .map_err(|err| Error::io_path("symlink_metadata", &relative_dir, err))?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
         return Err(Error::InvalidPath(format!(
             "path {} is not a directory",
             relative_dir.display()
@@ -148,7 +185,12 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;
 
-    for entry in fs::read_dir(&dir).map_err(|err| Error::io_path("read_dir", &relative_dir, err))? {
+    ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
+    let read_dir =
+        fs::read_dir(&dir).map_err(|err| Error::io_path("read_dir", &relative_dir, err))?;
+    ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
+
+    for entry in read_dir {
         let entry = match entry {
             Ok(entry) => entry,
             Err(_) => {
@@ -183,6 +225,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
             }
         }
     }
+    ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
 
     let truncated = matched_entries > max_entries;
 

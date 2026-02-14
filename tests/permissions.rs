@@ -2,7 +2,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::test_policy;
+use common::{permissive_test_policy, test_policy};
 use safe_fs_tools::ops::{
     Context, CopyFileRequest, DeleteRequest, EditRequest, GlobRequest, GrepRequest, ListDirRequest,
     MkdirRequest, MovePathRequest, ReadRequest, StatRequest, WriteFileRequest, copy_file, delete,
@@ -16,9 +16,10 @@ use safe_fs_tools::ops::{PatchRequest, apply_unified_patch};
 fn assert_not_permitted(err: safe_fs_tools::Error, op: &str, reason_token: &str) {
     match err {
         safe_fs_tools::Error::NotPermitted(message) => {
-            assert!(
-                message.contains(op),
-                "expected not_permitted reason to contain operation token '{op}', got '{message}'"
+            let actual_op = message.split_whitespace().next().unwrap_or_default();
+            assert_eq!(
+                actual_op, op,
+                "expected not_permitted reason to start with operation token '{op}', got '{message}'"
             );
             assert!(
                 message.contains(reason_token),
@@ -593,43 +594,191 @@ fn assert_root_not_found(err: safe_fs_tools::Error, expected_root_id: &str) {
     }
 }
 
+fn assert_missing_root<T: std::fmt::Debug>(result: Result<T, safe_fs_tools::Error>, op: &str) {
+    let err = result.expect_err(&format!("{op} should reject missing root"));
+    assert_root_not_found(err, "missing");
+}
+
 #[test]
 fn root_not_found_is_reported() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let file_path = dir.path().join("file.txt");
+    let from = dir.path().join("from.txt");
+    let to = dir.path().join("to.txt");
+    std::fs::write(&file_path, "hello\n").expect("write file");
+    std::fs::write(&from, "from\n").expect("write from");
+    std::fs::write(&to, "to\n").expect("write to");
+    let ctx = Context::new(permissive_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
 
-    let err = read_file(
-        &ctx,
-        ReadRequest {
-            root_id: "missing".to_string(),
-            path: PathBuf::from("file.txt"),
-            start_line: None,
-            end_line: None,
-        },
-    )
-    .expect_err("should reject");
-    assert_root_not_found(err, "missing");
+    assert_missing_root(
+        read_file(
+            &ctx,
+            ReadRequest {
+                root_id: "missing".to_string(),
+                path: PathBuf::from("file.txt"),
+                start_line: None,
+                end_line: None,
+            },
+        ),
+        "read",
+    );
 
-    let err = write_file(
-        &ctx,
-        WriteFileRequest {
-            root_id: "missing".to_string(),
-            path: PathBuf::from("file.txt"),
-            content: "hello\n".to_string(),
-            overwrite: true,
-            create_parents: false,
-        },
-    )
-    .expect_err("should reject");
-    assert_root_not_found(err, "missing");
+    assert_missing_root(
+        write_file(
+            &ctx,
+            WriteFileRequest {
+                root_id: "missing".to_string(),
+                path: PathBuf::from("file.txt"),
+                content: "updated\n".to_string(),
+                overwrite: true,
+                create_parents: false,
+            },
+        ),
+        "write",
+    );
 
-    let err = glob_paths(
-        &ctx,
-        GlobRequest {
-            root_id: "missing".to_string(),
-            pattern: "**/*.txt".to_string(),
-        },
-    )
-    .expect_err("should reject");
-    assert_root_not_found(err, "missing");
+    assert_missing_root(
+        glob_paths(
+            &ctx,
+            GlobRequest {
+                root_id: "missing".to_string(),
+                pattern: "**/*.txt".to_string(),
+            },
+        ),
+        "glob",
+    );
+
+    assert_missing_root(
+        grep(
+            &ctx,
+            GrepRequest {
+                root_id: "missing".to_string(),
+                query: "hello".to_string(),
+                regex: false,
+                glob: None,
+            },
+        ),
+        "grep",
+    );
+
+    assert_missing_root(
+        list_dir(
+            &ctx,
+            ListDirRequest {
+                root_id: "missing".to_string(),
+                path: PathBuf::from("."),
+                max_entries: None,
+            },
+        ),
+        "list_dir",
+    );
+
+    assert_missing_root(
+        stat(
+            &ctx,
+            StatRequest {
+                root_id: "missing".to_string(),
+                path: PathBuf::from("file.txt"),
+            },
+        ),
+        "stat",
+    );
+
+    assert_missing_root(
+        edit_range(
+            &ctx,
+            EditRequest {
+                root_id: "missing".to_string(),
+                path: PathBuf::from("file.txt"),
+                start_line: 1,
+                end_line: 1,
+                replacement: "HELLO".to_string(),
+            },
+        ),
+        "edit",
+    );
+
+    #[cfg(feature = "patch")]
+    assert_missing_root(
+        apply_unified_patch(
+            &ctx,
+            PatchRequest {
+                root_id: "missing".to_string(),
+                path: PathBuf::from("file.txt"),
+                patch: "x".to_string(),
+            },
+        ),
+        "patch",
+    );
+
+    assert_missing_root(
+        mkdir(
+            &ctx,
+            MkdirRequest {
+                root_id: "missing".to_string(),
+                path: PathBuf::from("sub"),
+                create_parents: true,
+                ignore_existing: false,
+            },
+        ),
+        "mkdir",
+    );
+
+    assert_missing_root(
+        delete(
+            &ctx,
+            DeleteRequest {
+                root_id: "missing".to_string(),
+                path: PathBuf::from("file.txt"),
+                recursive: false,
+                ignore_missing: false,
+            },
+        ),
+        "delete",
+    );
+
+    assert_missing_root(
+        move_path(
+            &ctx,
+            MovePathRequest {
+                root_id: "missing".to_string(),
+                from: PathBuf::from("from.txt"),
+                to: PathBuf::from("to.txt"),
+                overwrite: true,
+                create_parents: false,
+            },
+        ),
+        "move",
+    );
+
+    assert_missing_root(
+        copy_file(
+            &ctx,
+            CopyFileRequest {
+                root_id: "missing".to_string(),
+                from: PathBuf::from("from.txt"),
+                to: PathBuf::from("to.txt"),
+                overwrite: true,
+                create_parents: false,
+            },
+        ),
+        "copy_file",
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&file_path).expect("read file after missing root rejects"),
+        "hello\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&from).expect("read from after missing root rejects"),
+        "from\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&to).expect("read to after missing root rejects"),
+        "to\n"
+    );
+    assert!(
+        !dir.path().join("sub").exists(),
+        "missing root mkdir must not create target directory"
+    );
 }

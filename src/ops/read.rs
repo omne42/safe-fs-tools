@@ -7,6 +7,12 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
+#[derive(Debug, Clone, Copy)]
+enum ReadMode {
+    Full,
+    LineRange { start_line: u64, end_line: u64 },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadRequest {
     pub root_id: String,
@@ -43,83 +49,13 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
     let (path, relative, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
-    let (bytes_read, content) = match (request.start_line, request.end_line) {
-        (None, None) => {
-            let bytes =
-                super::io::read_bytes_limited(&path, &relative, ctx.policy.limits.max_read_bytes)?;
-            let bytes_read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-            let content =
-                String::from_utf8(bytes).map_err(|_| Error::InvalidUtf8(relative.clone()))?;
-            (bytes_read, content)
-        }
-        (Some(start_line), Some(end_line)) => {
-            if start_line == 0 || end_line == 0 || start_line > end_line {
-                return Err(Error::InvalidPath(format!(
-                    "invalid line range: {}..{}",
-                    start_line, end_line
-                )));
-            }
-
-            let (file, meta) = super::io::open_regular_file_for_read(&path, &relative)?;
-            let file_size_bytes = meta.len();
-            let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
-            let mut reader = std::io::BufReader::new(file.take(limit));
-            let mut buf = Vec::<u8>::new();
-            let mut out = Vec::<u8>::new();
-
-            let mut scanned_bytes: u64 = 0;
-            let mut current_line: u64 = 0;
-
-            loop {
-                buf.clear();
-                let n = reader
-                    .read_until(b'\n', &mut buf)
-                    .map_err(|err| Error::io_path("read", &relative, err))?;
-                if n == 0 {
-                    break;
-                }
-
-                scanned_bytes = scanned_bytes.saturating_add(n as u64);
-                if scanned_bytes > ctx.policy.limits.max_read_bytes {
-                    let size_bytes = file_size_bytes.max(scanned_bytes);
-                    return Err(Error::FileTooLarge {
-                        path: relative.clone(),
-                        size_bytes,
-                        max_bytes: ctx.policy.limits.max_read_bytes,
-                    });
-                }
-
-                current_line += 1;
-                std::str::from_utf8(&buf).map_err(|_| Error::InvalidUtf8(relative.clone()))?;
-
-                if current_line < start_line {
-                    continue;
-                }
-                if current_line <= end_line {
-                    out.extend_from_slice(&buf);
-                    if current_line == end_line {
-                        break;
-                    }
-                }
-            }
-
-            if current_line < end_line {
-                return Err(Error::InvalidPath(format!(
-                    "invalid line range: {}..{} out of bounds (file has {} lines)",
-                    start_line, end_line, current_line
-                )));
-            }
-
-            let bytes_read = scanned_bytes;
-            let content =
-                String::from_utf8(out).map_err(|_| Error::InvalidUtf8(relative.clone()))?;
-            (bytes_read, content)
-        }
-        _ => {
-            return Err(Error::InvalidPath(
-                "invalid line range: start_line and end_line must be provided together".to_string(),
-            ));
-        }
+    let mode = parse_read_mode(request.start_line, request.end_line)?;
+    let (bytes_read, content) = match mode {
+        ReadMode::Full => read_full(&path, &relative, ctx)?,
+        ReadMode::LineRange {
+            start_line,
+            end_line,
+        } => read_line_range(&path, &relative, ctx, start_line, end_line)?,
     };
 
     let content = ctx.redactor.redact_text(&content);
@@ -133,4 +69,99 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
         start_line: request.start_line,
         end_line: request.end_line,
     })
+}
+
+fn parse_read_mode(start_line: Option<u64>, end_line: Option<u64>) -> Result<ReadMode> {
+    match (start_line, end_line) {
+        (None, None) => Ok(ReadMode::Full),
+        (Some(start_line), Some(end_line)) => {
+            if start_line == 0 || end_line == 0 || start_line > end_line {
+                return Err(invalid_line_range(format!(
+                    "invalid line range: {}..{}",
+                    start_line, end_line
+                )));
+            }
+            Ok(ReadMode::LineRange {
+                start_line,
+                end_line,
+            })
+        }
+        _ => Err(invalid_line_range(
+            "invalid line range: start_line and end_line must be provided together".to_string(),
+        )),
+    }
+}
+
+fn read_full(path: &std::path::Path, relative: &PathBuf, ctx: &Context) -> Result<(u64, String)> {
+    let bytes = super::io::read_bytes_limited(path, relative, ctx.policy.limits.max_read_bytes)?;
+    let bytes_read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    let content =
+        String::from_utf8(bytes).map_err(|err| Error::invalid_utf8(relative.clone(), err))?;
+    Ok((bytes_read, content))
+}
+
+fn read_line_range(
+    path: &std::path::Path,
+    relative: &PathBuf,
+    ctx: &Context,
+    start_line: u64,
+    end_line: u64,
+) -> Result<(u64, String)> {
+    let (file, meta) = super::io::open_regular_file_for_read(path, relative)?;
+    let file_size_bytes = meta.len();
+    let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
+    let mut reader = std::io::BufReader::new(file.take(limit));
+    let mut buf = Vec::<u8>::new();
+    let mut out = Vec::<u8>::new();
+
+    let mut scanned_bytes: u64 = 0;
+    let mut current_line: u64 = 0;
+
+    loop {
+        buf.clear();
+        let n = reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|err| Error::io_path("read", relative, err))?;
+        if n == 0 {
+            break;
+        }
+
+        scanned_bytes = scanned_bytes.saturating_add(n as u64);
+        if scanned_bytes > ctx.policy.limits.max_read_bytes {
+            let size_bytes = file_size_bytes.max(scanned_bytes);
+            return Err(Error::FileTooLarge {
+                path: relative.clone(),
+                size_bytes,
+                max_bytes: ctx.policy.limits.max_read_bytes,
+            });
+        }
+
+        current_line += 1;
+
+        if current_line < start_line {
+            continue;
+        }
+        if current_line <= end_line {
+            out.extend_from_slice(&buf);
+            if current_line == end_line {
+                break;
+            }
+        }
+    }
+
+    if current_line < end_line {
+        return Err(invalid_line_range(format!(
+            "invalid line range: {}..{} out of bounds (file has {} lines)",
+            start_line, end_line, current_line
+        )));
+    }
+
+    let bytes_read = scanned_bytes;
+    let content =
+        String::from_utf8(out).map_err(|err| Error::invalid_utf8(relative.clone(), err))?;
+    Ok((bytes_read, content))
+}
+
+fn invalid_line_range(message: String) -> Error {
+    Error::InvalidPath(format!("invalid argument: {message}"))
 }

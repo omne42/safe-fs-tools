@@ -10,8 +10,19 @@ fn is_symlink_open_error(err: &io::Error) -> bool {
 }
 
 #[cfg(windows)]
-fn is_symlink_open_error(_err: &io::Error) -> bool {
-    false
+fn is_symlink_open_error(err: &io::Error) -> bool {
+    const ERROR_STOPPED_ON_SYMLINK: i32 = 681;
+    const ERROR_CANT_RESOLVE_FILENAME: i32 = 1921;
+    const ERROR_REPARSE_POINT_ENCOUNTERED: i32 = 4395;
+
+    match err.raw_os_error() {
+        Some(code) => {
+            code == ERROR_STOPPED_ON_SYMLINK
+                || code == ERROR_REPARSE_POINT_ENCOUNTERED
+                || code == ERROR_CANT_RESOLVE_FILENAME
+        }
+        None => false,
+    }
 }
 
 #[cfg(all(not(unix), not(windows)))]
@@ -56,7 +67,7 @@ fn open_input_file(path: &Path) -> Result<std::fs::File, safe_fs_tools::Error> {
     let file = open_readonly_nofollow(path).map_err(|err| {
         if is_symlink_open_error(&err) {
             return safe_fs_tools::Error::InvalidPath(format!(
-                "path resolution for {} encountered a symlink (or symlink loop); refusing to read text inputs from symlink paths",
+                "path resolution for {} encountered a symlink (or symlink loop) at the final path component; refusing to read text inputs from symlink final components",
                 path.display()
             ));
         }
@@ -83,7 +94,7 @@ fn open_input_file(path: &Path) -> Result<std::fs::File, safe_fs_tools::Error> {
             })?;
         if meta.file_type().is_symlink() {
             return Err(safe_fs_tools::Error::InvalidPath(format!(
-                "path {} is a symlink; refusing to read text inputs from symlink paths",
+                "path {} has a symlink final component; refusing to read text inputs from symlink final components",
                 path.display()
             )));
         }
@@ -166,5 +177,8 @@ pub(crate) fn load_text_limited(
         });
     }
 
-    String::from_utf8(bytes).map_err(|_| safe_fs_tools::Error::InvalidUtf8(path.to_path_buf()))
+    String::from_utf8(bytes).map_err(|err| safe_fs_tools::Error::InvalidUtf8 {
+        path: path.to_path_buf(),
+        source: err.into(),
+    })
 }

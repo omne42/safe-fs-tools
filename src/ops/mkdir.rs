@@ -22,7 +22,7 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 
 #[cfg(not(any(unix, windows)))]
 fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
-    true
+    false
 }
 
 fn ensure_target_dir_within_root(
@@ -57,6 +57,12 @@ fn ensure_parent_dir_unchanged(
             relative_parent.display()
         )));
     }
+    #[cfg(not(any(unix, windows)))]
+    {
+        return Err(Error::InvalidPath(
+            "unsupported platform for directory identity check".to_string(),
+        ));
+    }
     if !metadata_same_file(expected_parent_meta, &current_parent_meta) {
         return Err(Error::InvalidPath(format!(
             "parent path {} changed during operation",
@@ -67,11 +73,15 @@ fn ensure_parent_dir_unchanged(
 }
 
 fn cleanup_created_target_dir(
+    canonical_parent: &Path,
+    relative_parent: &Path,
+    expected_parent_meta: &fs::Metadata,
     target: &Path,
     relative: &Path,
     created_target_meta: &fs::Metadata,
     validation_err: &Error,
 ) -> Result<()> {
+    ensure_parent_dir_unchanged(canonical_parent, relative_parent, expected_parent_meta)?;
     let current_target_meta = fs::symlink_metadata(target)
         .map_err(|err| Error::io_path("symlink_metadata", relative, err))?;
     if current_target_meta.file_type().is_symlink()
@@ -239,6 +249,11 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 }
                 return Err(Error::io_path("create_dir", &relative, err));
             }
+            ensure_parent_dir_unchanged(
+                &canonical_parent,
+                &relative_parent,
+                &canonical_parent_meta,
+            )?;
             let created_target_meta = fs::symlink_metadata(&target)
                 .map_err(|meta_err| Error::io_path("symlink_metadata", &relative, meta_err))?;
             if created_target_meta.file_type().is_symlink() || !created_target_meta.is_dir() {
@@ -255,6 +270,9 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
                 &requested_path,
             ) {
                 if let Err(cleanup_err) = cleanup_created_target_dir(
+                    &canonical_parent,
+                    &relative_parent,
+                    &canonical_parent_meta,
                     &target,
                     &relative,
                     &created_target_meta,

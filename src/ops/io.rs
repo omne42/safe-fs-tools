@@ -5,11 +5,11 @@ use std::path::Path;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct FileIdentity {
+pub(super) enum FileIdentity {
     #[cfg(unix)]
-    dev: u64,
-    #[cfg(unix)]
-    ino: u64,
+    Unix { dev: u64, ino: u64 },
+    #[cfg(windows)]
+    Windows { volume_serial: u64, file_index: u64 },
 }
 
 impl FileIdentity {
@@ -18,12 +18,21 @@ impl FileIdentity {
         {
             use std::os::unix::fs::MetadataExt;
 
-            Some(Self {
+            Some(Self::Unix {
                 dev: meta.dev(),
                 ino: meta.ino(),
             })
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+
+            Some(Self::Windows {
+                volume_serial: u64::from(meta.volume_serial_number()?),
+                file_index: meta.file_index()?,
+            })
+        }
+        #[cfg(all(not(unix), not(windows)))]
         {
             let _ = meta;
             None
@@ -158,8 +167,9 @@ pub(super) fn read_bytes_limited(path: &Path, relative: &Path, max_bytes: u64) -
 }
 
 pub(super) fn read_string_limited(path: &Path, relative: &Path, max_bytes: u64) -> Result<String> {
-    let (text, _identity) = read_string_limited_with_identity(path, relative, max_bytes)?;
-    Ok(text)
+    let (file, meta) = open_regular_file_for_read(path, relative)?;
+    let bytes = read_open_file_limited(file, relative, max_bytes, meta.len())?;
+    decode_utf8(relative, &bytes)
 }
 
 pub(super) fn read_string_limited_with_identity(
@@ -168,12 +178,20 @@ pub(super) fn read_string_limited_with_identity(
     max_bytes: u64,
 ) -> Result<(String, Option<FileIdentity>)> {
     let (file, meta) = open_regular_file_for_read(path, relative)?;
-    let identity = FileIdentity::from_metadata(&meta);
+    let identity = FileIdentity::from_metadata(&meta).ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "cannot verify identity for path {} on this platform",
+            relative.display()
+        ))
+    })?;
     let bytes = read_open_file_limited(file, relative, max_bytes, meta.len())?;
-    std::str::from_utf8(&bytes)
-        .map_err(|_| Error::InvalidUtf8(relative.to_path_buf()))
+    decode_utf8(relative, &bytes).map(|text| (text, Some(identity)))
+}
+
+fn decode_utf8(relative: &Path, bytes: &[u8]) -> Result<String> {
+    std::str::from_utf8(bytes)
+        .map_err(|err| Error::invalid_utf8(relative.to_path_buf(), err))
         .map(str::to_string)
-        .map(|text| (text, identity))
 }
 
 fn file_too_large(relative: &Path, size_bytes: u64, max_bytes: u64) -> Error {
@@ -207,7 +225,7 @@ fn read_open_file_limited(
 }
 
 pub(super) fn write_bytes_atomic(path: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
-    write_bytes_atomic_checked(path, relative, bytes, None)
+    write_bytes_atomic_impl(path, relative, bytes, None, false)
 }
 
 pub(super) fn write_bytes_atomic_checked(
@@ -215,6 +233,22 @@ pub(super) fn write_bytes_atomic_checked(
     relative: &Path,
     bytes: &[u8],
     expected_identity: Option<FileIdentity>,
+) -> Result<()> {
+    let expected_identity = expected_identity.ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "cannot verify identity for path {} on this platform",
+            relative.display()
+        ))
+    })?;
+    write_bytes_atomic_impl(path, relative, bytes, Some(expected_identity), true)
+}
+
+fn write_bytes_atomic_impl(
+    path: &Path,
+    relative: &Path,
+    bytes: &[u8],
+    expected_identity: Option<FileIdentity>,
+    recheck_before_commit: bool,
 ) -> Result<()> {
     // Preserve prior behavior: fail if the original file isn't writable.
     let (_existing_file, meta) = open_regular_file_for_write(path, relative)?;
@@ -224,6 +258,7 @@ pub(super) fn write_bytes_atomic_checked(
         FileIdentity::from_metadata(&meta),
     )?;
 
+    // Keep existing mode/readonly permissions; other metadata is not preserved here.
     let perms = meta.permissions();
 
     let parent = path.parent().ok_or_else(|| {
@@ -265,7 +300,7 @@ pub(super) fn write_bytes_atomic_checked(
 
     let tmp_path = tmp_file.into_temp_path();
 
-    if expected_identity.is_some() {
+    if recheck_before_commit {
         // Best-effort conflict detection: re-open with no-follow and re-check identity
         // right before commit to narrow the TOCTOU window between read and replace.
         let (_recheck_file, recheck_meta) = open_regular_file_for_write(path, relative)?;

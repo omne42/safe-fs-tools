@@ -1,13 +1,13 @@
-#![cfg(any(feature = "glob", feature = "grep"))]
-
 mod common;
 
+#[cfg(any(feature = "glob", feature = "grep"))]
 use std::path::PathBuf;
 
 use common::test_policy;
 use safe_fs_tools::ops::Context;
 use safe_fs_tools::policy::RootMode;
 
+#[cfg(any(feature = "glob", feature = "grep"))]
 fn setup_skip_glob_fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("node_modules")).expect("mkdir");
@@ -97,7 +97,7 @@ fn traversal_skip_globs_support_leading_dot_slash() {
     assert_skip_glob_applies_to_grep_but_not_direct_read("./node_modules/**");
 }
 
-fn assert_skip_glob_pattern_rejected(pattern: &str) {
+fn assert_skip_glob_pattern_rejected(pattern: &str, semantic_hint: &str) {
     let dir = tempfile::tempdir().expect("tempdir");
 
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
@@ -107,12 +107,12 @@ fn assert_skip_glob_pattern_rejected(pattern: &str) {
     match err {
         safe_fs_tools::Error::InvalidPolicy(message) => {
             assert!(
-                message.contains("invalid traversal.skip_globs glob"),
-                "unexpected invalid policy message for pattern {pattern:?}: {message}"
+                message.contains("traversal.skip_globs"),
+                "unexpected invalid policy scope for pattern {pattern:?}: {message}"
             );
             assert!(
-                message.contains(pattern),
-                "expected invalid policy message to include pattern {pattern:?}: {message}"
+                message.contains(semantic_hint),
+                "expected invalid policy message to include semantic hint {semantic_hint:?} for pattern {pattern:?}: {message}"
             );
         }
         other => panic!("unexpected error: {other:?}"),
@@ -121,17 +121,23 @@ fn assert_skip_glob_pattern_rejected(pattern: &str) {
 
 #[test]
 fn traversal_skip_globs_reject_absolute_pattern() {
-    assert_skip_glob_pattern_rejected("/node_modules/**");
+    assert_skip_glob_pattern_rejected("/node_modules/**", "root-relative");
+}
+
+#[test]
+#[cfg(windows)]
+fn traversal_skip_globs_reject_windows_drive_absolute_pattern() {
+    assert_skip_glob_pattern_rejected(r"C:\node_modules\**", "drive letter prefixes");
 }
 
 #[test]
 fn traversal_skip_globs_reject_parent_prefix_pattern() {
-    assert_skip_glob_pattern_rejected("../**/*.txt");
+    assert_skip_glob_pattern_rejected("../**/*.txt", "must not contain '..'");
 }
 
 #[test]
 fn traversal_skip_globs_reject_parent_segment_pattern() {
-    assert_skip_glob_pattern_rejected("src/../*.txt");
+    assert_skip_glob_pattern_rejected("src/../*.txt", "must not contain '..'");
 }
 
 #[test]

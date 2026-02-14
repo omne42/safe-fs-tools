@@ -53,15 +53,15 @@ fn build_glob_response(
     matches.sort();
     GlobResponse {
         matches,
-        truncated: diag.truncated,
-        scanned_files: diag.scanned_files,
-        scan_limit_reached: diag.scan_limit_reached,
-        scan_limit_reason: diag.scan_limit_reason,
+        truncated: diag.truncated(),
+        scanned_files: diag.scanned_files(),
+        scan_limit_reached: diag.scan_limit_reached(),
+        scan_limit_reason: diag.scan_limit_reason(),
         elapsed_ms: elapsed_ms(started),
-        scanned_entries: diag.scanned_entries,
-        skipped_walk_errors: diag.skipped_walk_errors,
-        skipped_io_errors: diag.skipped_io_errors,
-        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets,
+        scanned_entries: diag.scanned_entries(),
+        skipped_walk_errors: diag.skipped_walk_errors(),
+        skipped_io_errors: diag.skipped_io_errors(),
+        skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets(),
     }
 }
 
@@ -90,15 +90,18 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let mut diag = TraversalDiagnostics::default();
     let walk_root = match derive_safe_traversal_prefix(&request.pattern) {
         Some(prefix) => {
+            let walk_root = root_path.join(&prefix);
+            let prefix_is_dir = walk_root.is_dir();
             let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
             if ctx.redactor.is_path_denied(&prefix)
-                || ctx.redactor.is_path_denied(&probe)
                 || ctx.is_traversal_path_skipped(&prefix)
-                || ctx.is_traversal_path_skipped(&probe)
+                || (prefix_is_dir
+                    && (ctx.redactor.is_path_denied(&probe)
+                        || ctx.is_traversal_path_skipped(&probe)))
             {
                 return Ok(build_glob_response(matches, diag, &started));
             }
-            root_path.join(prefix)
+            walk_root
         }
         None => root_path.clone(),
     };
@@ -121,10 +124,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         },
     ) {
         Ok(diag) => diag,
-        Err(Error::WalkDirRoot { path, source })
-            if source.kind() == std::io::ErrorKind::NotFound
-                && path.as_path() != std::path::Path::new(".") =>
-        {
+        Err(Error::WalkDirRoot { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
             return Ok(build_glob_response(matches, diag, &started));
         }
         Err(err) => return Err(err),

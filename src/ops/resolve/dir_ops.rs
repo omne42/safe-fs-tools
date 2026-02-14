@@ -3,6 +3,23 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::error::{Error, Result};
 
+#[cfg(unix)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(windows)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    a.volume_serial_number() == b.volume_serial_number() && a.file_index() == b.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
+    false
+}
+
 fn outside_root_error(root_id: &str, relative: &Path) -> Error {
     Error::OutsideRoot {
         root_id: root_id.to_string(),
@@ -33,6 +50,60 @@ fn canonicalize_checked(
         .map_err(|err| Error::io_path("canonicalize", relative, err))?;
     ensure_canonical_under_root(&canonical, canonical_root, root_id, relative)?;
     Ok(canonical)
+}
+
+fn canonical_relative_checked(
+    canonical: &Path,
+    canonical_root: &Path,
+    root_id: &str,
+    relative: &Path,
+) -> Result<PathBuf> {
+    ensure_canonical_under_root(canonical, canonical_root, root_id, relative)?;
+    crate::path_utils::strip_prefix_case_insensitive(canonical, canonical_root).ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "failed to derive root-relative path from canonical path {}",
+            canonical.display()
+        ))
+    })
+}
+
+fn reject_secret_canonical_path(
+    ctx: &super::super::Context,
+    canonical: &Path,
+    canonical_root: &Path,
+    root_id: &str,
+    relative: &Path,
+) -> Result<()> {
+    let relative_path = canonical_relative_checked(canonical, canonical_root, root_id, relative)?;
+    ctx.reject_secret_path(relative_path)?;
+    Ok(())
+}
+
+fn cleanup_created_dir(
+    next: &Path,
+    relative: &Path,
+    created_meta: &fs::Metadata,
+    validation_err: &Error,
+) -> Result<()> {
+    let current_meta = fs::symlink_metadata(next)
+        .map_err(|err| Error::io_path("symlink_metadata", relative, err))?;
+    if current_meta.file_type().is_symlink()
+        || !current_meta.is_dir()
+        || !metadata_same_file(created_meta, &current_meta)
+    {
+        return Err(Error::InvalidPath(
+            "path changed before cleanup".to_string(),
+        ));
+    }
+    fs::remove_dir(next).map_err(|cleanup_err| {
+        let cleanup_context = std::io::Error::new(
+            cleanup_err.kind(),
+            format!(
+                "directory post-create validation failed ({validation_err}); cleanup failed: {cleanup_err}"
+            ),
+        );
+        Error::io_path("remove_dir", relative, cleanup_context)
+    })
 }
 
 fn handle_existing_component(
@@ -100,7 +171,7 @@ pub(super) fn ensure_dir_under_root(
         current_relative.push(&segment);
         let next = current.join(&segment);
 
-        current = match fs::symlink_metadata(&next) {
+        let resolved_current = match fs::symlink_metadata(&next) {
             Ok(meta) => handle_existing_component(
                 &next,
                 &meta,
@@ -112,6 +183,13 @@ pub(super) fn ensure_dir_under_root(
                 if !create_missing {
                     return Err(Error::io_path("symlink_metadata", &current_relative, err));
                 }
+                reject_secret_canonical_path(
+                    ctx,
+                    &next,
+                    &canonical_root,
+                    root_id,
+                    &current_relative,
+                )?;
                 let created_now = match fs::create_dir(&next) {
                     Ok(()) => true,
                     Err(create_err) if create_err.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -120,6 +198,13 @@ pub(super) fn ensure_dir_under_root(
                     Err(create_err) => {
                         return Err(Error::io_path("create_dir", &current_relative, create_err));
                     }
+                };
+                let created_meta = if created_now {
+                    Some(fs::symlink_metadata(&next).map_err(|meta_err| {
+                        Error::io_path("symlink_metadata", &current_relative, meta_err)
+                    })?)
+                } else {
+                    None
                 };
 
                 match fs::symlink_metadata(&next)
@@ -137,21 +222,8 @@ pub(super) fn ensure_dir_under_root(
                     }) {
                     Ok(canonical) => canonical,
                     Err(err) => {
-                        if created_now {
-                            let validation_message = err.to_string();
-                            if let Err(cleanup_err) = fs::remove_dir(&next) {
-                                let cleanup_context = std::io::Error::new(
-                                    cleanup_err.kind(),
-                                    format!(
-                                        "directory post-create validation failed ({validation_message}); cleanup failed: {cleanup_err}"
-                                    ),
-                                );
-                                return Err(Error::io_path(
-                                    "remove_dir",
-                                    &current_relative,
-                                    cleanup_context,
-                                ));
-                            }
+                        if let Some(created_meta) = created_meta.as_ref() {
+                            cleanup_created_dir(&next, &current_relative, created_meta, &err)?;
                         }
                         return Err(err);
                     }
@@ -159,6 +231,14 @@ pub(super) fn ensure_dir_under_root(
             }
             Err(err) => return Err(Error::io_path("symlink_metadata", &current_relative, err)),
         };
+        reject_secret_canonical_path(
+            ctx,
+            &resolved_current,
+            &canonical_root,
+            root_id,
+            &current_relative,
+        )?;
+        current = resolved_current;
     }
 
     Ok(current)

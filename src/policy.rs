@@ -324,9 +324,9 @@ impl SandboxPolicy {
     /// Use `ops::Context` (or equivalent checks) to ensure the resolved path
     /// stays within the root.
     ///
-    /// On Windows, this also rejects drive-relative paths (e.g. `C:foo`) and
-    /// paths containing `:` in a normal component (blocks NTFS alternate data
-    /// streams like `file.txt:stream`).
+    /// On Windows, this also rejects rooted paths (e.g. `\foo`), drive-relative
+    /// paths (e.g. `C:foo`), and paths containing `:` in a normal component
+    /// (blocks NTFS alternate data streams like `file.txt:stream`).
     ///
     /// This function is purely lexical: it does not touch the filesystem and does not attempt to
     /// detect Windows reparse points / junctions. Root boundary enforcement is best-effort and
@@ -345,6 +345,12 @@ impl SandboxPolicy {
         {
             use std::os::windows::ffi::OsStrExt;
 
+            if !path.is_absolute() && matches!(path.components().next(), Some(Component::RootDir)) {
+                return Err(Error::InvalidPath(format!(
+                    "invalid path {}: rooted paths are not supported",
+                    path.display()
+                )));
+            }
             for comp in path.components() {
                 if let Component::Normal(part) = comp
                     && part.encode_wide().any(|ch| ch == u16::from(b':'))
@@ -376,7 +382,6 @@ impl SandboxPolicy {
     ///
     /// Prefer [`SandboxPolicy::resolve_path_unchecked`] at new callsites so API semantics are
     /// explicit.
-    #[deprecated(note = "use resolve_path_unchecked or Context checked APIs")]
     pub fn resolve_path(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
         self.resolve_path_unchecked(root_id, path)
     }

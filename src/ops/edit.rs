@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -34,10 +34,13 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
     if request.start_line == 0 || request.end_line == 0 || request.start_line > request.end_line {
-        return Err(invalid_edit_range(format!(
-            "invalid line range {}..{}",
-            request.start_line, request.end_line
-        )));
+        return Err(invalid_edit_range(
+            &relative,
+            format!(
+                "invalid line range {}..{}",
+                request.start_line, request.end_line
+            ),
+        ));
     }
 
     let (content, identity) = super::io::read_string_limited_with_identity(
@@ -51,23 +54,38 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         content.split_inclusive('\n').collect()
     };
     let start = usize::try_from(request.start_line - 1).map_err(|_| {
-        invalid_edit_range(format!("line number too large: {}", request.start_line))
+        invalid_edit_range(
+            &relative,
+            format!("line number too large: {}", request.start_line),
+        )
     })?;
-    let end = usize::try_from(request.end_line - 1)
-        .map_err(|_| invalid_edit_range(format!("line number too large: {}", request.end_line)))?;
+    let end = usize::try_from(request.end_line - 1).map_err(|_| {
+        invalid_edit_range(
+            &relative,
+            format!("line number too large: {}", request.end_line),
+        )
+    })?;
     if start >= lines.len() || end >= lines.len() {
-        return Err(invalid_edit_range(format!(
-            "line range {}..{} out of bounds (file has {} lines)",
-            request.start_line,
-            request.end_line,
-            lines.len()
-        )));
+        return Err(invalid_edit_range(
+            &relative,
+            format!(
+                "line range {}..{} out of bounds (file has {} lines)",
+                request.start_line,
+                request.end_line,
+                lines.len()
+            ),
+        ));
     }
 
-    let removed_bytes: u64 = lines[start..=end]
-        .iter()
-        .map(|line| line.len() as u64)
-        .sum();
+    let removed_bytes = lines[start..=end].iter().try_fold(0_u64, |total, line| {
+        let line_bytes = usize_to_u64(line.len(), &relative, "line length")?;
+        total.checked_add(line_bytes).ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "{}: removed byte count overflow",
+                relative.display()
+            ))
+        })
+    })?;
 
     let newline = if lines[end].ends_with("\r\n") {
         "\r\n"
@@ -83,9 +101,17 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         replacement.push_str(newline);
     }
 
-    let output_bytes = (content.len() as u64)
-        .saturating_sub(removed_bytes)
-        .saturating_add(replacement.len() as u64);
+    let content_bytes = usize_to_u64(content.len(), &relative, "file size")?;
+    let replacement_bytes = usize_to_u64(replacement.len(), &relative, "replacement size")?;
+    let output_bytes = content_bytes
+        .checked_sub(removed_bytes)
+        .and_then(|remaining| remaining.checked_add(replacement_bytes))
+        .ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "{}: output byte count overflow",
+                relative.display()
+            ))
+        })?;
     if output_bytes > ctx.policy.limits.max_write_bytes {
         return Err(Error::FileTooLarge {
             path: relative.clone(),
@@ -109,11 +135,15 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         super::io::write_bytes_atomic_checked(&path, &relative, out.as_bytes(), identity)?;
     }
 
-    let output_len = u64::try_from(out.len()).unwrap_or(u64::MAX);
+    let output_len = if changed {
+        usize_to_u64(out.len(), &relative, "output size")?
+    } else {
+        0
+    };
     Ok(EditResponse {
         path: relative,
         requested_path: Some(requested_path),
-        bytes_written: if changed { output_len } else { 0 },
+        bytes_written: output_len,
     })
 }
 
@@ -140,6 +170,15 @@ fn normalize_replacement_line_endings(replacement: &str, newline: &str) -> Strin
     out
 }
 
-fn invalid_edit_range(message: String) -> Error {
-    Error::Patch(format!("invalid edit range: {message}"))
+fn invalid_edit_range(path: &Path, message: String) -> Error {
+    Error::InvalidPath(format!("{}: invalid edit range: {message}", path.display()))
+}
+
+fn usize_to_u64(value: usize, path: &Path, context: &str) -> Result<u64> {
+    u64::try_from(value).map_err(|_| {
+        Error::InvalidPath(format!(
+            "{}: {context} exceeds supported size",
+            path.display()
+        ))
+    })
 }
