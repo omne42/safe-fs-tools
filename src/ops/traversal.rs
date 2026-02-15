@@ -77,22 +77,14 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
         const BACKSLASH: u16 = b'\\' as u16;
         const SLASH: u16 = b'/' as u16;
 
-        let mut has_backslash = false;
+        if !path.as_os_str().encode_wide().any(|unit| unit == BACKSLASH) {
+            return glob.is_match(path);
+        }
         let normalized_wide: Vec<u16> = path
             .as_os_str()
             .encode_wide()
-            .map(|unit| {
-                if unit == BACKSLASH {
-                    has_backslash = true;
-                    SLASH
-                } else {
-                    unit
-                }
-            })
+            .map(|unit| if unit == BACKSLASH { SLASH } else { unit })
             .collect();
-        if !has_backslash {
-            return glob.is_match(path);
-        }
         let normalized = OsString::from_wide(&normalized_wide);
         return glob.is_match(Path::new(&normalized));
     }

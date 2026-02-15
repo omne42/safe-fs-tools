@@ -538,6 +538,28 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 if line_buf.last() == Some(&b'\r') {
                     let _ = line_buf.pop();
                 }
+                if regex.is_none() && !contains_query {
+                    // Preserve non-UTF8 skip semantics while avoiding UTF-8 decode on the
+                    // common ASCII no-match fast path.
+                    let utf8_ok = if line_buf.is_ascii() {
+                        true
+                    } else {
+                        match std::str::from_utf8(&line_buf) {
+                            Ok(_) => true,
+                            Err(err) if line_was_capped && err.error_len().is_none() => true,
+                            Err(_) => false,
+                        }
+                    };
+                    if !utf8_ok {
+                        matches.truncate(file_match_start);
+                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                        counters.skipped_non_utf8_files =
+                            counters.skipped_non_utf8_files.saturating_add(1);
+                        return Ok(std::ops::ControlFlow::Continue(()));
+                    }
+                    maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                    continue;
+                }
                 let line = match std::str::from_utf8(&line_buf) {
                     Ok(line) => line,
                     Err(err) if line_was_capped && err.error_len().is_none() => {
