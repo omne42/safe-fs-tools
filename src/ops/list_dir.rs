@@ -199,7 +199,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         )));
     }
 
-    let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
+    let root_path = ctx.canonical_root(&request.root_id)?;
     let mut heap = BinaryHeap::<Candidate>::new();
     let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;
@@ -217,7 +217,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 continue;
             }
         };
-        match process_dir_entry(ctx, entry, &root_path)? {
+        match process_dir_entry(ctx, entry, root_path)? {
             EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
                 if max_entries == 0 {
