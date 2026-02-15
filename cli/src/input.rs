@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::Read;
 use std::path::Path;
 
@@ -11,9 +11,9 @@ fn symlink_rejected_error(path: &Path) -> safe_fs_tools::Error {
     ))
 }
 
-fn open_input_file(path: &Path) -> Result<File, safe_fs_tools::Error> {
+fn open_input_file(path: &Path) -> Result<(File, Metadata), safe_fs_tools::Error> {
     match safe_fs_tools::open_regular_readonly_nofollow(path) {
-        Ok((file, _metadata)) => Ok(file),
+        Ok((file, metadata)) => Ok((file, metadata)),
         Err(err) => {
             if safe_fs_tools::is_symlink_or_reparse_open_error(&err) {
                 return Err(symlink_rejected_error(path));
@@ -74,15 +74,8 @@ pub(crate) fn load_text_limited(
                 source: err,
             })?;
     } else {
-        let file = open_input_file(path)?;
-        let file_size = file
-            .metadata()
-            .map_err(|err| safe_fs_tools::Error::IoPath {
-                op: "metadata",
-                path: path.to_path_buf(),
-                source: err,
-            })?
-            .len();
+        let (file, metadata) = open_input_file(path)?;
+        let file_size = metadata.len();
         if file_size > max_bytes {
             return Err(safe_fs_tools::Error::InputTooLarge {
                 size_bytes: file_size,
@@ -90,6 +83,8 @@ pub(crate) fn load_text_limited(
             });
         }
         known_size = Some(file_size);
+        bytes =
+            initial_input_capacity(file_size, max_bytes).map_or_else(Vec::new, Vec::with_capacity);
 
         file.take(limit)
             .read_to_end(&mut bytes)
@@ -113,4 +108,8 @@ pub(crate) fn load_text_limited(
         path: path.to_path_buf(),
         source: err.into(),
     })
+}
+
+fn initial_input_capacity(file_size: u64, max_bytes: u64) -> Option<usize> {
+    usize::try_from(file_size.min(max_bytes)).ok()
 }
