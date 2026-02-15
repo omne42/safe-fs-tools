@@ -207,12 +207,15 @@ fn append_segment_with_limit(output: &mut String, segment: &str) -> bool {
 }
 
 fn replace_regex_with_limit(input: &str, regex: &Regex, replacement: &str) -> RegexReplaceResult {
-    let mut output = String::with_capacity(input.len());
-    let mut last = 0usize;
-    let mut matched = false;
+    let mut matches = regex.find_iter(input);
+    let Some(first_match) = matches.next() else {
+        return RegexReplaceResult::NoMatch;
+    };
 
-    for found in regex.find_iter(input) {
-        matched = true;
+    let mut output = String::with_capacity(input.len().min(MAX_REDACTED_OUTPUT_BYTES));
+    let mut last = 0usize;
+
+    for found in std::iter::once(first_match).chain(matches) {
         if !append_segment_with_limit(&mut output, &input[last..found.start()]) {
             return RegexReplaceResult::OutputLimitExceeded;
         }
@@ -222,9 +225,6 @@ fn replace_regex_with_limit(input: &str, regex: &Regex, replacement: &str) -> Re
         last = found.end();
     }
 
-    if !matched {
-        return RegexReplaceResult::NoMatch;
-    }
     if !append_segment_with_limit(&mut output, &input[last..]) {
         return RegexReplaceResult::OutputLimitExceeded;
     }

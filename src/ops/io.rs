@@ -205,7 +205,10 @@ fn read_open_file_limited(
     }
 
     let limit = max_bytes.saturating_add(1);
-    let mut bytes = Vec::<u8>::new();
+    let mut bytes = match usize::try_from(known_size.min(max_bytes)) {
+        Ok(capacity) => Vec::<u8>::with_capacity(capacity),
+        Err(_) => Vec::<u8>::new(),
+    };
     file.take(limit)
         .read_to_end(&mut bytes)
         .map_err(|err| Error::io_path("read", relative, err))?;

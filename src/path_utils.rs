@@ -212,11 +212,16 @@ fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
 
 #[inline]
 fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
-    let normalized = normalize_path_lexical(path);
-    if normalized == path {
+    if path.as_os_str().is_empty() {
+        return Cow::Owned(PathBuf::from("."));
+    }
+    if !path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
         Cow::Borrowed(path)
     } else {
-        Cow::Owned(normalized)
+        Cow::Owned(normalize_path_lexical(path))
     }
 }
 

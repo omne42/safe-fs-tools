@@ -191,7 +191,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
             };
 
-            let mut file_matches = Vec::<(u64, String, bool)>::new();
+            let mut first_match_index_in_output = None::<usize>;
+            let mut owned_relative_path = Some(relative_path);
             let mut stop_for_results_limit = false;
             for (idx, line) in content.lines().enumerate() {
                 let ok = regex.as_ref().map_or_else(
@@ -201,8 +202,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 if !ok {
                     continue;
                 }
-                if matches.len().saturating_add(file_matches.len()) >= ctx.policy.limits.max_results
-                {
+                if matches.len() >= ctx.policy.limits.max_results {
                     diag.mark_limit_reached(ScanLimitReason::Results);
                     stop_for_results_limit = true;
                     break;
@@ -223,27 +223,23 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                         }
                     }
                 };
-                file_matches.push((idx.saturating_add(1) as u64, text, line_truncated));
-            }
 
-            if !file_matches.is_empty() {
-                let last = file_matches.len().saturating_sub(1);
-                let mut owned_relative_path = Some(relative_path);
-                for (idx, (line, text, line_truncated)) in file_matches.into_iter().enumerate() {
-                    let path = if idx == last {
-                        owned_relative_path.take().expect("relative path present")
-                    } else {
-                        owned_relative_path
-                            .as_ref()
-                            .expect("relative path present")
-                            .clone()
-                    };
-                    matches.push(GrepMatch {
-                        path,
-                        line,
-                        text,
-                        line_truncated,
-                    });
+                let path = match first_match_index_in_output {
+                    Some(first_idx) => matches
+                        .get(first_idx)
+                        .expect("first match index must point into output")
+                        .path
+                        .clone(),
+                    None => owned_relative_path.take().expect("relative path present"),
+                };
+                matches.push(GrepMatch {
+                    path,
+                    line: idx.saturating_add(1) as u64,
+                    text,
+                    line_truncated,
+                });
+                if first_match_index_in_output.is_none() {
+                    first_match_index_in_output = Some(matches.len().saturating_sub(1));
                 }
             }
 
