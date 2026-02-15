@@ -72,13 +72,21 @@ struct GrepSkipCounters {
 }
 
 #[cfg(feature = "grep")]
+fn initial_match_capacity(max_results: usize) -> usize {
+    const MAX_INITIAL_MATCH_CAPACITY: usize = 1024;
+    max_results.min(MAX_INITIAL_MATCH_CAPACITY)
+}
+
+#[cfg(feature = "grep")]
 fn build_grep_response(
     mut matches: Vec<GrepMatch>,
     diag: TraversalDiagnostics,
     counters: GrepSkipCounters,
     started: &Instant,
 ) -> GrepResponse {
-    matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
+    if matches.len() > 1 {
+        matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
+    }
     GrepResponse {
         matches,
         truncated: diag.truncated(),
@@ -129,7 +137,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let max_line_bytes = ctx.policy.limits.max_line_bytes;
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
-    let mut matches = Vec::<GrepMatch>::with_capacity(ctx.policy.limits.max_results);
+    let mut matches =
+        Vec::<GrepMatch>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
     let mut counters = GrepSkipCounters::default();
     let mut diag = TraversalDiagnostics::default();
     let has_redact_regexes = ctx.redactor.has_redact_regexes();

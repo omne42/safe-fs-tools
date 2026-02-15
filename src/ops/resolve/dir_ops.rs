@@ -317,7 +317,11 @@ pub(super) fn ensure_dir_under_root(
                 let post_create_meta = created_meta
                     .as_ref()
                     .or(post_create_meta.as_ref())
-                    .expect("post-create metadata must be present");
+                    .ok_or_else(|| {
+                        Error::InvalidPath(
+                            "internal error: missing post-create metadata snapshot".to_string(),
+                        )
+                    })?;
                 match handle_existing_component(
                     &next,
                     post_create_meta,

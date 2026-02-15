@@ -45,12 +45,20 @@ use super::traversal::{
 };
 
 #[cfg(feature = "glob")]
+fn initial_match_capacity(max_results: usize) -> usize {
+    const MAX_INITIAL_MATCH_CAPACITY: usize = 1024;
+    max_results.min(MAX_INITIAL_MATCH_CAPACITY)
+}
+
+#[cfg(feature = "glob")]
 fn build_glob_response(
     mut matches: Vec<PathBuf>,
     diag: TraversalDiagnostics,
     started: &Instant,
 ) -> GlobResponse {
-    matches.sort();
+    if matches.len() > 1 {
+        matches.sort();
+    }
     GlobResponse {
         matches,
         truncated: diag.truncated(),
@@ -82,7 +90,8 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
     let matcher = compile_glob(&request.pattern)?;
 
-    let mut matches = Vec::<PathBuf>::with_capacity(ctx.policy.limits.max_results);
+    let mut matches =
+        Vec::<PathBuf>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
     let mut diag = TraversalDiagnostics::default();
     let walk_root = match derive_safe_traversal_prefix(&request.pattern) {
         Some(prefix) => {

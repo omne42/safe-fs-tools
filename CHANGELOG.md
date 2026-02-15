@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs overhaul: rebuilt project documentation into a structured portal (`docs/index.md`) with dedicated guides for getting started, concepts, policy/operations/CLI/library references, security usage, deployment/ops, and FAQ.
 - Traversal I/O optimization: `walk_traversal_files` now supports per-operation open mode so `grep` reuses a single no-follow open per file and `glob` avoids unnecessary pre-open checks.
 - `grep` glob-filter optimization: when `grep.glob` is set, traversal defers file open until after glob match filtering (avoids opening non-matching files).
+- Result collection tuning: `glob`/`grep` now cap initial match-vector reservation and skip sorting when zero/one result to reduce avoidable CPU and allocation overhead.
 - Large-line memory smoothing: `grep` and `read` line-range loops now trim oversized reusable line buffers after long-line reads to reduce post-spike retained capacity.
 - Internal write path cleanup: `commit_write` now consumes `WriteCommitContext` so permission metadata is moved into temp-file commit without an extra `Permissions` clone.
 - Redaction compilation cleanup: redact patterns now compile once into `Regex` values (remove duplicate `Regex` + `RegexSet` compilation of the same rules).
