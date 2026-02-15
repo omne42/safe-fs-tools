@@ -206,6 +206,41 @@ fn grep_rejects_empty_query() {
 }
 
 #[test]
+fn grep_rejects_oversized_query() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let oversized = "a".repeat((8 * 1024) + 1);
+    for regex in [false, true] {
+        let err = grep(
+            &ctx,
+            GrepRequest {
+                root_id: "root".to_string(),
+                query: oversized.clone(),
+                regex,
+                glob: None,
+            },
+        )
+        .expect_err("oversized query should be rejected");
+
+        match err {
+            safe_fs_tools::Error::InvalidPath(message) => {
+                assert!(
+                    message.contains("grep query is too large"),
+                    "expected oversized-query error, got {message:?}"
+                );
+                assert!(
+                    !message.contains("aaaa"),
+                    "oversized query content should not be echoed in error: {message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn grep_multiple_matches_keep_relative_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "needle one\nneedle two\n").expect("write");

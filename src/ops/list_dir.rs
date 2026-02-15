@@ -8,6 +8,11 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
+fn initial_heap_capacity(max_entries: usize) -> usize {
+    const MAX_INITIAL_HEAP_CAPACITY: usize = 1024;
+    max_entries.min(MAX_INITIAL_HEAP_CAPACITY)
+}
+
 #[cfg(unix)]
 fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
@@ -200,7 +205,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     }
 
     let root_path = ctx.canonical_root(&request.root_id)?;
-    let mut heap = BinaryHeap::<Candidate>::with_capacity(max_entries);
+    let mut heap = BinaryHeap::<Candidate>::with_capacity(initial_heap_capacity(max_entries));
     let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;
 
@@ -263,4 +268,17 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         truncated,
         skipped_io_errors,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::initial_heap_capacity;
+
+    #[test]
+    fn initial_heap_capacity_is_capped() {
+        assert_eq!(initial_heap_capacity(0), 0);
+        assert_eq!(initial_heap_capacity(16), 16);
+        assert_eq!(initial_heap_capacity(1024), 1024);
+        assert_eq!(initial_heap_capacity(4096), 1024);
+    }
 }

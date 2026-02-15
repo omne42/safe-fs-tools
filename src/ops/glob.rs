@@ -56,7 +56,7 @@ fn build_glob_response(
     diag: TraversalDiagnostics,
     started: &Instant,
 ) -> GlobResponse {
-    if matches.len() > 1 {
+    if matches.len() > 1 && !matches_sorted_by_path(&matches) {
         matches.sort();
     }
     GlobResponse {
@@ -70,6 +70,34 @@ fn build_glob_response(
         skipped_walk_errors: diag.skipped_walk_errors(),
         skipped_io_errors: diag.skipped_io_errors(),
         skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets(),
+    }
+}
+
+#[cfg(feature = "glob")]
+fn matches_sorted_by_path(matches: &[PathBuf]) -> bool {
+    matches.windows(2).all(|pair| pair[0] <= pair[1])
+}
+
+#[cfg(all(test, feature = "glob"))]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::matches_sorted_by_path;
+
+    #[test]
+    fn match_order_detects_sorted_input() {
+        let matches = vec![
+            PathBuf::from("a"),
+            PathBuf::from("a.txt"),
+            PathBuf::from("b.txt"),
+        ];
+        assert!(matches_sorted_by_path(&matches));
+    }
+
+    #[test]
+    fn match_order_detects_unsorted_input() {
+        let matches = vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")];
+        assert!(!matches_sorted_by_path(&matches));
     }
 }
 
@@ -93,7 +121,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let mut matches =
         Vec::<PathBuf>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
     let mut diag = TraversalDiagnostics::default();
-    let walk_root = match derive_safe_traversal_prefix(&request.pattern) {
+    let walk_root_storage = match derive_safe_traversal_prefix(&request.pattern) {
         Some(prefix) => {
             let walk_root = root_path.join(&prefix);
             let prefix_is_dir = walk_root.is_dir();
@@ -108,15 +136,16 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             if prefix_denied_or_skipped || probe_denied_or_skipped {
                 return Ok(build_glob_response(matches, diag, &started));
             }
-            walk_root
+            Some(walk_root)
         }
-        None => root_path.clone(),
+        None => None,
     };
+    let walk_root = walk_root_storage.as_deref().unwrap_or(root_path.as_path());
     diag = match walk_traversal_files(
         ctx,
         &request.root_id,
         &root_path,
-        &walk_root,
+        walk_root,
         TraversalWalkOptions {
             open_mode: TraversalOpenMode::None,
             max_walk,

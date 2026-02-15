@@ -72,6 +72,9 @@ struct GrepSkipCounters {
 }
 
 #[cfg(feature = "grep")]
+const MAX_GREP_QUERY_BYTES: usize = 8 * 1024;
+
+#[cfg(feature = "grep")]
 fn initial_match_capacity(max_results: usize) -> usize {
     const MAX_INITIAL_MATCH_CAPACITY: usize = 1024;
     max_results.min(MAX_INITIAL_MATCH_CAPACITY)
@@ -82,6 +85,22 @@ fn initial_line_buffer_capacity(max_line_bytes: usize) -> usize {
     const DEFAULT_CAPACITY: usize = 8 * 1024;
     const MAX_INITIAL_CAPACITY: usize = 64 * 1024;
     max_line_bytes.clamp(DEFAULT_CAPACITY, MAX_INITIAL_CAPACITY)
+}
+
+#[cfg(feature = "grep")]
+fn validate_query(query: &str) -> Result<()> {
+    if query.trim().is_empty() {
+        return Err(Error::InvalidPath(
+            "grep query must not be empty".to_string(),
+        ));
+    }
+    let query_bytes = query.len();
+    if query_bytes > MAX_GREP_QUERY_BYTES {
+        return Err(Error::InvalidPath(format!(
+            "grep query is too large ({query_bytes} bytes; max {MAX_GREP_QUERY_BYTES} bytes)"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "grep")]
@@ -229,11 +248,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 #[cfg(feature = "grep")]
 pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     ctx.ensure_policy_permission(ctx.policy.permissions.grep, "grep")?;
-    if request.query.trim().is_empty() {
-        return Err(Error::InvalidPath(
-            "grep query must not be empty".to_string(),
-        ));
-    }
+    validate_query(&request.query)?;
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let max_line_bytes = ctx.policy.limits.max_line_bytes;
@@ -250,7 +265,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     } else {
         TraversalOpenMode::ReadFile
     };
-    let walk_root = match request
+    let walk_root_storage = match request
         .glob
         .as_deref()
         .and_then(derive_safe_traversal_prefix)
@@ -269,10 +284,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             if prefix_denied_or_skipped || probe_denied_or_skipped {
                 return Ok(build_grep_response(matches, diag, counters, &started));
             }
-            walk_root
+            Some(walk_root)
         }
-        None => root_path.clone(),
+        None => None,
     };
+    let walk_root = walk_root_storage.as_deref().unwrap_or(root_path.as_path());
 
     let regex = if request.regex {
         Some(
@@ -287,7 +303,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         ctx,
         &request.root_id,
         &root_path,
-        &walk_root,
+        walk_root,
         TraversalWalkOptions {
             open_mode: traversal_open_mode,
             max_walk,
