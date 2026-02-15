@@ -1,4 +1,5 @@
 use std::collections::BinaryHeap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -108,7 +109,7 @@ enum CountOnlyOutcome {
 struct EntryCandidate {
     absolute_path: PathBuf,
     path: PathBuf,
-    name: String,
+    name: OsString,
     kind: &'static str,
     is_file: bool,
 }
@@ -117,7 +118,9 @@ impl EntryCandidate {
     #[inline]
     fn sorts_before(&self, other: &ListDirEntry) -> bool {
         self.name
-            .cmp(&other.name)
+            .to_string_lossy()
+            .as_ref()
+            .cmp(other.name.as_str())
             .then_with(|| self.path.cmp(&other.path))
             == std::cmp::Ordering::Less
     }
@@ -125,7 +128,7 @@ impl EntryCandidate {
     fn into_list_entry(self, size_bytes: u64) -> ListDirEntry {
         ListDirEntry {
             path: self.path,
-            name: self.name,
+            name: self.name.to_string_lossy().into_owned(),
             kind: self.kind.to_string(),
             size_bytes,
         }
@@ -203,7 +206,7 @@ fn process_dir_entry(
     Ok(EntryOutcome::Accepted(EntryCandidate {
         absolute_path: path,
         path: relative,
-        name: entry.file_name().to_string_lossy().to_string(),
+        name: entry.file_name(),
         kind,
         is_file: file_type.is_file(),
     }))

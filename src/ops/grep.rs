@@ -611,6 +611,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     (line[..end].to_string(), line_truncated)
                 };
 
+                // Response schema owns `PathBuf` per match; move once, clone only for repeats.
                 let path = match &repeated_match_path {
                     Some(path) => path.clone(),
                     None => {

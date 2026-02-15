@@ -19,6 +19,24 @@ pub(crate) fn preserve_unix_security_metadata(
     //   `flistxattr`, `fgetxattr`, `fsetxattr`, and `fremovexattr`.
     // - All `unsafe` below is confined to syscall boundaries; pointer validity and buffer lengths
     //   are checked at each call site.
+    // - The kernel reports xattr sizes dynamically; we enforce conservative caps to avoid
+    //   pathological one-shot allocations from corrupted or hostile filesystems.
+
+    const MAX_XATTR_VALUE_BYTES: usize = 1024 * 1024;
+    const MAX_XATTR_NAME_LIST_BYTES: usize = 4 * 1024 * 1024;
+
+    fn checked_kernel_len(len: libc::ssize_t, cap: usize, what: &str) -> std::io::Result<usize> {
+        let len = usize::try_from(len).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{what} overflow"))
+        })?;
+        if len > cap {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{what} exceeds cap ({len} > {cap})"),
+            ));
+        }
+        Ok(len)
+    }
 
     fn xattr_read_fd_required(fd: libc::c_int, name: &CStr) -> std::io::Result<Vec<u8>> {
         // SAFETY: `name` is NUL-terminated and both pointers are valid for this call.
@@ -26,9 +44,7 @@ pub(crate) fn preserve_unix_security_metadata(
         if len < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let len = usize::try_from(len).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "xattr length overflow")
-        })?;
+        let len = checked_kernel_len(len, MAX_XATTR_VALUE_BYTES, "xattr value length")?;
         if len == 0 {
             return Ok(Vec::new());
         }
@@ -65,9 +81,7 @@ pub(crate) fn preserve_unix_security_metadata(
             }
             return Err(err);
         }
-        let len = usize::try_from(len).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "xattr length overflow")
-        })?;
+        let len = checked_kernel_len(len, MAX_XATTR_VALUE_BYTES, "xattr value length")?;
         if len == 0 {
             return Ok(Some(Vec::new()));
         }
@@ -100,12 +114,11 @@ pub(crate) fn preserve_unix_security_metadata(
         if list_len < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let list_len = usize::try_from(list_len).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "xattr name list length overflow",
-            )
-        })?;
+        let list_len = checked_kernel_len(
+            list_len,
+            MAX_XATTR_NAME_LIST_BYTES,
+            "xattr name list length",
+        )?;
         if list_len == 0 {
             return Ok(Vec::new());
         }
@@ -117,12 +130,11 @@ pub(crate) fn preserve_unix_security_metadata(
         if list_read < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let list_read = usize::try_from(list_read).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "xattr name list read length overflow",
-            )
-        })?;
+        let list_read = checked_kernel_len(
+            list_read,
+            MAX_XATTR_NAME_LIST_BYTES,
+            "xattr name list read length",
+        )?;
 
         names[..list_read]
             .split(|byte| *byte == 0)
