@@ -149,6 +149,7 @@ fn read_line_range(
         current_line += 1;
 
         if current_line < start_line {
+            maybe_shrink_skip_buffer(&mut scratch);
             continue;
         }
         if current_line == end_line {
@@ -175,6 +176,16 @@ fn initial_line_range_capacity(max_read_bytes: u64) -> usize {
     usize::try_from(max_read_bytes)
         .ok()
         .map_or(DEFAULT_CAPACITY, |max| max.min(MAX_INITIAL_CAPACITY))
+}
+
+fn maybe_shrink_skip_buffer(buffer: &mut Vec<u8>) {
+    const RETAINED_CAPACITY: usize = 64 * 1024;
+    const SHRINK_FACTOR: usize = 4;
+
+    if buffer.capacity() > RETAINED_CAPACITY.saturating_mul(SHRINK_FACTOR) {
+        buffer.clear();
+        buffer.shrink_to(RETAINED_CAPACITY);
+    }
 }
 
 fn invalid_line_range(message: String) -> Error {

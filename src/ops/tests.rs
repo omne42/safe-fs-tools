@@ -189,8 +189,11 @@ fn walk_traversal_files_rejects_walk_root_outside_root() {
         "root",
         &root_path,
         &walk_root,
+        traversal::TraversalWalkOptions {
+            open_mode: traversal::TraversalOpenMode::None,
+            max_walk: None,
+        },
         &Instant::now(),
-        None,
         |_file, _diag| {
             callback_count.set(callback_count.get().saturating_add(1));
             Ok(std::ops::ControlFlow::Continue(()))
@@ -291,8 +294,11 @@ fn traversal_skip_globs_apply_to_directories_via_probe_matrix_does_not_recurse_s
             "root",
             &root_path,
             &root_path,
+            traversal::TraversalWalkOptions {
+                open_mode: traversal::TraversalOpenMode::None,
+                max_walk: None,
+            },
             &Instant::now(),
-            None,
             |file, _diag| {
                 seen.push(file.relative_path);
                 Ok(std::ops::ControlFlow::Continue(()))

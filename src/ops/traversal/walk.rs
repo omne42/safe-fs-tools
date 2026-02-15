@@ -1,12 +1,15 @@
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
 
 use super::super::{Context, ScanLimitReason};
-use super::{TRAVERSAL_GLOB_PROBE_NAME, TraversalDiagnostics, TraversalFile};
+use super::{
+    TRAVERSAL_GLOB_PROBE_NAME, TraversalDiagnostics, TraversalFile, TraversalOpenMode,
+    TraversalWalkOptions,
+};
 
 fn resolve_walk_root_for_traversal(
     ctx: &Context,
@@ -200,6 +203,7 @@ fn resolve_entry_traversal_file(
     root_id: &str,
     relative: PathBuf,
     is_symlink: bool,
+    open_mode: TraversalOpenMode,
     diag: &mut TraversalDiagnostics,
 ) -> Result<Option<TraversalFile>> {
     #[derive(Clone, Copy)]
@@ -266,20 +270,23 @@ fn resolve_entry_traversal_file(
             }
         };
 
-    let opened = super::super::io::open_regular_file_for_read(&canonical, &relative);
-    match opened {
-        Ok(ok) => {
-            let _ = ok;
-            Ok(Some(TraversalFile {
-                path: canonical,
-                relative_path: relative,
-            }))
+    let opened_file = if matches!(open_mode, TraversalOpenMode::ReadFile) {
+        match super::super::io::open_regular_file_for_read(&canonical, &relative) {
+            Ok(opened_file) => Some(opened_file),
+            Err(err) => {
+                classify_resolve_error(err, ResolvePhase::Open, is_symlink, diag)?;
+                return Ok(None);
+            }
         }
-        Err(err) => {
-            classify_resolve_error(err, ResolvePhase::Open, is_symlink, diag)?;
-            Ok(None)
-        }
-    }
+    } else {
+        None
+    };
+
+    Ok(Some(TraversalFile {
+        path: canonical,
+        relative_path: relative,
+        opened_file,
+    }))
 }
 
 fn traversal_file_from_entry(
@@ -287,6 +294,7 @@ fn traversal_file_from_entry(
     root_id: &str,
     root_path: &Path,
     entry: &walkdir::DirEntry,
+    open_mode: TraversalOpenMode,
     diag: &mut TraversalDiagnostics,
 ) -> Result<Option<TraversalFile>> {
     let Some(relative) = relative_from_walk_entry(entry, root_path, diag) else {
@@ -296,7 +304,14 @@ fn traversal_file_from_entry(
         return Ok(None);
     }
 
-    resolve_entry_traversal_file(ctx, root_id, relative, entry.file_type().is_symlink(), diag)
+    resolve_entry_traversal_file(
+        ctx,
+        root_id,
+        relative,
+        entry.file_type().is_symlink(),
+        open_mode,
+        diag,
+    )
 }
 
 pub(super) fn walk_traversal_files(
@@ -304,8 +319,8 @@ pub(super) fn walk_traversal_files(
     root_id: &str,
     root_path: &Path,
     walk_root: &Path,
+    options: TraversalWalkOptions,
     started: &Instant,
-    max_walk: Option<Duration>,
     mut on_file: impl FnMut(
         TraversalFile,
         &mut TraversalDiagnostics,
@@ -318,7 +333,10 @@ pub(super) fn walk_traversal_files(
     let max_walk_files = u64::try_from(ctx.policy.limits.max_walk_files).unwrap_or(u64::MAX);
 
     for entry in walkdir_traversal_iter(ctx, root_path, &walk_root) {
-        if max_walk.is_some_and(|limit| started.elapsed() >= limit) {
+        if options
+            .max_walk
+            .is_some_and(|limit| started.elapsed() >= limit)
+        {
             diag.mark_limit_reached(ScanLimitReason::Time);
             break;
         }
@@ -345,7 +363,14 @@ pub(super) fn walk_traversal_files(
         }
         diag.inc_scanned_files();
 
-        let Some(file) = traversal_file_from_entry(ctx, root_id, root_path, &entry, &mut diag)?
+        let Some(file) = traversal_file_from_entry(
+            ctx,
+            root_id,
+            root_path,
+            &entry,
+            options.open_mode,
+            &mut diag,
+        )?
         else {
             continue;
         };

@@ -60,8 +60,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "grep")]
 use super::traversal::{
-    TRAVERSAL_GLOB_PROBE_NAME, TraversalDiagnostics, compile_glob, derive_safe_traversal_prefix,
-    elapsed_ms, globset_is_match, walk_traversal_files,
+    TRAVERSAL_GLOB_PROBE_NAME, TraversalDiagnostics, TraversalOpenMode, TraversalWalkOptions,
+    compile_glob, derive_safe_traversal_prefix, elapsed_ms, globset_is_match, walk_traversal_files,
 };
 
 #[cfg(feature = "grep")]
@@ -92,6 +92,19 @@ fn build_grep_response(
         skipped_walk_errors: diag.skipped_walk_errors(),
         skipped_io_errors: diag.skipped_io_errors(),
         skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets(),
+    }
+}
+
+#[cfg(feature = "grep")]
+fn maybe_shrink_line_buffer(line_buf: &mut Vec<u8>, max_line_bytes: usize) {
+    const DEFAULT_RETAINED_CAPACITY: usize = 8 * 1024;
+    const MAX_RETAINED_CAPACITY: usize = 64 * 1024;
+    const SHRINK_FACTOR: usize = 4;
+
+    let retained_capacity = max_line_bytes.clamp(DEFAULT_RETAINED_CAPACITY, MAX_RETAINED_CAPACITY);
+    if line_buf.capacity() > retained_capacity.saturating_mul(SHRINK_FACTOR) {
+        line_buf.clear();
+        line_buf.shrink_to(retained_capacity);
     }
 }
 
@@ -155,12 +168,16 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         &request.root_id,
         &root_path,
         &walk_root,
+        TraversalWalkOptions {
+            open_mode: TraversalOpenMode::ReadFile,
+            max_walk,
+        },
         &started,
-        max_walk,
         |file, diag| {
             let super::traversal::TraversalFile {
                 path,
                 relative_path,
+                opened_file,
             } = file;
 
             if let Some(glob) = &file_glob
@@ -169,13 +186,16 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 return Ok(std::ops::ControlFlow::Continue(()));
             }
 
-            let (file, meta) = match super::io::open_regular_file_for_read(&path, &relative_path) {
-                Ok(file_and_meta) => file_and_meta,
-                Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
-                    diag.inc_skipped_io_errors();
-                    return Ok(std::ops::ControlFlow::Continue(()));
-                }
-                Err(err) => return Err(err),
+            let (file, meta) = match opened_file {
+                Some(opened) => opened,
+                None => match super::io::open_regular_file_for_read(&path, &relative_path) {
+                    Ok(opened) => opened,
+                    Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+                        diag.inc_skipped_io_errors();
+                        return Ok(std::ops::ControlFlow::Continue(()));
+                    }
+                    Err(err) => return Err(err),
+                },
             };
             if meta.len() > ctx.policy.limits.max_read_bytes {
                 counters.skipped_too_large_files =
@@ -234,6 +254,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     |regex| regex.is_match(line),
                 );
                 if !ok {
+                    maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
                     continue;
                 }
                 if matches.len() >= ctx.policy.limits.max_results {
@@ -281,6 +302,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     text,
                     line_truncated,
                 });
+                maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
             }
 
             Ok(std::ops::ControlFlow::Continue(()))

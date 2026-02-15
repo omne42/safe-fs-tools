@@ -40,8 +40,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "glob")]
 use super::traversal::{
-    TRAVERSAL_GLOB_PROBE_NAME, TraversalDiagnostics, compile_glob, derive_safe_traversal_prefix,
-    elapsed_ms, globset_is_match, walk_traversal_files,
+    TRAVERSAL_GLOB_PROBE_NAME, TraversalDiagnostics, TraversalOpenMode, TraversalWalkOptions,
+    compile_glob, derive_safe_traversal_prefix, elapsed_ms, globset_is_match, walk_traversal_files,
 };
 
 #[cfg(feature = "glob")]
@@ -108,8 +108,11 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         &request.root_id,
         &root_path,
         &walk_root,
+        TraversalWalkOptions {
+            open_mode: TraversalOpenMode::None,
+            max_walk,
+        },
         &started,
-        max_walk,
         |file, diag| {
             if globset_is_match(&matcher, &file.relative_path) {
                 if matches.len() >= ctx.policy.limits.max_results {

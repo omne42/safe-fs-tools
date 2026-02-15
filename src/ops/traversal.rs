@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(any(feature = "glob", feature = "grep"))]
+use std::fs;
+#[cfg(any(feature = "glob", feature = "grep"))]
 use std::time::Instant;
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -40,12 +42,12 @@ pub(super) fn walk_traversal_files(
     root_id: &str,
     root_path: &Path,
     walk_root: &Path,
+    options: TraversalWalkOptions,
     started: &Instant,
-    max_walk: Option<std::time::Duration>,
     on_file: impl FnMut(TraversalFile, &mut TraversalDiagnostics) -> Result<std::ops::ControlFlow<()>>,
 ) -> Result<TraversalDiagnostics> {
     walk::walk_traversal_files(
-        ctx, root_id, root_path, walk_root, started, max_walk, on_file,
+        ctx, root_id, root_path, walk_root, options, started, on_file,
     )
 }
 
@@ -98,6 +100,20 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
     {
         glob.is_match(path)
     }
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TraversalOpenMode {
+    None,
+    ReadFile,
+}
+
+#[cfg(any(feature = "glob", feature = "grep"))]
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TraversalWalkOptions {
+    pub(super) open_mode: TraversalOpenMode,
+    pub(super) max_walk: Option<std::time::Duration>,
 }
 
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -180,6 +196,7 @@ impl TraversalDiagnostics {
 pub(super) struct TraversalFile {
     pub(super) path: PathBuf,
     pub(super) relative_path: PathBuf,
+    pub(super) opened_file: Option<(fs::File, fs::Metadata)>,
 }
 
 #[cfg(all(any(feature = "glob", feature = "grep"), test))]
