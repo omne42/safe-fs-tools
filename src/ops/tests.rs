@@ -472,3 +472,29 @@ fn rename_replace_honors_replace_existing_flag_with_assertion(
     assert_eq!(out, "new");
     assert!(!src.exists());
 }
+
+#[test]
+#[cfg(windows)]
+fn destination_exists_helper_accepts_windows_raw_codes() {
+    let already_exists = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
+    assert!(io::is_destination_exists_rename_error(&already_exists));
+
+    let file_exists = std::io::Error::from_raw_os_error(80);
+    assert!(io::is_destination_exists_rename_error(&file_exists));
+
+    let already_exists_raw = std::io::Error::from_raw_os_error(183);
+    assert!(io::is_destination_exists_rename_error(&already_exists_raw));
+}
+
+#[test]
+#[cfg(not(windows))]
+fn destination_exists_helper_uses_already_exists_kind() {
+    let already_exists = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
+    assert!(io::is_destination_exists_rename_error(&already_exists));
+
+    let other = std::io::Error::from_raw_os_error(80);
+    assert_eq!(
+        io::is_destination_exists_rename_error(&other),
+        other.kind() == std::io::ErrorKind::AlreadyExists
+    );
+}

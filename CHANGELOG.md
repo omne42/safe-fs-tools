@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows path-compare hot path: short-circuit exact `OsStr` equality before UTF-16 conversion/FFI, reducing per-call allocation overhead on already-identical segments.
 - Traversal glob matching on Windows now checks for backslashes first and skips UTF-16 normalization allocation when paths already use forward slashes.
 - `grep` plain-query scan loop now bypasses UTF-8 decode for ASCII no-match lines while preserving non-UTF8 file-skip behavior.
+- Windows rename error mapping: `copy_file`/`write_file` now treat raw OS errors `80/183` as destination-exists when `overwrite=false`, matching `move_path` semantics under race conditions.
 
 ## [0.2.0] - 2026-02-14
 

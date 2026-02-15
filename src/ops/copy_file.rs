@@ -438,7 +438,7 @@ fn commit_replace(
         to_effective_relative,
     )?;
     super::io::rename_replace(tmp_path_ref, destination, overwrite).map_err(|err| {
-        if !overwrite && err.kind() == std::io::ErrorKind::AlreadyExists {
+        if !overwrite && super::io::is_destination_exists_rename_error(&err) {
             return Error::InvalidPath("destination exists".to_string());
         }
         if !overwrite && err.kind() == std::io::ErrorKind::Unsupported {

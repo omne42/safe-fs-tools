@@ -186,6 +186,16 @@ fn decode_utf8(relative: &Path, bytes: Vec<u8>) -> Result<String> {
     String::from_utf8(bytes).map_err(|err| Error::invalid_utf8(relative.to_path_buf(), err))
 }
 
+#[cfg(windows)]
+pub(super) fn is_destination_exists_rename_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::AlreadyExists || matches!(err.raw_os_error(), Some(80 | 183))
+}
+
+#[cfg(not(windows))]
+pub(super) fn is_destination_exists_rename_error(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::AlreadyExists
+}
+
 fn file_too_large(relative: &Path, size_bytes: u64, max_bytes: u64) -> Error {
     Error::FileTooLarge {
         path: relative.to_path_buf(),

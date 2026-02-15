@@ -164,16 +164,6 @@ fn validate_directory_move_target(source: &Path, destination: &Path) -> Result<(
     Ok(())
 }
 
-#[cfg(windows)]
-fn is_destination_exists_rename_error(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::AlreadyExists || matches!(err.raw_os_error(), Some(80 | 183))
-}
-
-#[cfg(not(windows))]
-fn is_destination_exists_rename_error(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::AlreadyExists
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MovePathRequest {
     pub root_id: String,
@@ -411,7 +401,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
 
     let replace_existing = request.overwrite;
     super::io::rename_replace(&source, &destination, replace_existing).map_err(|err| {
-        if !replace_existing && is_destination_exists_rename_error(&err) {
+        if !replace_existing && super::io::is_destination_exists_rename_error(&err) {
             return Error::InvalidPath("destination exists".to_string());
         }
         if !replace_existing && err.kind() == std::io::ErrorKind::Unsupported {

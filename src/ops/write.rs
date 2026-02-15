@@ -371,7 +371,7 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         permissions: None,
     };
     commit_write(commit_context, request.overwrite, |err| {
-        if err.kind() == std::io::ErrorKind::AlreadyExists && !request.overwrite {
+        if !request.overwrite && super::io::is_destination_exists_rename_error(&err) {
             return Error::InvalidPath("file exists".to_string());
         }
         if err.kind() == std::io::ErrorKind::Unsupported && !request.overwrite {
