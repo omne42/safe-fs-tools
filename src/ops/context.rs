@@ -30,7 +30,7 @@ impl Context {
         policy.validate()?;
         let redactor = SecretRedactor::from_rules(&policy.secrets)?;
 
-        let mut roots = HashMap::<String, RootRuntime>::new();
+        let mut canonical_roots = Vec::<CanonicalRoot>::with_capacity(policy.roots.len());
         for root in &policy.roots {
             let canonical = root.path.canonicalize().map_err(|err| {
                 Error::InvalidPolicy(format!(
@@ -53,34 +53,20 @@ impl Context {
                     canonical.display()
                 )));
             }
+            canonical_roots.push(CanonicalRoot {
+                id: root.id.clone(),
+                canonical_path: canonical,
+                mode: root.mode,
+            });
+        }
+        validate_canonical_roots_non_overlapping(&canonical_roots)?;
 
-            for (existing_id, existing_root) in &roots {
-                let existing_canonical = &existing_root.canonical_path;
-                if canonical_paths_equal(&canonical, existing_canonical) {
-                    return Err(Error::InvalidPolicy(format!(
-                        "root {} ({}) resolves to the same canonical directory as root {} ({})",
-                        root.id,
-                        canonical.display(),
-                        existing_id,
-                        existing_canonical.display()
-                    )));
-                }
-
-                if canonical_paths_overlap(&canonical, existing_canonical) {
-                    return Err(Error::InvalidPolicy(format!(
-                        "root {} ({}) overlaps with root {} ({})",
-                        root.id,
-                        canonical.display(),
-                        existing_id,
-                        existing_canonical.display()
-                    )));
-                }
-            }
-
+        let mut roots = HashMap::<String, RootRuntime>::new();
+        for root in canonical_roots {
             let replaced = roots.insert(
-                root.id.clone(),
+                root.id,
                 RootRuntime {
-                    canonical_path: canonical,
+                    canonical_path: root.canonical_path,
                     mode: root.mode,
                 },
             );
@@ -214,6 +200,83 @@ impl Context {
         self.ensure_policy_permission(enabled, op)?;
         self.ensure_can_write(root_id, op)
     }
+}
+
+#[derive(Debug)]
+struct CanonicalRoot {
+    id: String,
+    canonical_path: PathBuf,
+    mode: RootMode,
+}
+
+fn overlap_error(a_id: &str, a_path: &Path, b_id: &str, b_path: &Path, same: bool) -> Error {
+    if same {
+        Error::InvalidPolicy(format!(
+            "root {} ({}) resolves to the same canonical directory as root {} ({})",
+            a_id,
+            a_path.display(),
+            b_id,
+            b_path.display()
+        ))
+    } else {
+        Error::InvalidPolicy(format!(
+            "root {} ({}) overlaps with root {} ({})",
+            a_id,
+            a_path.display(),
+            b_id,
+            b_path.display()
+        ))
+    }
+}
+
+#[cfg(not(windows))]
+fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -> Result<()> {
+    let mut sorted = canonical_roots
+        .iter()
+        .map(|root| (root.id.as_str(), root.canonical_path.as_path()))
+        .collect::<Vec<_>>();
+    sorted.sort_unstable_by(|a, b| a.1.cmp(b.1));
+
+    for pair in sorted.windows(2) {
+        let (a_id, a_path) = pair[0];
+        let (b_id, b_path) = pair[1];
+        if canonical_paths_equal(a_path, b_path) {
+            return Err(overlap_error(a_id, a_path, b_id, b_path, true));
+        }
+        if canonical_paths_overlap(a_path, b_path) {
+            return Err(overlap_error(a_id, a_path, b_id, b_path, false));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -> Result<()> {
+    for (idx, a) in canonical_roots.iter().enumerate() {
+        for b in canonical_roots.iter().skip(idx + 1) {
+            if canonical_paths_equal(&a.canonical_path, &b.canonical_path) {
+                return Err(overlap_error(
+                    &a.id,
+                    &a.canonical_path,
+                    &b.id,
+                    &b.canonical_path,
+                    true,
+                ));
+            }
+            if canonical_paths_overlap(&a.canonical_path, &b.canonical_path) {
+                return Err(overlap_error(
+                    &a.id,
+                    &a.canonical_path,
+                    &b.id,
+                    &b.canonical_path,
+                    false,
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 impl ContextBuilder {

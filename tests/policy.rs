@@ -300,6 +300,21 @@ fn context_rejects_file_roots() {
 }
 
 #[test]
+fn context_rejects_overlapping_roots() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let child = dir.path().join("child");
+    std::fs::create_dir_all(&child).expect("mkdir");
+
+    let policy = policy_with_roots(vec![
+        read_only_root("root_a", dir.path().to_path_buf()),
+        read_only_root("root_b", child),
+    ]);
+
+    let err = Context::new(policy).expect_err("should reject overlapping roots");
+    assert_invalid_policy_contains_all(err, &["overlaps with root", "root_a", "root_b"]);
+}
+
+#[test]
 fn validate_only_checks_policy_shape_not_filesystem_state() {
     let dir = tempfile::tempdir().expect("tempdir");
     let missing_root = dir.path().join("missing-root");
