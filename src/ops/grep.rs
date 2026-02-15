@@ -155,11 +155,15 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     {
         Some(prefix) => {
             let walk_root = root_path.join(&prefix);
+            let prefix_is_dir = walk_root.is_dir();
             let prefix_denied_or_skipped =
                 ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
-            let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
-            let probe_denied_or_skipped =
-                ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe);
+            let probe_denied_or_skipped = if prefix_is_dir {
+                let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
+                ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
+            } else {
+                false
+            };
             if prefix_denied_or_skipped || probe_denied_or_skipped {
                 return Ok(build_grep_response(matches, diag, counters, &started));
             }

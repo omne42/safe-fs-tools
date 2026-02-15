@@ -152,6 +152,30 @@ fn grep_globs_reject_absolute_and_parent_segments() {
 }
 
 #[test]
+fn grep_glob_file_prefix_is_not_filtered_by_directory_probe_skip_glob() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.traversal.skip_globs = vec!["a.txt/*".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: Some("a.txt".to_string()),
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("a.txt"));
+}
+
+#[test]
 fn grep_rejects_empty_query() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "needle\n").expect("write");
