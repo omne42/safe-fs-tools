@@ -243,27 +243,27 @@ pub(super) fn ensure_dir_under_root(
         let Some(segment) = validate_relative_component(relative, component)? else {
             continue;
         };
-        let parent_relative = current_relative.clone();
+        let parent_relative = current_relative.as_path();
         let parent_meta_snapshot = if create_missing {
-            Some(capture_parent_identity(&current, &parent_relative)?)
+            Some(capture_parent_identity(&current, parent_relative)?)
         } else {
             None
         };
-        current_relative.push(&segment);
+        let next_relative = if parent_relative.as_os_str().is_empty() {
+            segment.clone()
+        } else {
+            current_relative.join(&segment)
+        };
         let next = current.join(&segment);
         let mut created_meta: Option<fs::Metadata> = None;
 
         let resolved_current = match fs::symlink_metadata(&next) {
-            Ok(meta) => handle_existing_component(
-                &next,
-                &meta,
-                &current_relative,
-                &canonical_root,
-                root_id,
-            )?,
+            Ok(meta) => {
+                handle_existing_component(&next, &meta, &next_relative, &canonical_root, root_id)?
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 if !create_missing {
-                    return Err(Error::io_path("symlink_metadata", &current_relative, err));
+                    return Err(Error::io_path("symlink_metadata", &next_relative, err));
                 }
                 let expected_parent_meta = match parent_meta_snapshot.as_ref() {
                     Some(meta) => meta,
@@ -273,40 +273,34 @@ pub(super) fn ensure_dir_under_root(
                         ));
                     }
                 };
-                verify_parent_identity(&current, &parent_relative, expected_parent_meta)?;
-                reject_secret_canonical_path(
-                    ctx,
-                    &next,
-                    &canonical_root,
-                    root_id,
-                    &current_relative,
-                )?;
+                verify_parent_identity(&current, parent_relative, expected_parent_meta)?;
+                reject_secret_canonical_path(ctx, &next, &canonical_root, root_id, &next_relative)?;
                 let created_now = match fs::create_dir(&next) {
                     Ok(()) => true,
                     Err(create_err) if create_err.kind() == std::io::ErrorKind::AlreadyExists => {
                         false
                     }
                     Err(create_err) => {
-                        return Err(Error::io_path("create_dir", &current_relative, create_err));
+                        return Err(Error::io_path("create_dir", &next_relative, create_err));
                     }
                 };
                 let mut post_create_meta =
                     Some(fs::symlink_metadata(&next).map_err(|meta_err| {
-                        Error::io_path("symlink_metadata", &current_relative, meta_err)
+                        Error::io_path("symlink_metadata", &next_relative, meta_err)
                     })?);
                 if created_now {
                     created_meta = post_create_meta.take();
                 }
                 if let Err(err) =
-                    verify_parent_identity(&current, &parent_relative, expected_parent_meta)
+                    verify_parent_identity(&current, parent_relative, expected_parent_meta)
                 {
                     if let Some(created_meta) = created_meta.as_ref() {
                         cleanup_created_dir(
                             &current,
-                            &parent_relative,
+                            parent_relative,
                             expected_parent_meta,
                             &next,
-                            &current_relative,
+                            &next_relative,
                             created_meta,
                             &err,
                         )?;
@@ -325,7 +319,7 @@ pub(super) fn ensure_dir_under_root(
                 match handle_existing_component(
                     &next,
                     post_create_meta,
-                    &current_relative,
+                    &next_relative,
                     &canonical_root,
                     root_id,
                 ) {
@@ -336,10 +330,10 @@ pub(super) fn ensure_dir_under_root(
                         {
                             cleanup_created_dir(
                                 &current,
-                                &parent_relative,
+                                parent_relative,
                                 expected_parent_meta,
                                 &next,
-                                &current_relative,
+                                &next_relative,
                                 created_meta,
                                 &err,
                             )?;
@@ -348,24 +342,24 @@ pub(super) fn ensure_dir_under_root(
                     }
                 }
             }
-            Err(err) => return Err(Error::io_path("symlink_metadata", &current_relative, err)),
+            Err(err) => return Err(Error::io_path("symlink_metadata", &next_relative, err)),
         };
         if let Err(err) = reject_secret_canonical_path(
             ctx,
             &resolved_current,
             &canonical_root,
             root_id,
-            &current_relative,
+            &next_relative,
         ) {
             if let (Some(created_meta), Some(expected_parent_meta)) =
                 (created_meta.as_ref(), parent_meta_snapshot.as_ref())
             {
                 cleanup_created_dir(
                     &current,
-                    &parent_relative,
+                    parent_relative,
                     expected_parent_meta,
                     &next,
-                    &current_relative,
+                    &next_relative,
                     created_meta,
                     &err,
                 )?;
@@ -373,6 +367,7 @@ pub(super) fn ensure_dir_under_root(
             return Err(err);
         }
         current = resolved_current;
+        current_relative = next_relative;
     }
 
     Ok(current)

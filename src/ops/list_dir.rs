@@ -94,7 +94,7 @@ impl Ord for Candidate {
 }
 
 enum EntryOutcome {
-    Accepted(ListDirEntry),
+    Accepted(EntryCandidate),
     Denied,
     SkippedIoError,
 }
@@ -103,6 +103,33 @@ enum CountOnlyOutcome {
     Counted,
     Denied,
     SkippedIoError,
+}
+
+struct EntryCandidate {
+    absolute_path: PathBuf,
+    path: PathBuf,
+    name: String,
+    kind: &'static str,
+    is_file: bool,
+}
+
+impl EntryCandidate {
+    #[inline]
+    fn sorts_before(&self, other: &ListDirEntry) -> bool {
+        self.name
+            .cmp(&other.name)
+            .then_with(|| self.path.cmp(&other.path))
+            == std::cmp::Ordering::Less
+    }
+
+    fn into_list_entry(self, size_bytes: u64) -> ListDirEntry {
+        ListDirEntry {
+            path: self.path,
+            name: self.name,
+            kind: self.kind.to_string(),
+            size_bytes,
+        }
+    }
 }
 
 fn directory_changed_during_list_error(relative_dir: &Path) -> Error {
@@ -173,20 +200,12 @@ fn process_dir_entry(
         "other"
     };
 
-    let size_bytes = if file_type.is_file() {
-        match entry.metadata() {
-            Ok(meta) => meta.len(),
-            Err(_) => return Ok(EntryOutcome::SkippedIoError),
-        }
-    } else {
-        0
-    };
-
-    Ok(EntryOutcome::Accepted(ListDirEntry {
+    Ok(EntryOutcome::Accepted(EntryCandidate {
+        absolute_path: path,
         path: relative,
         name: entry.file_name().to_string_lossy().to_string(),
-        kind: kind.to_string(),
-        size_bytes,
+        kind,
+        is_file: file_type.is_file(),
     }))
 }
 
@@ -272,16 +291,34 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         match process_dir_entry(ctx, entry, root_path)? {
             EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
-                let candidate = Candidate(entry);
-                if heap.len() < max_entries {
-                    heap.push(candidate);
+
+                let should_insert = if heap.len() < max_entries {
+                    true
+                } else {
+                    heap.peek().is_some_and(|top| entry.sorts_before(&top.0))
+                };
+                if !should_insert {
                     continue;
                 }
 
-                let should_replace = heap
-                    .peek()
-                    .is_some_and(|top| candidate.cmp(top) == std::cmp::Ordering::Less);
-                if should_replace {
+                // Defer metadata syscall until the entry is a real top-k candidate.
+                let size_bytes = if entry.is_file {
+                    match fs::metadata(&entry.absolute_path) {
+                        Ok(meta) => meta.len(),
+                        Err(_) => {
+                            skipped_io_errors = skipped_io_errors.saturating_add(1);
+                            matched_entries = matched_entries.saturating_sub(1);
+                            continue;
+                        }
+                    }
+                } else {
+                    0
+                };
+
+                let candidate = Candidate(entry.into_list_entry(size_bytes));
+                if heap.len() < max_entries {
+                    heap.push(candidate);
+                } else {
                     let _ = heap.pop();
                     heap.push(candidate);
                 }
