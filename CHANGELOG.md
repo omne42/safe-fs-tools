@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Policy docs: clarify lexical-only path-check wording for `resolve_path_checked`.
 - Combinator cleanup: replace selected small `match`/`if let` return plumbing with `and_then`/`map_or(_else)` chains in traversal/patch helpers.
 - Platform boundary cleanup: isolate platform-specific FFI/`unsafe` into `src/platform/{rename,windows_path_compare,unix_metadata}.rs` and keep `ops/io` + `path_utils` on safe wrappers.
+- Windows identity hardening: `copy_file`/`delete` now only treat two paths as the same file when all identity fields (`volume_serial_number`, `file_index`) are present on both sides; unknown IDs fail closed instead of `None == None` false positives.
+- `read` line-range memory tuning: switch from file-size-based upfront reservation to a small bounded initial capacity to avoid large allocations for narrow line windows.
+- Unix metadata portability: fix ownership-preservation `gid` sentinel to use `libc::gid_t::MAX` (instead of `uid_t`) when preserving uid/gid deltas.
 
 ## [0.2.0] - 2026-02-14
 

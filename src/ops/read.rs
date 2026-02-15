@@ -113,10 +113,10 @@ fn read_line_range(
     let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
     let mut reader = std::io::BufReader::new(file.take(limit));
     let mut scratch = Vec::<u8>::new();
-    let mut out = match usize::try_from(file_size_bytes.min(ctx.policy.limits.max_read_bytes)) {
-        Ok(capacity) => Vec::<u8>::with_capacity(capacity),
-        Err(_) => Vec::<u8>::new(),
-    };
+    // Line-range reads often pull a narrow subset; start small and grow on demand.
+    let mut out = Vec::<u8>::with_capacity(initial_line_range_capacity(
+        ctx.policy.limits.max_read_bytes,
+    ));
 
     let mut scanned_bytes: u64 = 0;
     let mut current_line: u64 = 0;
@@ -167,6 +167,14 @@ fn read_line_range(
     let content =
         String::from_utf8(out).map_err(|err| Error::invalid_utf8(relative.to_path_buf(), err))?;
     Ok((bytes_read, content))
+}
+
+fn initial_line_range_capacity(max_read_bytes: u64) -> usize {
+    const DEFAULT_CAPACITY: usize = 8 * 1024;
+    const MAX_INITIAL_CAPACITY: usize = 64 * 1024;
+    usize::try_from(max_read_bytes)
+        .ok()
+        .map_or(DEFAULT_CAPACITY, |max| max.min(MAX_INITIAL_CAPACITY))
 }
 
 fn invalid_line_range(message: String) -> Error {

@@ -150,7 +150,7 @@ pub(crate) fn preserve_unix_security_metadata(
             src_uid
         };
         let gid: libc::gid_t = if src_gid == tmp_gid {
-            libc::uid_t::MAX
+            libc::gid_t::MAX
         } else {
             src_gid
         };
@@ -230,7 +230,7 @@ pub(crate) fn preserve_unix_security_metadata(
             src_uid
         };
         let gid: libc::gid_t = if src_gid == tmp_gid {
-            libc::uid_t::MAX
+            libc::gid_t::MAX
         } else {
             src_gid
         };
