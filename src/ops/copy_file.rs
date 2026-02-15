@@ -153,7 +153,7 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
 
     ensure_destination_parent_identity_verification_supported()?;
     let destination = prepare_destination(ctx, &request, &mut paths)?;
-    if paths.source == destination.path {
+    if crate::path_utils::paths_equal_case_insensitive(&paths.source, &destination.path) {
         return Ok(noop_response(
             paths.from_relative.clone(),
             destination.to_effective_relative.clone(),

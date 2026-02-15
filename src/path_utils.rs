@@ -277,6 +277,18 @@ pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathB
     strip_prefix_case_insensitive_normalized(path.as_ref(), prefix.as_ref())
 }
 
+/// Lexical path equality under platform boundary semantics.
+///
+/// On Windows this is case-insensitive and prefix-aware (drive/UNC/verbatim handling matches the
+/// strip/starts_with helpers); on non-Windows this is equivalent to normalized lexical equality.
+#[inline]
+pub(crate) fn paths_equal_case_insensitive(path: &Path, other: &Path) -> bool {
+    let path = normalized_for_boundary(path);
+    let other = normalized_for_boundary(other);
+    starts_with_case_insensitive_normalized(path.as_ref(), other.as_ref())
+        && starts_with_case_insensitive_normalized(other.as_ref(), path.as_ref())
+}
+
 /// Internal fast path for callers that already hold lexically-normalized paths.
 ///
 /// This is intentionally `pub(crate)` to avoid exposing a footgun in the public API.
@@ -377,6 +389,18 @@ mod tests {
             strip_prefix_case_insensitive(Path::new("a/./b/c"), Path::new("./a/b")),
             Some(PathBuf::from("c"))
         );
+    }
+
+    #[test]
+    fn paths_equal_case_insensitive_normalizes_inputs() {
+        assert!(paths_equal_case_insensitive(
+            Path::new("a/./b"),
+            Path::new("./a/b")
+        ));
+        assert!(!paths_equal_case_insensitive(
+            Path::new("a/b"),
+            Path::new("a/b/c")
+        ));
     }
 
     #[test]
@@ -519,5 +543,18 @@ mod tests {
             ),
             Some(PathBuf::from("Today.txt"))
         );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn paths_equal_case_insensitive_is_case_insensitive_on_windows() {
+        assert!(paths_equal_case_insensitive(
+            Path::new(r"C:\Foo\Bar"),
+            Path::new(r"c:\foo\bar")
+        ));
+        assert!(paths_equal_case_insensitive(
+            Path::new(r"\\?\C:\Foo\Bar"),
+            Path::new(r"c:\foo\bar")
+        ));
     }
 }

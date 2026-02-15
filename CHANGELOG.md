@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `grep` plain-query scan loop: reuse one query-window buffer per request in `read_line_capped` instead of allocating a new window per line/file, reducing hot-path allocation churn on large-file and many-file scans.
 - `grep` line scanning micro-optimization: replace front-`drain` window trimming with bounded suffix compaction (`copy_within` + `truncate`) to avoid repeated O(n) front-removal costs on long-line plain-query scans.
 - `list_dir` `max_entries=0` fast path: skip per-entry metadata/kind materialization and run count-only filtering, cutting unnecessary I/O while preserving truncation and error accounting behavior.
+- Windows move/copy same-target fallback: when platform file IDs are unavailable, no-op same-path detection now uses lexical case-insensitive path equality (normalized) to avoid false `destination exists`/redundant move-copy behavior on case-only aliases.
 
 ## [0.2.0] - 2026-02-14
 

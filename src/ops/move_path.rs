@@ -323,7 +323,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         });
     }
 
-    if source == destination {
+    if crate::path_utils::paths_equal_case_insensitive(&source, &destination) {
         return Ok(MovePathResponse {
             from: from_relative,
             to: to_relative,
