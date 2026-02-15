@@ -456,13 +456,18 @@ impl SandboxPolicy {
         let resolved = self.resolve_path_unchecked(root_id, path)?;
         let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
         let normalized_root = crate::path_utils::normalize_path_lexical(&root.path);
-        if !crate::path_utils::starts_with_case_insensitive(&normalized_resolved, &normalized_root)
-        {
+        if !crate::path_utils::starts_with_case_insensitive_normalized(
+            &normalized_resolved,
+            &normalized_root,
+        ) {
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
                 path: crate::path_utils::normalize_path_lexical(path),
             });
         }
+        // WARNING: lexical-only boundary check. This does not resolve symlinks and is not
+        // TOCTOU-hardened. Security-sensitive callers must still canonicalize against live
+        // filesystem state (see `ops::Context` resolution path).
         Ok(normalized_resolved)
     }
 

@@ -16,12 +16,12 @@ pub(super) fn derive_requested_path(
     let normalized_canonical_root =
         crate::path_utils_internal::normalize_path_lexical(canonical_root);
 
-    let relative_requested = crate::path_utils::strip_prefix_case_insensitive(
+    let relative_requested = crate::path_utils::strip_prefix_case_insensitive_normalized(
         &normalized_resolved,
         &normalized_root_path,
     )
     .or_else(|| {
-        crate::path_utils::strip_prefix_case_insensitive(
+        crate::path_utils::strip_prefix_case_insensitive_normalized(
             &normalized_resolved,
             &normalized_canonical_root,
         )
@@ -86,7 +86,10 @@ fn classify_notfound_escape(
             };
             let resolved_target =
                 crate::path_utils_internal::normalize_path_lexical(&resolved_target);
-            if !crate::path_utils::starts_with_case_insensitive(&resolved_target, canonical_root) {
+            if !crate::path_utils::starts_with_case_insensitive_normalized(
+                &resolved_target,
+                canonical_root,
+            ) {
                 return Err(outside_root_error(root_id, requested_path));
             }
 
@@ -95,7 +98,8 @@ fn classify_notfound_escape(
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
                 Err(err) => return Err(Error::io_path("canonicalize", &next_relative, err)),
             };
-            if !crate::path_utils::starts_with_case_insensitive(&current, canonical_root) {
+            if !crate::path_utils::starts_with_case_insensitive_normalized(&current, canonical_root)
+            {
                 return Err(outside_root_error(root_id, requested_path));
             }
             traversed_relative = next_relative;
@@ -177,20 +181,23 @@ impl super::Context {
                 return Err(Error::io_path("canonicalize", requested_path, err));
             }
         };
-        if !crate::path_utils::starts_with_case_insensitive(&canonical, &canonical_root) {
+        if !crate::path_utils::starts_with_case_insensitive_normalized(&canonical, &canonical_root)
+        {
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
                 path: requested_path,
             });
         }
-        let relative =
-            crate::path_utils::strip_prefix_case_insensitive(&canonical, &canonical_root)
-                .ok_or_else(|| {
-                    Error::InvalidPath(format!(
-                        "failed to derive root-relative path from canonical target {}",
-                        canonical.display()
-                    ))
-                })?;
+        let relative = crate::path_utils::strip_prefix_case_insensitive_normalized(
+            &canonical,
+            &canonical_root,
+        )
+        .ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "failed to derive root-relative path from canonical target {}",
+                canonical.display()
+            ))
+        })?;
         let relative = if relative.as_os_str().is_empty() {
             PathBuf::from(".")
         } else {

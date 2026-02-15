@@ -230,9 +230,14 @@ fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
 pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
     let path = normalized_for_boundary(path);
     let prefix = normalized_for_boundary(prefix);
-    let path = path.as_ref();
-    let prefix = prefix.as_ref();
+    starts_with_case_insensitive_normalized(path.as_ref(), prefix.as_ref())
+}
 
+/// Internal fast path for callers that already hold lexically-normalized paths.
+///
+/// This is intentionally `pub(crate)` to avoid exposing a footgun in the public API.
+#[inline]
+pub(crate) fn starts_with_case_insensitive_normalized(path: &Path, prefix: &Path) -> bool {
     #[cfg(windows)]
     {
         let mut path_components = path.components();
@@ -264,9 +269,17 @@ pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
 pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathBuf> {
     let path = normalized_for_boundary(path);
     let prefix = normalized_for_boundary(prefix);
-    let path = path.as_ref();
-    let prefix = prefix.as_ref();
+    strip_prefix_case_insensitive_normalized(path.as_ref(), prefix.as_ref())
+}
 
+/// Internal fast path for callers that already hold lexically-normalized paths.
+///
+/// This is intentionally `pub(crate)` to avoid exposing a footgun in the public API.
+#[inline]
+pub(crate) fn strip_prefix_case_insensitive_normalized(
+    path: &Path,
+    prefix: &Path,
+) -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let mut path_components = path.components();
