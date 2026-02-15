@@ -73,6 +73,8 @@ struct GrepSkipCounters {
 
 #[cfg(feature = "grep")]
 const MAX_GREP_QUERY_BYTES: usize = 8 * 1024;
+#[cfg(feature = "grep")]
+const MAX_REGEX_LINE_BYTES: usize = 8 * 1024 * 1024;
 
 #[cfg(feature = "grep")]
 fn initial_match_capacity(max_results: usize) -> usize {
@@ -120,7 +122,9 @@ fn max_capped_line_bytes_for_request(
     regex: bool,
 ) -> usize {
     if regex {
-        usize::try_from(max_read_bytes).unwrap_or(usize::MAX)
+        usize::try_from(max_read_bytes)
+            .unwrap_or(usize::MAX)
+            .min(MAX_REGEX_LINE_BYTES)
     } else {
         max_capped_line_bytes(max_line_bytes)
     }
@@ -131,9 +135,7 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() {
         return true;
     }
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
+    memchr::memmem::find(haystack, needle).is_some()
 }
 
 #[cfg(feature = "grep")]
@@ -264,7 +266,10 @@ fn maybe_shrink_line_buffer(line_buf: &mut Vec<u8>, max_line_bytes: usize) {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{GrepMatch, matches_sorted_by_path_line};
+    use super::{
+        GrepMatch, MAX_REGEX_LINE_BYTES, matches_sorted_by_path_line,
+        max_capped_line_bytes_for_request,
+    };
 
     fn m(path: &str, line: u64) -> GrepMatch {
         GrepMatch {
@@ -285,6 +290,12 @@ mod tests {
     fn match_order_detects_unsorted_input() {
         let matches = vec![m("b.txt", 1), m("a.txt", 2)];
         assert!(!matches_sorted_by_path_line(&matches));
+    }
+
+    #[test]
+    fn regex_line_cap_is_bounded() {
+        let capped = max_capped_line_bytes_for_request(8 * 1024, u64::MAX, true);
+        assert_eq!(capped, MAX_REGEX_LINE_BYTES);
     }
 }
 
@@ -419,6 +430,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     }) => (bytes_read, capped, contains_query),
                     Err(_) => {
                         matches.truncate(file_match_start);
+                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
                         diag.inc_skipped_io_errors();
                         return Ok(std::ops::ControlFlow::Continue(()));
                     }
@@ -427,6 +439,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     Ok(n) => n,
                     Err(_) => {
                         matches.truncate(file_match_start);
+                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
                         diag.inc_skipped_io_errors();
                         return Ok(std::ops::ControlFlow::Continue(()));
                     }
@@ -434,12 +447,20 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 scanned_bytes = scanned_bytes.saturating_add(n);
                 if scanned_bytes > ctx.policy.limits.max_read_bytes {
                     matches.truncate(file_match_start);
+                    maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
                     counters.skipped_too_large_files =
                         counters.skipped_too_large_files.saturating_add(1);
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
 
                 line_no = line_no.saturating_add(1);
+                if request.regex && line_was_capped {
+                    matches.truncate(file_match_start);
+                    maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                    counters.skipped_too_large_files =
+                        counters.skipped_too_large_files.saturating_add(1);
+                    return Ok(std::ops::ControlFlow::Continue(()));
+                }
                 if line_buf.last() == Some(&b'\n') {
                     let _ = line_buf.pop();
                 }
@@ -453,6 +474,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     }
                     Err(_) => {
                         matches.truncate(file_match_start);
+                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
                         counters.skipped_non_utf8_files =
                             counters.skipped_non_utf8_files.saturating_add(1);
                         return Ok(std::ops::ControlFlow::Continue(()));

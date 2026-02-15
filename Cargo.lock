@@ -337,6 +337,7 @@ dependencies = [
  "diffy",
  "globset",
  "libc",
+ "memchr",
  "regex",
  "serde",
  "serde_json",

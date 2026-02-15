@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `grep` traversal-root setup: avoid cloning canonical root path when no safe traversal prefix is derived.
 - `grep` input hardening: reject oversized queries before plain/regex execution with a fixed byte limit to reduce DoS surface from unbounded user patterns.
 - `grep` long-line correctness: plain queries now match over full streamed line content (not only buffered prefix), and regex mode expands line buffering to `max_read_bytes` so suffix matches on long lines are not silently missed.
+- `grep` regex safety guardrail: cap per-line regex buffering to 8 MiB and fail closed (`skipped_too_large_files`) when a single line exceeds that bound, preventing high-memory/OOM spikes from pathological single-line inputs.
+- `grep` plain-query hot path: switch byte-slice substring detection to `memchr::memmem::find` and shrink oversized reusable line buffers on early file-skip branches.
 - `list_dir` allocation guardrail: cap `BinaryHeap` initial reservation to a bounded size instead of preallocating to arbitrarily large `max_entries` values.
 - `glob` response fast path: skip final sorting when traversal output is already in lexicographic path order.
 - `list_dir` hot path: avoid cloning canonical root `PathBuf` on each call; use borrowed root path directly during entry processing.

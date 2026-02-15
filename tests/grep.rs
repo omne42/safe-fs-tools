@@ -748,6 +748,32 @@ fn grep_matches_tail_of_long_line_for_regex_query() {
 }
 
 #[test]
+fn grep_regex_skips_single_line_above_regex_memory_cap() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let long_line = format!("{}needle-tail\n", "a".repeat((8 * 1024 * 1024) + 1));
+    std::fs::write(dir.path().join("long.txt"), long_line).expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_read_bytes = 16 * 1024 * 1024;
+    policy.limits.max_line_bytes = 64;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle-tail$".to_string(),
+            regex: true,
+            glob: Some("long.txt".to_string()),
+        },
+    )
+    .expect("grep");
+
+    assert!(resp.matches.is_empty());
+    assert_eq!(resp.skipped_too_large_files, 1);
+}
+
+#[test]
 #[cfg(all(unix, feature = "glob"))]
 fn glob_and_grep_include_symlink_files() {
     use std::os::unix::fs::symlink;
