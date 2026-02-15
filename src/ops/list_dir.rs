@@ -238,6 +238,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let mut heap = BinaryHeap::<Candidate>::with_capacity(initial_heap_capacity(max_entries));
     let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;
+    let mut zero_limit_truncated = false;
 
     ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
     let read_dir =
@@ -255,7 +256,10 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         if max_entries == 0 {
             match process_dir_entry_count_only(ctx, entry, root_path)? {
                 CountOnlyOutcome::Counted => {
-                    matched_entries = matched_entries.saturating_add(1);
+                    // With `max_entries=0`, callers only need to know whether any entry exists.
+                    // Stop after the first visible match to avoid scanning huge directories.
+                    zero_limit_truncated = true;
+                    break;
                 }
                 CountOnlyOutcome::Denied => {}
                 CountOnlyOutcome::SkippedIoError => {
@@ -290,7 +294,11 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     }
     ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
 
-    let truncated = matched_entries > max_entries;
+    let truncated = if max_entries == 0 {
+        zero_limit_truncated
+    } else {
+        matched_entries > max_entries
+    };
 
     let entries = if max_entries == 0 {
         Vec::new()

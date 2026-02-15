@@ -25,6 +25,11 @@ unsafe extern "system" {
 pub(crate) fn os_str_eq_case_insensitive(a: &OsStr, b: &OsStr) -> bool {
     const CSTR_EQUAL: i32 = 2;
 
+    // Fast path: exact `OsStr` equality avoids UTF-16 allocations and FFI call.
+    if a == b {
+        return true;
+    }
+
     let a_wide: Vec<u16> = a.encode_wide().collect();
     let b_wide: Vec<u16> = b.encode_wide().collect();
     let Ok(a_len) = i32::try_from(a_wide.len()) else {
