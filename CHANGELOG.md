@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - IO read-path allocation trim: preallocate read buffer from known file size when bounded by `max_read_bytes`.
 - `grep` match assembly: remove per-file intermediate match vector and append directly to output matches.
 - `read` line-range scanning: use a dedicated scratch buffer for pre-range skipped lines to avoid growing output capacity on skipped long lines.
+- `glob`/`grep` hot paths: preallocate output match vectors to `limits.max_results`.
+- `grep` hot loop: skip redaction regex processing entirely when no redact rules are configured.
+- Cleanup: simplify `list_dir` filename extraction and remove avoidable `Metadata` clone in `resolve/dir_ops` create path.
 - Context init cleanup: remove redundant runtime duplicate-`root.id` policy error path in `Context` construction and rely on `SandboxPolicy::validate_structural` as the single source of truth.
 - `grep` internal allocation trim: per-file match assembly now moves one owned `relative_path` into output and only clones for additional matches in that same file.
 - Unix metadata-copy docs: document why Linux/Android xattr preservation uses fd-scoped libc syscalls (std has no xattr API) and clarify syscall-level `unsafe` invariants.

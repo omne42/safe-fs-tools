@@ -173,7 +173,7 @@ fn process_dir_entry(
 
     Ok(EntryOutcome::Accepted(ListDirEntry {
         path: relative,
-        name: entry.file_name().to_string_lossy().into_owned(),
+        name: entry.file_name().to_string_lossy().to_string(),
         kind: kind.to_string(),
         size_bytes,
     }))

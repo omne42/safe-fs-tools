@@ -113,7 +113,10 @@ fn read_line_range(
     let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
     let mut reader = std::io::BufReader::new(file.take(limit));
     let mut scratch = Vec::<u8>::new();
-    let mut out = Vec::<u8>::new();
+    let mut out = match usize::try_from(file_size_bytes.min(ctx.policy.limits.max_read_bytes)) {
+        Ok(capacity) => Vec::<u8>::with_capacity(capacity),
+        Err(_) => Vec::<u8>::new(),
+    };
 
     let mut scanned_bytes: u64 = 0;
     let mut current_line: u64 = 0;

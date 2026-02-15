@@ -158,6 +158,12 @@ impl SecretRedactor {
         }
         RedactionOutcome::Text(current)
     }
+
+    #[cfg(feature = "grep")]
+    #[inline]
+    pub(crate) fn has_redact_regexes(&self) -> bool {
+        !self.redact.is_empty()
+    }
 }
 
 fn compile_and_add_deny_glob(

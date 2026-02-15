@@ -113,9 +113,10 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let max_line_bytes = ctx.policy.limits.max_line_bytes;
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
-    let mut matches = Vec::<GrepMatch>::new();
+    let mut matches = Vec::<GrepMatch>::with_capacity(ctx.policy.limits.max_results);
     let mut counters = GrepSkipCounters::default();
     let mut diag = TraversalDiagnostics::default();
+    let has_redact_regexes = ctx.redactor.has_redact_regexes();
     let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
     let walk_root = match request
         .glob
@@ -191,8 +192,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
             };
 
-            let mut first_match_index_in_output = None::<usize>;
-            let mut owned_relative_path = Some(relative_path);
+            let mut matched_once = false;
+            let mut owned_relative_path = relative_path;
+            let mut first_match_path = None::<PathBuf>;
             let mut stop_for_results_limit = false;
             for (idx, line) in content.lines().enumerate() {
                 let ok = regex.as_ref().map_or_else(
@@ -207,30 +209,40 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     stop_for_results_limit = true;
                     break;
                 }
-                let redacted = ctx.redactor.redact_text_cow(line);
-                let line_truncated = redacted.len() > max_line_bytes;
-                let mut end = redacted.len().min(max_line_bytes);
-                while end > 0 && !redacted.is_char_boundary(end) {
-                    end = end.saturating_sub(1);
-                }
-                let text = match redacted {
-                    std::borrow::Cow::Borrowed(redacted) => redacted[..end].to_string(),
-                    std::borrow::Cow::Owned(redacted) => {
-                        if end == redacted.len() {
-                            redacted
-                        } else {
-                            redacted[..end].to_string()
-                        }
+                let (text, line_truncated) = if has_redact_regexes {
+                    let redacted = ctx.redactor.redact_text_cow(line);
+                    let line_truncated = redacted.len() > max_line_bytes;
+                    let mut end = redacted.len().min(max_line_bytes);
+                    while end > 0 && !redacted.is_char_boundary(end) {
+                        end = end.saturating_sub(1);
                     }
+                    let text = match redacted {
+                        std::borrow::Cow::Borrowed(redacted) => redacted[..end].to_string(),
+                        std::borrow::Cow::Owned(redacted) => {
+                            if end == redacted.len() {
+                                redacted
+                            } else {
+                                redacted[..end].to_string()
+                            }
+                        }
+                    };
+                    (text, line_truncated)
+                } else {
+                    let line_truncated = line.len() > max_line_bytes;
+                    let mut end = line.len().min(max_line_bytes);
+                    while end > 0 && !line.is_char_boundary(end) {
+                        end = end.saturating_sub(1);
+                    }
+                    (line[..end].to_string(), line_truncated)
                 };
 
-                let path = match first_match_index_in_output {
-                    Some(first_idx) => matches
-                        .get(first_idx)
-                        .expect("first match index must point into output")
-                        .path
-                        .clone(),
-                    None => owned_relative_path.take().expect("relative path present"),
+                let path = if matched_once {
+                    first_match_path
+                        .get_or_insert_with(|| owned_relative_path.clone())
+                        .clone()
+                } else {
+                    matched_once = true;
+                    std::mem::take(&mut owned_relative_path)
                 };
                 matches.push(GrepMatch {
                     path,
@@ -238,9 +250,6 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     text,
                     line_truncated,
                 });
-                if first_match_index_in_output.is_none() {
-                    first_match_index_in_output = Some(matches.len().saturating_sub(1));
-                }
             }
 
             if stop_for_results_limit {

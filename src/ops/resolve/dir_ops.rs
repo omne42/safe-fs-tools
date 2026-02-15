@@ -290,11 +290,12 @@ pub(super) fn ensure_dir_under_root(
                         return Err(Error::io_path("create_dir", &current_relative, create_err));
                     }
                 };
-                let post_create_meta = fs::symlink_metadata(&next).map_err(|meta_err| {
-                    Error::io_path("symlink_metadata", &current_relative, meta_err)
-                })?;
+                let mut post_create_meta =
+                    Some(fs::symlink_metadata(&next).map_err(|meta_err| {
+                        Error::io_path("symlink_metadata", &current_relative, meta_err)
+                    })?);
                 if created_now {
-                    created_meta = Some(post_create_meta.clone());
+                    created_meta = post_create_meta.take();
                 }
                 if let Err(err) =
                     verify_parent_identity(&current, &parent_relative, expected_parent_meta)
@@ -313,9 +314,13 @@ pub(super) fn ensure_dir_under_root(
                     return Err(err);
                 }
 
+                let post_create_meta = created_meta
+                    .as_ref()
+                    .or(post_create_meta.as_ref())
+                    .expect("post-create metadata must be present");
                 match handle_existing_component(
                     &next,
-                    &post_create_meta,
+                    post_create_meta,
                     &current_relative,
                     &canonical_root,
                     root_id,

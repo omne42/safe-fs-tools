@@ -82,7 +82,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
     let matcher = compile_glob(&request.pattern)?;
 
-    let mut matches = Vec::<PathBuf>::new();
+    let mut matches = Vec::<PathBuf>::with_capacity(ctx.policy.limits.max_results);
     let mut diag = TraversalDiagnostics::default();
     let walk_root = match derive_safe_traversal_prefix(&request.pattern) {
         Some(prefix) => {
