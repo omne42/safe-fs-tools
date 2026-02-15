@@ -73,8 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows rename error mapping: `copy_file`/`write_file` now treat raw OS errors `80/183` as destination-exists when `overwrite=false`, matching `move_path` semantics under race conditions.
 - `list_dir` top-k selection now defers file `metadata()` reads until an entry is a real heap candidate, reducing syscall pressure on large directories with small `max_entries`.
 - `resolve/dir_ops` deep-path traversal now reuses borrowed parent-relative paths instead of cloning `PathBuf` on every segment, reducing O(depth²) path-copy overhead.
-- `list_dir` candidate collection now keeps entry names as `OsString` until heap insertion/output materialization, avoiding eager `to_string_lossy().to_string()` allocations for filtered-out entries.
+- `list_dir` candidate-name handling now keeps `OsString` internally and lazily caches one lossy comparison string per candidate, avoiding repeated `to_string_lossy()` work in top-k heap comparisons.
 - Unix xattr metadata copy now enforces explicit safety caps for xattr value/name-list lengths before allocation, reducing peak-memory risk on pathological filesystems.
+- `edit` range rewrite no longer builds a full `Vec<&str>` line index; it now scans once to locate byte offsets and rewrites via prefix/replacement/suffix slicing to reduce peak memory on large files.
 
 ## [0.2.0] - 2026-02-14
 

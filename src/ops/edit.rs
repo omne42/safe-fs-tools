@@ -35,46 +35,20 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         )));
     }
 
-    let start = usize::try_from(request.start_line - 1).map_err(|_| {
-        invalid_edit_range(format!(
-            "invalid line range: line number too large: {}",
-            request.start_line
-        ))
-    })?;
-    let end = usize::try_from(request.end_line - 1).map_err(|_| {
-        invalid_edit_range(format!(
-            "invalid line range: line number too large: {}",
-            request.end_line
-        ))
-    })?;
-
     let (content, identity) = super::io::read_string_limited_with_identity(
         &path,
         &relative,
         ctx.policy.limits.max_read_bytes,
     )?;
-    let lines = split_lines_preserving_endings(&content);
+    let offsets =
+        locate_edit_range_offsets(&content, request.start_line, request.end_line, &relative)?;
+    let removed_bytes = usize_to_u64(
+        offsets.end_offset.saturating_sub(offsets.start_offset),
+        &relative,
+        "removed range size",
+    )?;
 
-    if start >= lines.len() || end >= lines.len() {
-        return Err(invalid_edit_range(format!(
-            "invalid line range: {}..{} out of bounds (file has {} lines)",
-            request.start_line,
-            request.end_line,
-            lines.len()
-        )));
-    }
-
-    let removed_bytes = lines[start..=end].iter().try_fold(0_u64, |total, line| {
-        let line_bytes = usize_to_u64(line.len(), &relative, "line length")?;
-        total.checked_add(line_bytes).ok_or_else(|| {
-            Error::InvalidPath(format!(
-                "{}: removed byte count overflow",
-                relative.display()
-            ))
-        })
-    })?;
-
-    let newline = line_ending(lines[end]);
+    let newline = offsets.end_line_ending;
 
     let mut replacement = normalize_replacement_line_endings(&request.replacement, newline);
 
@@ -101,30 +75,28 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         });
     }
 
-    let mut out = String::with_capacity(content.len().saturating_add(replacement.len()));
-    for (idx, line) in lines.iter().enumerate() {
-        if idx == start {
-            out.push_str(&replacement);
-        }
-        if idx < start || idx > end {
-            out.push_str(line);
-        }
-    }
-
-    let changed = out != content;
-    if changed {
+    let replaced = &content[offsets.start_offset..offsets.end_offset];
+    if replacement != replaced {
+        let out_capacity = usize::try_from(output_bytes)
+            .unwrap_or_else(|_| content.len().saturating_add(replacement.len()));
+        let mut out = String::with_capacity(out_capacity);
+        out.push_str(&content[..offsets.start_offset]);
+        out.push_str(&replacement);
+        out.push_str(&content[offsets.end_offset..]);
         super::io::write_bytes_atomic_checked(&path, &relative, out.as_bytes(), identity)?;
+
+        let output_len = usize_to_u64(out.len(), &relative, "output size")?;
+        return Ok(EditResponse {
+            path: relative,
+            requested_path: Some(requested_path),
+            bytes_written: output_len,
+        });
     }
 
-    let output_len = if changed {
-        usize_to_u64(out.len(), &relative, "output size")?
-    } else {
-        0
-    };
     Ok(EditResponse {
         path: relative,
         requested_path: Some(requested_path),
-        bytes_written: output_len,
+        bytes_written: 0,
     })
 }
 
@@ -151,6 +123,7 @@ fn normalize_replacement_line_endings(replacement: &str, newline: &str) -> Strin
     out
 }
 
+#[cfg(test)]
 fn split_lines_preserving_endings(content: &str) -> Vec<&str> {
     if content.is_empty() {
         return Vec::new();
@@ -185,7 +158,7 @@ fn split_lines_preserving_endings(content: &str) -> Vec<&str> {
     lines
 }
 
-fn line_ending(line: &str) -> &str {
+fn line_ending(line: &str) -> &'static str {
     if line.ends_with("\r\n") {
         "\r\n"
     } else if line.ends_with('\n') {
@@ -195,6 +168,84 @@ fn line_ending(line: &str) -> &str {
     } else {
         ""
     }
+}
+
+struct EditRangeOffsets {
+    start_offset: usize,
+    end_offset: usize,
+    end_line_ending: &'static str,
+}
+
+fn locate_edit_range_offsets(
+    content: &str,
+    start_line: u64,
+    end_line: u64,
+    relative: &Path,
+) -> Result<EditRangeOffsets> {
+    let bytes = content.as_bytes();
+    let mut idx = 0usize;
+    let mut line_start = 0usize;
+    let mut line_no = 0u64;
+    let mut start_offset = None::<usize>;
+    let mut end_offset = None::<usize>;
+    let mut end_line_ending = "";
+
+    while idx < bytes.len() {
+        let line_end = match bytes[idx] {
+            b'\n' => Some(idx + 1),
+            b'\r' if idx + 1 < bytes.len() && bytes[idx + 1] == b'\n' => Some(idx + 2),
+            b'\r' => Some(idx + 1),
+            _ => None,
+        };
+        if let Some(line_end) = line_end {
+            line_no = line_no.checked_add(1).ok_or_else(|| {
+                Error::InvalidPath(format!("{}: line count overflow", relative.display()))
+            })?;
+            if line_no == start_line {
+                start_offset = Some(line_start);
+            }
+            if line_no == end_line {
+                end_offset = Some(line_end);
+                end_line_ending = line_ending(&content[line_start..line_end]);
+            }
+            line_start = line_end;
+            idx = line_end;
+        } else {
+            idx += 1;
+        }
+    }
+
+    if line_start < bytes.len() {
+        line_no = line_no.checked_add(1).ok_or_else(|| {
+            Error::InvalidPath(format!("{}: line count overflow", relative.display()))
+        })?;
+        if line_no == start_line {
+            start_offset = Some(line_start);
+        }
+        if line_no == end_line {
+            end_offset = Some(bytes.len());
+            end_line_ending = "";
+        }
+    }
+
+    let Some(start_offset) = start_offset else {
+        return Err(invalid_edit_range(format!(
+            "invalid line range: {}..{} out of bounds (file has {} lines)",
+            start_line, end_line, line_no
+        )));
+    };
+    let Some(end_offset) = end_offset else {
+        return Err(invalid_edit_range(format!(
+            "invalid line range: {}..{} out of bounds (file has {} lines)",
+            start_line, end_line, line_no
+        )));
+    };
+
+    Ok(EditRangeOffsets {
+        start_offset,
+        end_offset,
+        end_line_ending,
+    })
 }
 
 fn invalid_edit_range(message: String) -> Error {

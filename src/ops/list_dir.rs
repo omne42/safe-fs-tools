@@ -110,25 +110,30 @@ struct EntryCandidate {
     absolute_path: PathBuf,
     path: PathBuf,
     name: OsString,
+    cached_lossy_name: Option<String>,
     kind: &'static str,
     is_file: bool,
 }
 
 impl EntryCandidate {
     #[inline]
-    fn sorts_before(&self, other: &ListDirEntry) -> bool {
-        self.name
-            .to_string_lossy()
-            .as_ref()
+    fn sorts_before(&mut self, other: &ListDirEntry) -> bool {
+        let name = self
+            .cached_lossy_name
+            .get_or_insert_with(|| self.name.to_string_lossy().into_owned());
+        name.as_str()
             .cmp(other.name.as_str())
             .then_with(|| self.path.cmp(&other.path))
             == std::cmp::Ordering::Less
     }
 
     fn into_list_entry(self, size_bytes: u64) -> ListDirEntry {
+        let name = self
+            .cached_lossy_name
+            .unwrap_or_else(|| self.name.to_string_lossy().into_owned());
         ListDirEntry {
             path: self.path,
-            name: self.name.to_string_lossy().into_owned(),
+            name,
             kind: self.kind.to_string(),
             size_bytes,
         }
@@ -207,6 +212,7 @@ fn process_dir_entry(
         absolute_path: path,
         path: relative,
         name: entry.file_name(),
+        cached_lossy_name: None,
         kind,
         is_file: file_type.is_file(),
     }))
@@ -292,7 +298,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         }
 
         match process_dir_entry(ctx, entry, root_path)? {
-            EntryOutcome::Accepted(entry) => {
+            EntryOutcome::Accepted(mut entry) => {
                 matched_entries = matched_entries.saturating_add(1);
 
                 let should_insert = if heap.len() < max_entries {
