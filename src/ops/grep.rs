@@ -134,6 +134,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut diag = TraversalDiagnostics::default();
     let has_redact_regexes = ctx.redactor.has_redact_regexes();
     let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
+    let traversal_open_mode = if file_glob.is_some() {
+        TraversalOpenMode::None
+    } else {
+        TraversalOpenMode::ReadFile
+    };
     let walk_root = match request
         .glob
         .as_deref()
@@ -169,7 +174,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         &root_path,
         &walk_root,
         TraversalWalkOptions {
-            open_mode: TraversalOpenMode::ReadFile,
+            open_mode: traversal_open_mode,
             max_walk,
         },
         &started,
