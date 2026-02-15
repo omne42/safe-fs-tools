@@ -62,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `read` line-range memory tuning: switch from file-size-based upfront reservation to a small bounded initial capacity to avoid large allocations for narrow line windows.
 - `read` line-range skip-path memory tuning: skipped pre-range lines are now consumed in streaming chunks instead of buffering whole lines, avoiding large temporary allocations on very long prefix lines.
 - Unix metadata portability: fix ownership-preservation `gid` sentinel to use `libc::gid_t::MAX` (instead of `uid_t`) when preserving uid/gid deltas.
+- `grep` plain-query scan loop: reuse per-file query-window buffer in `read_line_capped` instead of allocating a new window per line, reducing hot-path allocation churn on large files.
 
 ## [0.2.0] - 2026-02-14
 

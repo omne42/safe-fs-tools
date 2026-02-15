@@ -154,12 +154,13 @@ fn read_line_capped<R: BufRead>(
     line_buf: &mut Vec<u8>,
     max_line_bytes: usize,
     query: Option<&[u8]>,
+    query_window: &mut Vec<u8>,
 ) -> std::io::Result<ReadLineCapped> {
     line_buf.clear();
+    query_window.clear();
     let mut bytes_read = 0usize;
     let mut capped = false;
     let mut query_matched = false;
-    let mut query_window = Vec::<u8>::new();
     loop {
         let chunk = reader.fill_buf()?;
         if chunk.is_empty() {
@@ -182,7 +183,7 @@ fn read_line_capped<R: BufRead>(
             && !query_matched
         {
             query_window.extend_from_slice(consumed);
-            query_matched = contains_subslice(&query_window, query);
+            query_matched = contains_subslice(query_window, query);
             if !query_matched {
                 let keep = query.len().saturating_sub(1);
                 if query_window.len() > keep {
@@ -264,10 +265,11 @@ fn maybe_shrink_line_buffer(line_buf: &mut Vec<u8>, max_line_bytes: usize) {
 
 #[cfg(all(test, feature = "grep"))]
 mod tests {
+    use std::io::{BufReader, Cursor};
     use std::path::PathBuf;
 
     use super::{
-        GrepMatch, MAX_REGEX_LINE_BYTES, matches_sorted_by_path_line,
+        GrepMatch, MAX_REGEX_LINE_BYTES, ReadLineCapped, matches_sorted_by_path_line,
         max_capped_line_bytes_for_request,
     };
 
@@ -296,6 +298,70 @@ mod tests {
     fn regex_line_cap_is_bounded() {
         let capped = max_capped_line_bytes_for_request(8 * 1024, u64::MAX, true);
         assert_eq!(capped, MAX_REGEX_LINE_BYTES);
+    }
+
+    #[test]
+    fn read_line_capped_does_not_match_across_line_boundaries() {
+        let input = Cursor::new(b"aaane\nedle\n".to_vec());
+        let mut reader = BufReader::with_capacity(3, input);
+        let mut line_buf = Vec::new();
+        let mut query_window = Vec::new();
+
+        let first = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            1024,
+            Some(b"needle"),
+            &mut query_window,
+        )
+        .expect("first line");
+        assert!(matches!(
+            first,
+            ReadLineCapped::Line {
+                contains_query: false,
+                ..
+            }
+        ));
+
+        let second = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            1024,
+            Some(b"needle"),
+            &mut query_window,
+        )
+        .expect("second line");
+        assert!(matches!(
+            second,
+            ReadLineCapped::Line {
+                contains_query: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn read_line_capped_matches_query_split_across_chunks() {
+        let input = Cursor::new(b"xxneedlezz\n".to_vec());
+        let mut reader = BufReader::with_capacity(2, input);
+        let mut line_buf = Vec::new();
+        let mut query_window = Vec::new();
+
+        let line = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            1024,
+            Some(b"needle"),
+            &mut query_window,
+        )
+        .expect("line");
+        assert!(matches!(
+            line,
+            ReadLineCapped::Line {
+                contains_query: true,
+                ..
+            }
+        ));
     }
 }
 
@@ -415,12 +481,14 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             let file_match_start = matches.len();
             let mut owned_relative_path = relative_path;
             let mut repeated_match_path = None::<PathBuf>;
+            let mut query_window = Vec::<u8>::new();
             loop {
                 let (n, line_was_capped, contains_query) = match read_line_capped(
                     &mut reader,
                     &mut line_buf,
                     max_capped_line_bytes,
                     plain_query,
+                    &mut query_window,
                 ) {
                     Ok(ReadLineCapped::Eof) => break,
                     Ok(ReadLineCapped::Line {
