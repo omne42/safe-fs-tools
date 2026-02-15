@@ -159,6 +159,8 @@ impl super::Context {
         let canonical_root = resolved.canonical_root;
         let resolved = resolved.resolved;
 
+        // `resolve_path_checked` is lexical-only. We still must canonicalize here to resolve
+        // symlinks against filesystem state before enforcing canonical root boundaries.
         let canonical = match resolved.canonicalize() {
             Ok(canonical) => canonical,
             Err(err) => {

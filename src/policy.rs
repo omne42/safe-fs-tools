@@ -463,7 +463,7 @@ impl SandboxPolicy {
                 path: crate::path_utils::normalize_path_lexical(path),
             });
         }
-        Ok(resolved)
+        Ok(normalized_resolved)
     }
 
     /// Compatibility alias for unchecked lexical path resolution.

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Docs overhaul: rebuilt project documentation into a structured portal (`docs/index.md`) with dedicated guides for getting started, concepts, policy/operations/CLI/library references, security usage, deployment/ops, and FAQ.
 - Internal write path cleanup: `commit_write` now consumes `WriteCommitContext` so permission metadata is moved into temp-file commit without an extra `Permissions` clone.
-- Redaction fast path: add a compiled `RegexSet` pre-check so inputs with no redact regex matches return immediately before sequential per-regex replacement.
+- Redaction compilation cleanup: redact patterns now compile once into `Regex` values (remove duplicate `Regex` + `RegexSet` compilation of the same rules).
 - Context init cleanup: remove redundant runtime duplicate-`root.id` policy error path in `Context` construction and rely on `SandboxPolicy::validate_structural` as the single source of truth.
 - `grep` internal allocation trim: per-file match assembly now moves one owned `relative_path` into output and only clones for additional matches in that same file.
 - Unix metadata-copy docs: document why Linux/Android xattr preservation uses fd-scoped libc syscalls (std has no xattr API) and clarify syscall-level `unsafe` invariants.

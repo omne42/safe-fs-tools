@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::path::{Component, Path};
 
 use globset::{GlobSet, GlobSetBuilder};
-use regex::{Regex, RegexSet};
+use regex::Regex;
 
 use crate::error::{Error, Result};
 use crate::policy::SecretRules;
@@ -26,7 +26,6 @@ pub enum RedactionOutcome<'a> {
 pub struct SecretRedactor {
     deny: GlobSet,
     redact: Vec<Regex>,
-    redact_set: Option<RegexSet>,
     replacement: String,
 }
 
@@ -106,18 +105,9 @@ impl SecretRedactor {
             })?;
             redact.push(regex);
         }
-        let redact_set = if rules.redact_regexes.is_empty() {
-            None
-        } else {
-            Some(RegexSet::new(&rules.redact_regexes).map_err(|err| {
-                Error::InvalidPolicy(format!("invalid secrets.redact_regexes regex set: {err}"))
-            })?)
-        };
-
         Ok(Self {
             deny,
             redact,
-            redact_set,
             replacement: rules.replacement.clone(),
         })
     }
@@ -156,14 +146,6 @@ impl SecretRedactor {
     }
 
     pub fn redact_text_outcome<'a>(&self, input: &'a str) -> RedactionOutcome<'a> {
-        if self
-            .redact_set
-            .as_ref()
-            .is_some_and(|set| !set.is_match(input))
-        {
-            return RedactionOutcome::Text(Cow::Borrowed(input));
-        }
-
         let mut current: Cow<'_, str> = Cow::Borrowed(input);
         for regex in &self.redact {
             match replace_regex_with_limit(current.as_ref(), regex, self.replacement.as_str()) {

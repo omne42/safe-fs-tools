@@ -84,42 +84,53 @@ pub(crate) fn build_glob_from_normalized(
     builder.build()
 }
 
-pub(crate) fn normalize_path_lexical(path: &Path) -> PathBuf {
-    #[derive(Debug)]
-    enum Segment {
-        ParentDir,
-        Normal(OsString),
-    }
+#[derive(Debug)]
+enum Segment {
+    ParentDir,
+    Normal(OsString),
+}
 
-    let mut path_prefix: Option<OsString> = None;
-    let mut has_root = false;
-    let mut segments: Vec<Segment> = Vec::new();
+#[derive(Debug)]
+struct NormalizedPathParts {
+    path_prefix: Option<OsString>,
+    has_root: bool,
+    segments: Vec<Segment>,
+}
+
+fn normalize_path_lexical_inner(path: &Path) -> NormalizedPathParts {
+    let mut parts = NormalizedPathParts {
+        path_prefix: None,
+        has_root: false,
+        segments: Vec::new(),
+    };
 
     for comp in path.components() {
         match comp {
             Component::CurDir => {}
             Component::ParentDir => {
-                if matches!(segments.last(), Some(Segment::Normal(_))) {
-                    segments.pop();
-                } else if !has_root {
-                    segments.push(Segment::ParentDir);
+                if matches!(parts.segments.last(), Some(Segment::Normal(_))) {
+                    parts.segments.pop();
+                } else if !parts.has_root {
+                    parts.segments.push(Segment::ParentDir);
                 }
             }
-            Component::Normal(part) => segments.push(Segment::Normal(part.to_os_string())),
-            Component::RootDir => {
-                has_root = true;
-            }
+            Component::Normal(part) => parts.segments.push(Segment::Normal(part.to_os_string())),
+            Component::RootDir => parts.has_root = true,
             Component::Prefix(prefix_comp) => {
-                path_prefix = Some(prefix_comp.as_os_str().to_os_string());
+                parts.path_prefix = Some(prefix_comp.as_os_str().to_os_string());
             }
         }
     }
 
+    parts
+}
+
+fn reconstruct_path(path: &Path, parts: NormalizedPathParts) -> PathBuf {
     let mut out = PathBuf::new();
-    if let Some(prefix) = path_prefix {
+    if let Some(prefix) = parts.path_prefix {
         out.push(Path::new(&prefix));
     }
-    if has_root {
+    if parts.has_root {
         if out.as_os_str().is_empty() {
             #[cfg(windows)]
             out.push("\\");
@@ -139,7 +150,7 @@ pub(crate) fn normalize_path_lexical(path: &Path) -> PathBuf {
             }
         }
     }
-    for segment in segments {
+    for segment in parts.segments {
         match segment {
             Segment::ParentDir => out.push(".."),
             Segment::Normal(part) => out.push(part),
@@ -151,6 +162,10 @@ pub(crate) fn normalize_path_lexical(path: &Path) -> PathBuf {
     } else {
         out
     }
+}
+
+pub(crate) fn normalize_path_lexical(path: &Path) -> PathBuf {
+    reconstruct_path(path, normalize_path_lexical_inner(path))
 }
 
 #[cfg(windows)]
@@ -196,16 +211,12 @@ fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
 }
 
 #[inline]
-fn is_lexically_normalized_for_boundary(path: &Path) -> bool {
-    path.as_os_str().is_empty() || normalize_path_lexical(path) == path
-}
-
-#[inline]
 fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
-    if is_lexically_normalized_for_boundary(path) {
+    let normalized = normalize_path_lexical(path);
+    if normalized == path {
         Cow::Borrowed(path)
     } else {
-        Cow::Owned(normalize_path_lexical(path))
+        Cow::Owned(normalized)
     }
 }
 
@@ -221,15 +232,6 @@ pub fn starts_with_case_insensitive(path: &Path, prefix: &Path) -> bool {
     let prefix = normalized_for_boundary(prefix);
     let path = path.as_ref();
     let prefix = prefix.as_ref();
-
-    debug_assert!(
-        is_lexically_normalized_for_boundary(path),
-        "starts_with_case_insensitive requires normalized `path` input, got: {path:?}"
-    );
-    debug_assert!(
-        is_lexically_normalized_for_boundary(prefix),
-        "starts_with_case_insensitive requires normalized `prefix` input, got: {prefix:?}"
-    );
 
     #[cfg(windows)]
     {
@@ -264,15 +266,6 @@ pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathB
     let prefix = normalized_for_boundary(prefix);
     let path = path.as_ref();
     let prefix = prefix.as_ref();
-
-    debug_assert!(
-        is_lexically_normalized_for_boundary(path),
-        "strip_prefix_case_insensitive requires normalized `path` input, got: {path:?}"
-    );
-    debug_assert!(
-        is_lexically_normalized_for_boundary(prefix),
-        "strip_prefix_case_insensitive requires normalized `prefix` input, got: {prefix:?}"
-    );
 
     #[cfg(windows)]
     {
