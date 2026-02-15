@@ -78,6 +78,13 @@ fn initial_match_capacity(max_results: usize) -> usize {
 }
 
 #[cfg(feature = "grep")]
+fn initial_line_buffer_capacity(max_line_bytes: usize) -> usize {
+    const DEFAULT_CAPACITY: usize = 8 * 1024;
+    const MAX_INITIAL_CAPACITY: usize = 64 * 1024;
+    max_line_bytes.clamp(DEFAULT_CAPACITY, MAX_INITIAL_CAPACITY)
+}
+
+#[cfg(feature = "grep")]
 fn build_grep_response(
     mut matches: Vec<GrepMatch>,
     diag: TraversalDiagnostics,
@@ -223,7 +230,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
             let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
             let mut reader = std::io::BufReader::new(file.take(limit));
-            let mut line_buf = Vec::<u8>::new();
+            let mut line_buf =
+                Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes));
             let mut scanned_bytes = 0_u64;
             let mut line_no = 0_u64;
             let file_match_start = matches.len();
