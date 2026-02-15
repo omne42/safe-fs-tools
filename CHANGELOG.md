@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `grep` internal allocation trim: per-file match assembly now moves one owned `relative_path` into output and only clones for additional matches in that same file.
 - `grep` correctness fix: preserve the first match path when reusing per-file path allocations so multi-match files never emit empty `path` values.
 - CLI input IO trim: reuse metadata from no-follow open and preallocate file-read buffers from known file size in `load_text_limited`.
+- `grep` read-path memory trim: switch per-file scan from full-buffer reads to streaming `BufRead` line scanning while preserving too-large/non-UTF-8 skip semantics.
 - Unix metadata-copy docs: document why Linux/Android xattr preservation uses fd-scoped libc syscalls (std has no xattr API) and clarify syscall-level `unsafe` invariants.
 - `grep` readability cleanup: flatten per-line regex/plain query match selection via `Option` combinator (`map_or_else`) in the hot scan loop.
 - Delete API cleanup: remove over-designed `DeleteKind`/`&str` `PartialEq` impls and keep comparisons explicit at call sites.

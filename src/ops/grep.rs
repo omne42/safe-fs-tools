@@ -53,6 +53,9 @@ pub struct GrepResponse {
 }
 
 #[cfg(feature = "grep")]
+use std::io::{BufRead, Read};
+
+#[cfg(feature = "grep")]
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "grep")]
@@ -166,36 +169,66 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 return Ok(std::ops::ControlFlow::Continue(()));
             }
 
-            let bytes = match super::io::read_bytes_limited(
-                &path,
-                &relative_path,
-                ctx.policy.limits.max_read_bytes,
-            ) {
-                Ok(bytes) => bytes,
-                Err(Error::FileTooLarge { .. }) => {
-                    counters.skipped_too_large_files =
-                        counters.skipped_too_large_files.saturating_add(1);
-                    return Ok(std::ops::ControlFlow::Continue(()));
-                }
+            let (file, meta) = match super::io::open_regular_file_for_read(&path, &relative_path) {
+                Ok(file_and_meta) => file_and_meta,
                 Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
                     diag.inc_skipped_io_errors();
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
                 Err(err) => return Err(err),
             };
-            let content = match std::str::from_utf8(&bytes) {
-                Ok(content) => content,
-                Err(_) => {
-                    counters.skipped_non_utf8_files =
-                        counters.skipped_non_utf8_files.saturating_add(1);
-                    return Ok(std::ops::ControlFlow::Continue(()));
-                }
-            };
+            if meta.len() > ctx.policy.limits.max_read_bytes {
+                counters.skipped_too_large_files =
+                    counters.skipped_too_large_files.saturating_add(1);
+                return Ok(std::ops::ControlFlow::Continue(()));
+            }
 
+            let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
+            let mut reader = std::io::BufReader::new(file.take(limit));
+            let mut line_buf = Vec::<u8>::new();
+            let mut scanned_bytes = 0_u64;
+            let mut line_no = 0_u64;
+            let file_match_start = matches.len();
             let mut owned_relative_path = relative_path;
             let mut repeated_match_path = None::<PathBuf>;
-            let mut stop_for_results_limit = false;
-            for (idx, line) in content.lines().enumerate() {
+            loop {
+                line_buf.clear();
+                let n = match reader.read_until(b'\n', &mut line_buf) {
+                    Ok(n) => n,
+                    Err(_) => {
+                        matches.truncate(file_match_start);
+                        diag.inc_skipped_io_errors();
+                        return Ok(std::ops::ControlFlow::Continue(()));
+                    }
+                };
+                if n == 0 {
+                    break;
+                }
+
+                scanned_bytes = scanned_bytes.saturating_add(n as u64);
+                if scanned_bytes > ctx.policy.limits.max_read_bytes {
+                    matches.truncate(file_match_start);
+                    counters.skipped_too_large_files =
+                        counters.skipped_too_large_files.saturating_add(1);
+                    return Ok(std::ops::ControlFlow::Continue(()));
+                }
+
+                line_no = line_no.saturating_add(1);
+                if line_buf.last() == Some(&b'\n') {
+                    let _ = line_buf.pop();
+                }
+                if line_buf.last() == Some(&b'\r') {
+                    let _ = line_buf.pop();
+                }
+                let line = match std::str::from_utf8(&line_buf) {
+                    Ok(line) => line,
+                    Err(_) => {
+                        matches.truncate(file_match_start);
+                        counters.skipped_non_utf8_files =
+                            counters.skipped_non_utf8_files.saturating_add(1);
+                        return Ok(std::ops::ControlFlow::Continue(()));
+                    }
+                };
                 let ok = regex.as_ref().map_or_else(
                     || line.contains(&request.query),
                     |regex| regex.is_match(line),
@@ -205,8 +238,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
                 if matches.len() >= ctx.policy.limits.max_results {
                     diag.mark_limit_reached(ScanLimitReason::Results);
-                    stop_for_results_limit = true;
-                    break;
+                    return Ok(std::ops::ControlFlow::Break(()));
                 }
                 let (text, line_truncated) = if has_redact_regexes {
                     let redacted = ctx.redactor.redact_text_cow(line);
@@ -245,15 +277,12 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 };
                 matches.push(GrepMatch {
                     path,
-                    line: idx.saturating_add(1) as u64,
+                    line: line_no,
                     text,
                     line_truncated,
                 });
             }
 
-            if stop_for_results_limit {
-                return Ok(std::ops::ControlFlow::Break(()));
-            }
             Ok(std::ops::ControlFlow::Continue(()))
         },
     ) {
