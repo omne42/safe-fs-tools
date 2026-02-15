@@ -205,6 +205,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         Vec::<GrepMatch>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
     let mut counters = GrepSkipCounters::default();
     let mut diag = TraversalDiagnostics::default();
+    let mut line_buf = Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes));
     let has_redact_regexes = ctx.redactor.has_redact_regexes();
     let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
     let traversal_open_mode = if file_glob.is_some() {
@@ -287,8 +288,6 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
             let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
             let mut reader = std::io::BufReader::new(file.take(limit));
-            let mut line_buf =
-                Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes));
             let max_capped_line_bytes = max_capped_line_bytes(max_line_bytes);
             let mut scanned_bytes = 0_u64;
             let mut line_no = 0_u64;

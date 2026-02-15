@@ -132,14 +132,18 @@ pub(super) fn walkdir_traversal_iter<'a>(
                 }
             };
 
-            let probe = relative.as_ref().join(TRAVERSAL_GLOB_PROBE_NAME);
             if ctx.redactor.is_path_denied(relative.as_ref())
-                || (is_dir && ctx.redactor.is_path_denied(&probe))
+                || ctx.is_traversal_path_skipped(relative.as_ref())
             {
                 return false;
             }
-            !(ctx.is_traversal_path_skipped(relative.as_ref())
-                || (is_dir && ctx.is_traversal_path_skipped(&probe)))
+            if is_dir {
+                let probe = relative.as_ref().join(TRAVERSAL_GLOB_PROBE_NAME);
+                if ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe) {
+                    return false;
+                }
+            }
+            true
         })
 }
 
