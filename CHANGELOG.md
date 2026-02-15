@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Platform boundary cleanup: isolate platform-specific FFI/`unsafe` into `src/platform/{rename,windows_path_compare,unix_metadata}.rs` and keep `ops/io` + `path_utils` on safe wrappers.
 - Windows identity hardening: `copy_file`/`delete` now only treat two paths as the same file when all identity fields (`volume_serial_number`, `file_index`) are present on both sides; unknown IDs fail closed instead of `None == None` false positives.
 - `read` line-range memory tuning: switch from file-size-based upfront reservation to a small bounded initial capacity to avoid large allocations for narrow line windows.
+- `read` line-range skip-path memory tuning: skipped pre-range lines are now consumed in streaming chunks instead of buffering whole lines, avoiding large temporary allocations on very long prefix lines.
 - Unix metadata portability: fix ownership-preservation `gid` sentinel to use `libc::gid_t::MAX` (instead of `uid_t`) when preserving uid/gid deltas.
 
 ## [0.2.0] - 2026-02-14

@@ -112,7 +112,6 @@ fn read_line_range(
     let file_size_bytes = meta.len();
     let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
     let mut reader = std::io::BufReader::new(file.take(limit));
-    let mut scratch = Vec::<u8>::new();
     // Line-range reads often pull a narrow subset; start small and grow on demand.
     let mut out = Vec::<u8>::with_capacity(initial_line_range_capacity(
         ctx.policy.limits.max_read_bytes,
@@ -123,20 +122,20 @@ fn read_line_range(
 
     loop {
         let upcoming_line = current_line.saturating_add(1);
-        let target_buf = if upcoming_line < start_line {
-            scratch.clear();
-            &mut scratch
+        let n = if upcoming_line < start_line {
+            read_line_discarding_bytes(&mut reader)
+                .map_err(|err| Error::io_path("read", relative, err))?
         } else {
-            &mut out
+            reader
+                .read_until(b'\n', &mut out)
+                .map_err(|err| Error::io_path("read", relative, err))?
         };
-        let n = reader
-            .read_until(b'\n', target_buf)
-            .map_err(|err| Error::io_path("read", relative, err))?;
         if n == 0 {
             break;
         }
 
-        scanned_bytes = scanned_bytes.saturating_add(n as u64);
+        let line_bytes = usize_to_u64(n, relative, "line length")?;
+        scanned_bytes = scanned_bytes.saturating_add(line_bytes);
         if scanned_bytes > ctx.policy.limits.max_read_bytes {
             let size_bytes = file_size_bytes.max(scanned_bytes);
             return Err(Error::FileTooLarge {
@@ -147,11 +146,6 @@ fn read_line_range(
         }
 
         current_line += 1;
-
-        if current_line < start_line {
-            maybe_shrink_skip_buffer(&mut scratch);
-            continue;
-        }
         if current_line == end_line {
             break;
         }
@@ -178,13 +172,28 @@ fn initial_line_range_capacity(max_read_bytes: u64) -> usize {
         .map_or(DEFAULT_CAPACITY, |max| max.min(MAX_INITIAL_CAPACITY))
 }
 
-fn maybe_shrink_skip_buffer(buffer: &mut Vec<u8>) {
-    const RETAINED_CAPACITY: usize = 64 * 1024;
-    const SHRINK_FACTOR: usize = 4;
+fn read_line_discarding_bytes<R: BufRead>(reader: &mut R) -> std::io::Result<usize> {
+    let mut total = 0usize;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(total);
+        }
 
-    if buffer.capacity() > RETAINED_CAPACITY.saturating_mul(SHRINK_FACTOR) {
-        buffer.clear();
-        buffer.shrink_to(RETAINED_CAPACITY);
+        let (to_consume, reached_line_end) = match available.iter().position(|byte| *byte == b'\n')
+        {
+            Some(idx) => (idx.saturating_add(1), true),
+            None => (available.len(), false),
+        };
+
+        reader.consume(to_consume);
+        total = total
+            .checked_add(to_consume)
+            .ok_or_else(|| std::io::Error::other("line length overflowed usize"))?;
+
+        if reached_line_end {
+            return Ok(total);
+        }
     }
 }
 

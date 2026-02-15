@@ -220,6 +220,25 @@ fn read_supports_line_ranges_without_trailing_newline() {
 }
 
 #[test]
+fn read_line_ranges_skip_large_prefix_line_without_retaining_scratch_buffer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("lines.txt");
+    let large_prefix = "x".repeat(512 * 1024);
+    std::fs::write(&path, format!("{large_prefix}\nkeep\n")).expect("write");
+
+    let mut policy = read_enabled_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_read_bytes = (large_prefix.len() as u64).saturating_add(8);
+    let ctx = Context::new(policy).expect("ctx");
+
+    let response = read_ok(&ctx, "lines.txt", Some(2), Some(2));
+    assert_eq!(response.content, "keep\n");
+    assert_eq!(
+        response.bytes_read,
+        (large_prefix.len() as u64).saturating_add(6)
+    );
+}
+
+#[test]
 fn read_rejects_non_utf8_file_full_read() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("invalid.txt");
