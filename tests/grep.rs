@@ -182,6 +182,28 @@ fn grep_rejects_empty_query() {
 }
 
 #[test]
+fn grep_multiple_matches_keep_relative_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "needle one\nneedle two\n").expect("write");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 2);
+    assert_eq!(resp.matches[0].path, PathBuf::from("a.txt"));
+    assert_eq!(resp.matches[1].path, PathBuf::from("a.txt"));
+}
+
+#[test]
 #[cfg(unix)]
 fn grep_skips_dangling_symlink_targets() {
     use std::os::unix::fs::symlink;

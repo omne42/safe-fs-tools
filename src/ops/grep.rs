@@ -192,9 +192,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
             };
 
-            let mut matched_once = false;
             let mut owned_relative_path = relative_path;
-            let mut first_match_path = None::<PathBuf>;
+            let mut repeated_match_path = None::<PathBuf>;
             let mut stop_for_results_limit = false;
             for (idx, line) in content.lines().enumerate() {
                 let ok = regex.as_ref().map_or_else(
@@ -236,13 +235,13 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     (line[..end].to_string(), line_truncated)
                 };
 
-                let path = if matched_once {
-                    first_match_path
-                        .get_or_insert_with(|| owned_relative_path.clone())
-                        .clone()
-                } else {
-                    matched_once = true;
-                    std::mem::take(&mut owned_relative_path)
+                let path = match &repeated_match_path {
+                    Some(path) => path.clone(),
+                    None => {
+                        let path = std::mem::take(&mut owned_relative_path);
+                        repeated_match_path = Some(path.clone());
+                        path
+                    }
                 };
                 matches.push(GrepMatch {
                     path,
