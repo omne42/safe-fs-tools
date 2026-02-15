@@ -76,11 +76,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
 
 #[cfg(feature = "glob")]
 pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
-    if !ctx.policy.permissions.glob {
-        return Err(Error::NotPermitted(
-            "glob is disabled by policy".to_string(),
-        ));
-    }
+    ctx.ensure_policy_permission(ctx.policy.permissions.glob, "glob")?;
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();

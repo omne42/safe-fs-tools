@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -78,20 +77,17 @@ impl Context {
                 }
             }
 
-            match roots.entry(root.id.clone()) {
-                Entry::Vacant(slot) => {
-                    slot.insert(RootRuntime {
-                        canonical_path: canonical,
-                        mode: root.mode,
-                    });
-                }
-                Entry::Occupied(_) => {
-                    return Err(Error::InvalidPolicy(format!(
-                        "duplicate root.id: {:?}",
-                        root.id
-                    )));
-                }
-            }
+            let replaced = roots.insert(
+                root.id.clone(),
+                RootRuntime {
+                    canonical_path: canonical,
+                    mode: root.mode,
+                },
+            );
+            debug_assert!(
+                replaced.is_none(),
+                "duplicate root.id should be rejected by SandboxPolicy::validate_structural"
+            );
         }
 
         #[cfg(any(feature = "glob", feature = "grep"))]
@@ -192,6 +188,13 @@ impl Context {
         Ok(path)
     }
 
+    pub(super) fn ensure_policy_permission(&self, enabled: bool, op: &str) -> Result<()> {
+        if !enabled {
+            return Err(Error::NotPermitted(format!("{op} is disabled by policy")));
+        }
+        Ok(())
+    }
+
     pub(super) fn ensure_can_write(&self, root_id: &str, op: &str) -> Result<()> {
         let root = self.root_runtime(root_id)?;
         if !matches!(root.mode, RootMode::ReadWrite) {
@@ -200,6 +203,16 @@ impl Context {
             )));
         }
         Ok(())
+    }
+
+    pub(super) fn ensure_write_operation_allowed(
+        &self,
+        root_id: &str,
+        enabled: bool,
+        op: &str,
+    ) -> Result<()> {
+        self.ensure_policy_permission(enabled, op)?;
+        self.ensure_can_write(root_id, op)
     }
 }
 

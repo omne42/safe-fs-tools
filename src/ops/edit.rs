@@ -24,12 +24,7 @@ pub struct EditResponse {
 }
 
 pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
-    if !ctx.policy.permissions.edit {
-        return Err(Error::NotPermitted(
-            "edit is disabled by policy".to_string(),
-        ));
-    }
-    ctx.ensure_can_write(&request.root_id, "edit")?;
+    ctx.ensure_write_operation_allowed(&request.root_id, ctx.policy.permissions.edit, "edit")?;
     let (path, relative, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 

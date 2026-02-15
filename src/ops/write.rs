@@ -117,13 +117,13 @@ fn write_temp_file(
     Ok(tmp_file.into_temp_path())
 }
 
-struct WriteCommitContext<'a> {
-    canonical_parent: &'a Path,
-    relative_parent: &'a Path,
-    expected_parent_identity: &'a ParentIdentity,
-    relative: &'a Path,
-    target: &'a Path,
-    bytes: &'a [u8],
+struct WriteCommitContext<'ctx> {
+    canonical_parent: &'ctx Path,
+    relative_parent: &'ctx Path,
+    expected_parent_identity: &'ctx ParentIdentity,
+    relative: &'ctx Path,
+    target: &'ctx Path,
+    bytes: &'ctx [u8],
     permissions: Option<fs::Permissions>,
 }
 
@@ -260,12 +260,7 @@ pub struct WriteFileResponse {
 }
 
 pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileResponse> {
-    if !ctx.policy.permissions.write {
-        return Err(Error::NotPermitted(
-            "write is disabled by policy".to_string(),
-        ));
-    }
-    ctx.ensure_can_write(&request.root_id, "write")?;
+    ctx.ensure_write_operation_allowed(&request.root_id, ctx.policy.permissions.write, "write")?;
 
     let resolved =
         super::resolve::resolve_path_in_root_lexically(ctx, &request.root_id, &request.path)?;

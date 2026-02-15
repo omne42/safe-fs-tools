@@ -60,15 +60,16 @@ fn walkdir_root_error(root_path: &Path, walk_root: &Path, err: walkdir::Error) -
         .filter(|relative| !relative.as_os_str().is_empty())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let source = if let Some(io) = err.io_error() {
-        if let Some(raw_os_error) = io.raw_os_error() {
-            std::io::Error::from_raw_os_error(raw_os_error)
-        } else {
-            std::io::Error::from(io.kind())
-        }
-    } else {
-        std::io::Error::other("walkdir root traversal failed without io error detail")
-    };
+    let source = err
+        .io_error()
+        .and_then(|io| {
+            io.raw_os_error()
+                .map(std::io::Error::from_raw_os_error)
+                .or_else(|| Some(std::io::Error::from(io.kind())))
+        })
+        .unwrap_or_else(|| {
+            std::io::Error::other("walkdir root traversal failed without io error detail")
+        });
 
     Error::WalkDirRoot {
         path: relative,

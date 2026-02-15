@@ -55,12 +55,7 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
 
 #[cfg(feature = "patch")]
 pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<PatchResponse> {
-    if !ctx.policy.permissions.patch {
-        return Err(Error::NotPermitted(
-            "patch is disabled by policy".to_string(),
-        ));
-    }
-    ctx.ensure_can_write(&request.root_id, "patch")?;
+    ctx.ensure_write_operation_allowed(&request.root_id, ctx.policy.permissions.patch, "patch")?;
     let (path, relative, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
@@ -230,10 +225,9 @@ fn patch_header_matches_path(
         }
     }
 
-    if let Some(kind) = invalid {
-        return PatchHeaderMatchResult::Invalid(kind);
-    }
-    PatchHeaderMatchResult::Mismatch
+    invalid
+        .map(PatchHeaderMatchResult::Invalid)
+        .unwrap_or(PatchHeaderMatchResult::Mismatch)
 }
 
 #[cfg(feature = "patch")]
@@ -272,13 +266,14 @@ fn normalized_patch_header_path(header: &str, strip_git_prefix: bool) -> Normali
     }
 
     let header_path = Path::new(value);
-    if let Some(kind) = patch_header_path_error(header_path) {
-        return NormalizedPatchHeaderPath::Invalid(kind);
-    }
-
-    NormalizedPatchHeaderPath::Path(crate::path_utils_internal::normalize_path_lexical(
-        header_path,
-    ))
+    patch_header_path_error(header_path).map_or_else(
+        || {
+            NormalizedPatchHeaderPath::Path(crate::path_utils_internal::normalize_path_lexical(
+                header_path,
+            ))
+        },
+        NormalizedPatchHeaderPath::Invalid,
+    )
 }
 
 #[cfg(feature = "patch")]

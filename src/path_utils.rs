@@ -156,61 +156,7 @@ pub(crate) fn normalize_path_lexical(path: &Path) -> PathBuf {
 #[cfg(windows)]
 #[inline]
 fn os_str_eq_case_insensitive_windows(a: &OsStr, b: &OsStr) -> bool {
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr;
-
-    // DESIGN INVARIANT (Windows path comparison):
-    // - We must compare `OsStr` path components without lossy UTF-8 conversion.
-    // - Rust std currently does not provide a locale-independent, case-insensitive `OsStr`/`Path`
-    //   comparator for Windows path semantics.
-    // - `to_ascii_lowercase` is insufficient (non-ASCII), and string lowercasing would require a
-    //   lossy/transcoding step that can change semantics for non-UTF8-ish paths.
-    // - `CompareStringOrdinal(..., ignore_case=1)` gives us a UTF-16, ordinal, locale-invariant
-    //   case-insensitive compare directly on Windows-native code units, which is the intended
-    //   behavior for this crate's lexical boundary checks.
-    //
-    // SAFETY (declaration): foreign function declaration for `CompareStringOrdinal`.
-    #[link(name = "Kernel32")]
-    unsafe extern "system" {
-        #[link_name = "CompareStringOrdinal"]
-        fn compare_string_ordinal(
-            string1: *const u16,
-            count1: i32,
-            string2: *const u16,
-            count2: i32,
-            ignore_case: i32,
-        ) -> i32;
-    }
-
-    const CSTR_EQUAL: i32 = 2;
-
-    let a_wide: Vec<u16> = a.encode_wide().collect();
-    let b_wide: Vec<u16> = b.encode_wide().collect();
-    let Ok(a_len) = i32::try_from(a_wide.len()) else {
-        return false;
-    };
-    let Ok(b_len) = i32::try_from(b_wide.len()) else {
-        return false;
-    };
-
-    let a_ptr = if a_wide.is_empty() {
-        ptr::null()
-    } else {
-        a_wide.as_ptr()
-    };
-    let b_ptr = if b_wide.is_empty() {
-        ptr::null()
-    } else {
-        b_wide.as_ptr()
-    };
-
-    // SAFETY (call):
-    // - `a_ptr`/`b_ptr` are either null for empty strings or point to valid UTF-16 buffers owned
-    //   by `a_wide`/`b_wide`.
-    // - `a_len`/`b_len` are checked `usize -> i32` conversions that match those buffers.
-    // - Both vectors live across the FFI call, and pointers do not escape.
-    // - `ignore_case = 1` requests ordinal, case-insensitive comparison.
-    unsafe { compare_string_ordinal(a_ptr, a_len, b_ptr, b_len, 1) == CSTR_EQUAL }
+    crate::platform::windows_path_compare::os_str_eq_case_insensitive(a, b)
 }
 
 #[cfg(windows)]

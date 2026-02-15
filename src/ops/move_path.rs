@@ -199,13 +199,8 @@ pub struct MovePathResponse {
 }
 
 pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResponse> {
-    if !ctx.policy.permissions.move_path {
-        return Err(Error::NotPermitted(
-            "move is disabled by policy".to_string(),
-        ));
-    }
+    ctx.ensure_write_operation_allowed(&request.root_id, ctx.policy.permissions.move_path, "move")?;
     ensure_move_identity_verification_supported()?;
-    ctx.ensure_can_write(&request.root_id, "move")?;
 
     let from_resolved =
         super::resolve::resolve_path_in_root_lexically(ctx, &request.root_id, &request.from)?;

@@ -131,7 +131,7 @@ fn delete_unlinks_symlink_without_deleting_target() {
     assert_eq!(resp.path, PathBuf::from("link.txt"));
     assert_eq!(resp.requested_path, Some(PathBuf::from("link.txt")));
     assert!(resp.deleted);
-    assert_eq!(resp.kind, "symlink");
+    assert_eq!(resp.kind, DeleteKind::Symlink);
 
     assert!(!link.exists());
     assert!(target.exists());
@@ -163,7 +163,7 @@ fn delete_unlinks_symlink_even_if_target_is_outside_root() {
     assert_eq!(resp.path, PathBuf::from("outside-link.txt"));
     assert_eq!(resp.requested_path, Some(PathBuf::from("outside-link.txt")));
     assert!(resp.deleted);
-    assert_eq!(resp.kind, "symlink");
+    assert_eq!(resp.kind, DeleteKind::Symlink);
 
     assert!(!link.exists());
     assert!(outside.path().exists());
@@ -577,5 +577,5 @@ fn delete_ignore_missing_returns_missing_when_parent_directory_is_absent() {
         Some(PathBuf::from("missing").join("file.txt"))
     );
     assert!(!resp.deleted);
-    assert_eq!(resp.kind, "missing");
+    assert_eq!(resp.kind, DeleteKind::Missing);
 }

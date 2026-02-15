@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::path::{Component, Path};
 
 use globset::{GlobSet, GlobSetBuilder};
-use regex::Regex;
+use regex::{Regex, RegexSet};
 
 use crate::error::{Error, Result};
 use crate::policy::SecretRules;
@@ -26,6 +26,7 @@ pub enum RedactionOutcome<'a> {
 pub struct SecretRedactor {
     deny: GlobSet,
     redact: Vec<Regex>,
+    redact_set: Option<RegexSet>,
     replacement: String,
 }
 
@@ -105,10 +106,18 @@ impl SecretRedactor {
             })?;
             redact.push(regex);
         }
+        let redact_set = if rules.redact_regexes.is_empty() {
+            None
+        } else {
+            Some(RegexSet::new(&rules.redact_regexes).map_err(|err| {
+                Error::InvalidPolicy(format!("invalid secrets.redact_regexes regex set: {err}"))
+            })?)
+        };
 
         Ok(Self {
             deny,
             redact,
+            redact_set,
             replacement: rules.replacement.clone(),
         })
     }
@@ -147,6 +156,14 @@ impl SecretRedactor {
     }
 
     pub fn redact_text_outcome<'a>(&self, input: &'a str) -> RedactionOutcome<'a> {
+        if self
+            .redact_set
+            .as_ref()
+            .is_some_and(|set| !set.is_match(input))
+        {
+            return RedactionOutcome::Text(Cow::Borrowed(input));
+        }
+
         let mut current: Cow<'_, str> = Cow::Borrowed(input);
         for regex in &self.redact {
             match replace_regex_with_limit(current.as_ref(), regex, self.replacement.as_str()) {
@@ -264,10 +281,14 @@ fn normalize_relative_path(path: &Path) -> Cow<'_, Path> {
     Cow::Owned(crate::path_utils_internal::normalize_path_lexical(path))
 }
 
+fn normalize_path_for_glob_common(path: &Path) -> Cow<'_, Path> {
+    debug_assert!(is_root_relative(path));
+    normalize_relative_path(path)
+}
+
 #[cfg(windows)]
 fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
-    debug_assert!(is_root_relative(path));
-    let path = normalize_relative_path(path);
+    let path = normalize_path_for_glob_common(path);
     // Fail closed on non-Unicode Windows paths: lossy conversion would change bytes and
     // could cause silent allow-on-mismatch behavior for glob checks.
     let raw = path.to_string_lossy();
@@ -282,8 +303,7 @@ fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
 
 #[cfg(not(windows))]
 fn normalize_path_for_glob(path: &Path) -> Option<Cow<'_, Path>> {
-    debug_assert!(is_root_relative(path));
-    Some(normalize_relative_path(path))
+    Some(normalize_path_for_glob_common(path))
 }
 
 #[cfg(test)]
@@ -428,6 +448,19 @@ mod tests {
 
         let redacted = redactor.redact_text_cow("abc");
         assert_eq!(redacted.as_ref(), "Xc");
+    }
+
+    #[test]
+    fn redact_text_applies_later_regex_after_earlier_replacement() {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: vec!["foo".to_string(), "^X".to_string()],
+            replacement: "XY".to_string(),
+        })
+        .expect("redactor");
+
+        let redacted = redactor.redact_text_cow("foo");
+        assert_eq!(redacted.as_ref(), "XYY");
     }
 
     #[test]

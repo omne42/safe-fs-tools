@@ -180,11 +180,7 @@ fn process_dir_entry(
 }
 
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
-    if !ctx.policy.permissions.list_dir {
-        return Err(Error::NotPermitted(
-            "list_dir is disabled by policy".to_string(),
-        ));
-    }
+    ctx.ensure_policy_permission(ctx.policy.permissions.list_dir, "list_dir")?;
 
     let max_entries = request
         .max_entries

@@ -8,15 +8,18 @@ use crate::input::load_text_limited;
 use crate::{Cli, Command};
 
 pub(crate) fn run_with_policy(
-    cli: &Cli,
+    cli: Cli,
     policy: safe_fs_tools::SandboxPolicy,
 ) -> Result<(), CliError> {
-    let max_patch_bytes = effective_max_patch_bytes(cli, &policy);
+    let max_patch_bytes = effective_max_patch_bytes(&cli, &policy);
     let max_write_bytes = policy.limits.max_write_bytes;
     let ctx = Context::new(policy)?;
+    let Cli {
+        command, pretty, ..
+    } = cli;
 
-    let value = execute_command(&ctx, &cli.command, max_patch_bytes, max_write_bytes)?;
-    let out = crate::serialize_json(&value, cli.pretty)?;
+    let value = execute_command(&ctx, command, max_patch_bytes, max_write_bytes)?;
+    let out = crate::serialize_json(&value, pretty)?;
     crate::write_stdout_line(&out)?;
     Ok(())
 }
@@ -33,7 +36,7 @@ fn effective_max_patch_bytes(cli: &Cli, policy: &safe_fs_tools::SandboxPolicy) -
 
 fn execute_command(
     ctx: &Context,
-    command: &Command,
+    command: Command,
     max_patch_bytes: u64,
     max_write_bytes: u64,
 ) -> Result<serde_json::Value, CliError> {
@@ -46,10 +49,10 @@ fn execute_command(
         } => serde_json::to_value(safe_fs_tools::ops::read_file(
             ctx,
             ReadRequest {
-                root_id: root.clone(),
-                path: path.clone(),
-                start_line: *start_line,
-                end_line: *end_line,
+                root_id: root,
+                path,
+                start_line,
+                end_line,
             },
         )?)
         .map_err(CliError::from),
@@ -60,17 +63,17 @@ fn execute_command(
         } => serde_json::to_value(safe_fs_tools::ops::list_dir(
             ctx,
             ListDirRequest {
-                root_id: root.clone(),
-                path: path.clone(),
-                max_entries: *max_entries,
+                root_id: root,
+                path,
+                max_entries,
             },
         )?)
         .map_err(CliError::from),
         Command::Glob { root, pattern } => serde_json::to_value(safe_fs_tools::ops::glob_paths(
             ctx,
             GlobRequest {
-                root_id: root.clone(),
-                pattern: pattern.clone(),
+                root_id: root,
+                pattern,
             },
         )?)
         .map_err(CliError::from),
@@ -82,18 +85,18 @@ fn execute_command(
         } => serde_json::to_value(safe_fs_tools::ops::grep(
             ctx,
             GrepRequest {
-                root_id: root.clone(),
-                query: query.clone(),
-                regex: *regex,
-                glob: glob.clone(),
+                root_id: root,
+                query,
+                regex,
+                glob,
             },
         )?)
         .map_err(CliError::from),
         Command::Stat { root, path } => serde_json::to_value(safe_fs_tools::ops::stat(
             ctx,
             StatRequest {
-                root_id: root.clone(),
-                path: path.clone(),
+                root_id: root,
+                path,
             },
         )?)
         .map_err(CliError::from),
@@ -106,11 +109,11 @@ fn execute_command(
         } => serde_json::to_value(safe_fs_tools::ops::edit_range(
             ctx,
             EditRequest {
-                root_id: root.clone(),
-                path: path.clone(),
-                start_line: *start_line,
-                end_line: *end_line,
-                replacement: replacement.clone(),
+                root_id: root,
+                path,
+                start_line,
+                end_line,
+                replacement,
             },
         )?)
         .map_err(CliError::from),
@@ -121,7 +124,7 @@ fn execute_command(
         } => {
             preflight_mutating_target(
                 ctx,
-                root,
+                root.as_str(),
                 ctx.policy().permissions.patch,
                 "patch is disabled by policy",
                 "patch",
@@ -129,9 +132,9 @@ fn execute_command(
             serde_json::to_value(safe_fs_tools::ops::apply_unified_patch(
                 ctx,
                 PatchRequest {
-                    root_id: root.clone(),
-                    path: path.clone(),
-                    patch: load_text_limited(patch_file, max_patch_bytes)?,
+                    root_id: root,
+                    path,
+                    patch: load_text_limited(&patch_file, max_patch_bytes)?,
                 },
             )?)
         }
@@ -144,10 +147,10 @@ fn execute_command(
         } => serde_json::to_value(safe_fs_tools::ops::mkdir(
             ctx,
             MkdirRequest {
-                root_id: root.clone(),
-                path: path.clone(),
-                create_parents: *create_parents,
-                ignore_existing: *ignore_existing,
+                root_id: root,
+                path,
+                create_parents,
+                ignore_existing,
             },
         )?)
         .map_err(CliError::from),
@@ -160,7 +163,7 @@ fn execute_command(
         } => {
             preflight_mutating_target(
                 ctx,
-                root,
+                root.as_str(),
                 ctx.policy().permissions.write,
                 "write is disabled by policy",
                 "write",
@@ -168,11 +171,11 @@ fn execute_command(
             serde_json::to_value(safe_fs_tools::ops::write_file(
                 ctx,
                 WriteFileRequest {
-                    root_id: root.clone(),
-                    path: path.clone(),
-                    content: load_text_limited(content_file, max_write_bytes)?,
-                    overwrite: *overwrite,
-                    create_parents: *create_parents,
+                    root_id: root,
+                    path,
+                    content: load_text_limited(&content_file, max_write_bytes)?,
+                    overwrite,
+                    create_parents,
                 },
             )?)
         }
@@ -185,10 +188,10 @@ fn execute_command(
         } => serde_json::to_value(safe_fs_tools::ops::delete(
             ctx,
             DeleteRequest {
-                root_id: root.clone(),
-                path: path.clone(),
-                recursive: *recursive,
-                ignore_missing: *ignore_missing,
+                root_id: root,
+                path,
+                recursive,
+                ignore_missing,
             },
         )?)
         .map_err(CliError::from),
@@ -201,11 +204,11 @@ fn execute_command(
         } => serde_json::to_value(safe_fs_tools::ops::move_path(
             ctx,
             MovePathRequest {
-                root_id: root.clone(),
-                from: from.clone(),
-                to: to.clone(),
-                overwrite: *overwrite,
-                create_parents: *create_parents,
+                root_id: root,
+                from,
+                to,
+                overwrite,
+                create_parents,
             },
         )?)
         .map_err(CliError::from),
@@ -218,11 +221,11 @@ fn execute_command(
         } => serde_json::to_value(safe_fs_tools::ops::copy_file(
             ctx,
             CopyFileRequest {
-                root_id: root.clone(),
-                from: from.clone(),
-                to: to.clone(),
-                overwrite: *overwrite,
-                create_parents: *create_parents,
+                root_id: root,
+                from,
+                to,
+                overwrite,
+                create_parents,
             },
         )?)
         .map_err(CliError::from),

@@ -27,30 +27,6 @@ pub enum DeleteKind {
     Missing,
 }
 
-impl DeleteKind {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::File => "file",
-            Self::Dir => "dir",
-            Self::Symlink => "symlink",
-            Self::Other => "other",
-            Self::Missing => "missing",
-        }
-    }
-}
-
-impl PartialEq<&str> for DeleteKind {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
-}
-
-impl PartialEq<DeleteKind> for &str {
-    fn eq(&self, other: &DeleteKind) -> bool {
-        *self == other.as_str()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteResponse {
     pub path: PathBuf,
@@ -166,13 +142,8 @@ fn revalidate_parent_before_delete(
 }
 
 pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
-    if !ctx.policy.permissions.delete {
-        return Err(Error::NotPermitted(
-            "delete is disabled by policy".to_string(),
-        ));
-    }
+    ctx.ensure_write_operation_allowed(&request.root_id, ctx.policy.permissions.delete, "delete")?;
     ensure_delete_identity_verification_supported()?;
-    ctx.ensure_can_write(&request.root_id, "delete")?;
 
     let resolved =
         super::resolve::resolve_path_in_root_lexically(ctx, &request.root_id, &request.path)?;

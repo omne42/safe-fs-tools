@@ -75,7 +75,7 @@ struct RootRuntime {
 
 impl std::fmt::Debug for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut root_ids = self.roots.keys().collect::<Vec<_>>();
+        let mut root_ids: Vec<_> = self.roots.keys().collect();
         root_ids.sort_unstable();
         let enabled_permission_count = count_enabled_permissions(&self.policy.permissions);
         f.debug_struct("Context")

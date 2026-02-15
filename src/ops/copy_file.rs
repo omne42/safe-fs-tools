@@ -66,12 +66,11 @@ struct PreparedDestination {
 }
 
 pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResponse> {
-    if !ctx.policy.permissions.copy_file {
-        return Err(Error::NotPermitted(
-            "copy_file is disabled by policy".to_string(),
-        ));
-    }
-    ctx.ensure_can_write(&request.root_id, "copy_file")?;
+    ctx.ensure_write_operation_allowed(
+        &request.root_id,
+        ctx.policy.permissions.copy_file,
+        "copy_file",
+    )?;
     let mut paths = resolve_and_validate_paths(ctx, &request)?;
 
     let (mut input, source_meta) =

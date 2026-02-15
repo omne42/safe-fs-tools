@@ -128,11 +128,7 @@ fn revalidate_path_stability(
 }
 
 pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
-    if !ctx.policy.permissions.stat {
-        return Err(Error::NotPermitted(
-            "stat is disabled by policy".to_string(),
-        ));
-    }
+    ctx.ensure_policy_permission(ctx.policy.permissions.stat, "stat")?;
 
     let (path, relative, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;

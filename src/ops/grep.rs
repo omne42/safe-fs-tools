@@ -103,11 +103,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
 #[cfg(feature = "grep")]
 pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
-    if !ctx.policy.permissions.grep {
-        return Err(Error::NotPermitted(
-            "grep is disabled by policy".to_string(),
-        ));
-    }
+    ctx.ensure_policy_permission(ctx.policy.permissions.grep, "grep")?;
     if request.query.trim().is_empty() {
         return Err(Error::InvalidPath(
             "grep query must not be empty".to_string(),
@@ -158,15 +154,20 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         &started,
         max_walk,
         |file, diag| {
+            let super::traversal::TraversalFile {
+                path,
+                relative_path,
+            } = file;
+
             if let Some(glob) = &file_glob
-                && !globset_is_match(glob, &file.relative_path)
+                && !globset_is_match(glob, &relative_path)
             {
                 return Ok(std::ops::ControlFlow::Continue(()));
             }
 
             let bytes = match super::io::read_bytes_limited(
-                &file.path,
-                &file.relative_path,
+                &path,
+                &relative_path,
                 ctx.policy.limits.max_read_bytes,
             ) {
                 Ok(bytes) => bytes,
@@ -190,17 +191,21 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
             };
 
+            let mut file_matches = Vec::<(u64, String, bool)>::new();
+            let mut stop_for_results_limit = false;
             for (idx, line) in content.lines().enumerate() {
-                let ok = match &regex {
-                    Some(regex) => regex.is_match(line),
-                    None => line.contains(&request.query),
-                };
+                let ok = regex.as_ref().map_or_else(
+                    || line.contains(&request.query),
+                    |regex| regex.is_match(line),
+                );
                 if !ok {
                     continue;
                 }
-                if matches.len() >= ctx.policy.limits.max_results {
+                if matches.len().saturating_add(file_matches.len()) >= ctx.policy.limits.max_results
+                {
                     diag.mark_limit_reached(ScanLimitReason::Results);
-                    return Ok(std::ops::ControlFlow::Break(()));
+                    stop_for_results_limit = true;
+                    break;
                 }
                 let redacted = ctx.redactor.redact_text_cow(line);
                 let line_truncated = redacted.len() > max_line_bytes;
@@ -218,14 +223,33 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                         }
                     }
                 };
-                matches.push(GrepMatch {
-                    path: file.relative_path.clone(),
-                    line: idx.saturating_add(1) as u64,
-                    text,
-                    line_truncated,
-                });
+                file_matches.push((idx.saturating_add(1) as u64, text, line_truncated));
             }
 
+            if !file_matches.is_empty() {
+                let last = file_matches.len().saturating_sub(1);
+                let mut owned_relative_path = Some(relative_path);
+                for (idx, (line, text, line_truncated)) in file_matches.into_iter().enumerate() {
+                    let path = if idx == last {
+                        owned_relative_path.take().expect("relative path present")
+                    } else {
+                        owned_relative_path
+                            .as_ref()
+                            .expect("relative path present")
+                            .clone()
+                    };
+                    matches.push(GrepMatch {
+                        path,
+                        line,
+                        text,
+                        line_truncated,
+                    });
+                }
+            }
+
+            if stop_for_results_limit {
+                return Ok(std::ops::ControlFlow::Break(()));
+            }
             Ok(std::ops::ControlFlow::Continue(()))
         },
     ) {

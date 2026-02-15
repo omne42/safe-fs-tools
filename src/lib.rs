@@ -8,6 +8,7 @@
 mod error;
 pub mod ops;
 pub mod path_utils;
+mod platform;
 
 pub(crate) mod path_utils_internal {
     pub(crate) use super::path_utils::{

@@ -179,12 +179,7 @@ pub struct MkdirResponse {
 }
 
 pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
-    if !ctx.policy.permissions.mkdir {
-        return Err(Error::NotPermitted(
-            "mkdir is disabled by policy".to_string(),
-        ));
-    }
-    ctx.ensure_can_write(&request.root_id, "mkdir")?;
+    ctx.ensure_write_operation_allowed(&request.root_id, ctx.policy.permissions.mkdir, "mkdir")?;
 
     let resolved =
         super::resolve::resolve_path_in_root_lexically(ctx, &request.root_id, &request.path)?;

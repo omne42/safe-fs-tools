@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Docs overhaul: rebuilt project documentation into a structured portal (`docs/index.md`) with dedicated guides for getting started, concepts, policy/operations/CLI/library references, security usage, deployment/ops, and FAQ.
 - Internal write path cleanup: `commit_write` now consumes `WriteCommitContext` so permission metadata is moved into temp-file commit without an extra `Permissions` clone.
+- Redaction fast path: add a compiled `RegexSet` pre-check so inputs with no redact regex matches return immediately before sequential per-regex replacement.
+- Context init cleanup: remove redundant runtime duplicate-`root.id` policy error path in `Context` construction and rely on `SandboxPolicy::validate_structural` as the single source of truth.
+- `grep` internal allocation trim: per-file match assembly now moves one owned `relative_path` into output and only clones for additional matches in that same file.
+- Unix metadata-copy docs: document why Linux/Android xattr preservation uses fd-scoped libc syscalls (std has no xattr API) and clarify syscall-level `unsafe` invariants.
+- `grep` readability cleanup: flatten per-line regex/plain query match selection via `Option` combinator (`map_or_else`) in the hot scan loop.
+- Delete API cleanup: remove over-designed `DeleteKind`/`&str` `PartialEq` impls and keep comparisons explicit at call sites.
+- CLI command dispatch: consume `Cli`/`Command` by value in `command_exec` so request payload fields are moved instead of repeatedly cloned per branch.
+- Policy ergonomics: mark `Permissions` as `Copy` (it is a bool-only value type), reducing incidental clone noise at call sites.
+- Ops permission-gate cleanup: centralize policy-permission checks in `Context` helpers and route operation entry checks through them to reduce repeated inline guards.
+- `write` internals: rename generic lifetime parameter in `WriteCommitContext` to a semantic name (`'ctx`) for clearer ownership intent.
+- Redaction internals: factor shared `normalize_path_for_glob` logic into a common helper; Windows keeps only the extra path-separator/non-Unicode handling.
+- Policy docs: clarify lexical-only path-check wording for `resolve_path_checked`.
+- Combinator cleanup: replace selected small `match`/`if let` return plumbing with `and_then`/`map_or(_else)` chains in traversal/patch helpers.
+- Platform boundary cleanup: isolate platform-specific FFI/`unsafe` into `src/platform/{rename,windows_path_compare,unix_metadata}.rs` and keep `ops/io` + `path_utils` on safe wrappers.
 
 ## [0.2.0] - 2026-02-14
 

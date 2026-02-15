@@ -23,7 +23,7 @@ pub struct Root {
     pub mode: RootMode,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Permissions {
     #[serde(default)]
@@ -448,7 +448,8 @@ impl SandboxPolicy {
 
     /// Resolve a path against the selected root and enforce lexical root-boundary checks.
     ///
-    /// This check is lexical only (no filesystem IO, no symlink resolution).
+    /// This is a lexical check only: it normalizes paths without accessing the filesystem or
+    /// resolving symlinks.
     /// For canonicalized checks against existing filesystem state, use `ops::Context`.
     pub fn resolve_path_checked(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
         let root = self.root(root_id)?;

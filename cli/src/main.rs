@@ -174,6 +174,7 @@ fn run() -> ExitCode {
         Err(err) => return handle_parse_error(err),
     };
     let error_format = cli.error_format;
+    let pretty = cli.pretty;
     let redact_paths = cli.redact_paths || cli.redact_paths_strict;
     let strict_redact_paths = cli.redact_paths_strict;
     if let Err(err) = validate_error_render_mode(error_format, redact_paths) {
@@ -194,7 +195,7 @@ fn run() -> ExitCode {
     let result = match safe_fs_tools::policy_io::load_policy(&cli.policy) {
         Ok(policy) => {
             redaction = build_redaction(&policy, error_format, redact_paths);
-            command_exec::run_with_policy(&cli, policy)
+            command_exec::run_with_policy(cli, policy)
         }
         Err(err) => Err(CliError::Tool(err)),
     };
@@ -204,7 +205,7 @@ fn run() -> ExitCode {
             &err,
             ErrorRenderCfg {
                 format: error_format,
-                pretty: cli.pretty,
+                pretty,
                 redact_paths,
                 strict_redact_paths,
                 redaction: redaction.as_ref(),

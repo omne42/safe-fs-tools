@@ -44,11 +44,7 @@ pub struct ReadResponse {
 }
 
 pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
-    if !ctx.policy.permissions.read {
-        return Err(Error::NotPermitted(
-            "read is disabled by policy".to_string(),
-        ));
-    }
+    ctx.ensure_policy_permission(ctx.policy.permissions.read, "read")?;
 
     let mode = parse_read_mode(request.start_line, request.end_line)?;
 
