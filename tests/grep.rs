@@ -635,6 +635,32 @@ fn grep_reports_line_truncation() {
 }
 
 #[test]
+fn grep_handles_long_single_line_without_unbounded_buffer_growth() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let long_line = format!("needle-{}", "a".repeat(256 * 1024));
+    std::fs::write(dir.path().join("long.txt"), long_line).expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_line_bytes = 64;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: Some("long.txt".to_string()),
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("long.txt"));
+    assert!(resp.matches[0].line_truncated);
+}
+
+#[test]
 #[cfg(all(unix, feature = "glob"))]
 fn glob_and_grep_include_symlink_files() {
     use std::os::unix::fs::symlink;

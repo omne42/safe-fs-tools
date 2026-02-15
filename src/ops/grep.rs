@@ -85,6 +85,63 @@ fn initial_line_buffer_capacity(max_line_bytes: usize) -> usize {
 }
 
 #[cfg(feature = "grep")]
+fn max_capped_line_bytes(max_line_bytes: usize) -> usize {
+    const BASE_SLACK: usize = 8 * 1024;
+    const MIN_CAP: usize = 8 * 1024;
+    const MAX_CAP: usize = 2 * 1024 * 1024;
+    max_line_bytes
+        .saturating_add(BASE_SLACK)
+        .clamp(MIN_CAP, MAX_CAP)
+}
+
+#[cfg(feature = "grep")]
+enum ReadLineCapped {
+    Eof,
+    Line { bytes_read: usize, capped: bool },
+}
+
+#[cfg(feature = "grep")]
+fn read_line_capped<R: BufRead>(
+    reader: &mut R,
+    line_buf: &mut Vec<u8>,
+    max_line_bytes: usize,
+) -> std::io::Result<ReadLineCapped> {
+    line_buf.clear();
+    let mut bytes_read = 0usize;
+    let mut capped = false;
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            if bytes_read == 0 {
+                return Ok(ReadLineCapped::Eof);
+            }
+            return Ok(ReadLineCapped::Line { bytes_read, capped });
+        }
+
+        let newline_idx = chunk.iter().position(|byte| *byte == b'\n');
+        let split_at = newline_idx.map_or(chunk.len(), |idx| idx.saturating_add(1));
+        let consumed = &chunk[..split_at];
+        bytes_read = bytes_read.saturating_add(consumed.len());
+
+        if !capped {
+            let remaining = max_line_bytes.saturating_sub(line_buf.len());
+            if consumed.len() <= remaining {
+                line_buf.extend_from_slice(consumed);
+            } else {
+                line_buf.extend_from_slice(&consumed[..remaining]);
+                capped = true;
+            }
+        }
+
+        let had_newline = newline_idx.is_some();
+        reader.consume(split_at);
+        if had_newline {
+            return Ok(ReadLineCapped::Line { bytes_read, capped });
+        }
+    }
+}
+
+#[cfg(feature = "grep")]
 fn build_grep_response(
     mut matches: Vec<GrepMatch>,
     diag: TraversalDiagnostics,
@@ -232,14 +289,24 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             let mut reader = std::io::BufReader::new(file.take(limit));
             let mut line_buf =
                 Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes));
+            let max_capped_line_bytes = max_capped_line_bytes(max_line_bytes);
             let mut scanned_bytes = 0_u64;
             let mut line_no = 0_u64;
             let file_match_start = matches.len();
             let mut owned_relative_path = relative_path;
             let mut repeated_match_path = None::<PathBuf>;
             loop {
-                line_buf.clear();
-                let n = match reader.read_until(b'\n', &mut line_buf) {
+                let (n, line_was_capped) =
+                    match read_line_capped(&mut reader, &mut line_buf, max_capped_line_bytes) {
+                        Ok(ReadLineCapped::Eof) => break,
+                        Ok(ReadLineCapped::Line { bytes_read, capped }) => (bytes_read, capped),
+                        Err(_) => {
+                            matches.truncate(file_match_start);
+                            diag.inc_skipped_io_errors();
+                            return Ok(std::ops::ControlFlow::Continue(()));
+                        }
+                    };
+                let n = match u64::try_from(n) {
                     Ok(n) => n,
                     Err(_) => {
                         matches.truncate(file_match_start);
@@ -247,11 +314,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                         return Ok(std::ops::ControlFlow::Continue(()));
                     }
                 };
-                if n == 0 {
-                    break;
-                }
-
-                scanned_bytes = scanned_bytes.saturating_add(n as u64);
+                scanned_bytes = scanned_bytes.saturating_add(n);
                 if scanned_bytes > ctx.policy.limits.max_read_bytes {
                     matches.truncate(file_match_start);
                     counters.skipped_too_large_files =
@@ -268,6 +331,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
                 let line = match std::str::from_utf8(&line_buf) {
                     Ok(line) => line,
+                    Err(err) if line_was_capped && err.error_len().is_none() => {
+                        std::str::from_utf8(&line_buf[..err.valid_up_to()]).unwrap_or_default()
+                    }
                     Err(_) => {
                         matches.truncate(file_match_start);
                         counters.skipped_non_utf8_files =
@@ -289,7 +355,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
                 let (text, line_truncated) = if has_redact_regexes {
                     let redacted = ctx.redactor.redact_text_cow(line);
-                    let line_truncated = redacted.len() > max_line_bytes;
+                    let line_truncated = line_was_capped || redacted.len() > max_line_bytes;
                     let mut end = redacted.len().min(max_line_bytes);
                     while end > 0 && !redacted.is_char_boundary(end) {
                         end = end.saturating_sub(1);
@@ -306,7 +372,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     };
                     (text, line_truncated)
                 } else {
-                    let line_truncated = line.len() > max_line_bytes;
+                    let line_truncated = line_was_capped || line.len() > max_line_bytes;
                     let mut end = line.len().min(max_line_bytes);
                     while end > 0 && !line.is_char_boundary(end) {
                         end = end.saturating_sub(1);

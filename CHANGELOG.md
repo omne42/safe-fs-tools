@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `grep`/`list_dir` allocation tuning: preallocate per-file grep line buffers and list-directory candidate heap capacity to reduce repeated growth in hot paths.
 - Policy safety guardrail: reject configurations where `limits.max_results * limits.max_line_bytes` exceeds a hard response-budget cap, reducing worst-case grep memory amplification from misconfigured limits.
 - Context initialization optimization: on non-Windows platforms, canonical root-overlap checks now use sorted adjacent comparisons instead of quadratic pairwise scans.
+- `grep` long-line safety: line scanning now caps per-line buffering and drains oversized lines incrementally, preventing unbounded in-memory line growth on newline-free large files.
 - `list_dir` hot path: avoid cloning canonical root `PathBuf` on each call; use borrowed root path directly during entry processing.
 - Unix metadata-copy docs: document why Linux/Android xattr preservation uses fd-scoped libc syscalls (std has no xattr API) and clarify syscall-level `unsafe` invariants.
 - `grep` glob-prefix correctness: only apply directory-probe skip checks when the derived prefix is a directory, so file globs like `a.txt` are not incorrectly filtered by skip rules such as `a.txt/*`.
