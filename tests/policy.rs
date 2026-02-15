@@ -195,6 +195,17 @@ fn policy_rejects_max_walk_files_greater_than_entries() {
 }
 
 #[test]
+fn policy_rejects_excessive_grep_response_budget() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_results = 100_000;
+    policy.limits.max_line_bytes = 8 * 1024;
+
+    let err = policy.validate().expect_err("should reject");
+    assert_invalid_policy_contains_all(err, &["limits.max_results", "limits.max_line_bytes"]);
+}
+
+#[test]
 fn policy_rejects_empty_roots() {
     let policy = SandboxPolicy {
         roots: Vec::new(),

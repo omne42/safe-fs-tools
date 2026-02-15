@@ -114,6 +114,7 @@ const MAX_RESULTS_HARD_CAP: usize = 1_000_000;
 const MAX_WALK_ENTRIES_HARD_CAP: usize = 10_000_000;
 const MAX_WALK_FILES_HARD_CAP: usize = 5_000_000;
 const MAX_LINE_BYTES_HARD_CAP: usize = 1024 * 1024;
+const MAX_GREP_RESPONSE_BYTES_HARD_CAP: usize = 64 * 1024 * 1024;
 
 fn is_valid_root_id(id: &str) -> bool {
     id.as_bytes().iter().all(|byte| {
@@ -143,6 +144,21 @@ fn validate_usize_limit(value: usize, field: &str, hard_cap: usize) -> Result<()
     if value > hard_cap {
         return Err(Error::InvalidPolicy(format!(
             "{field} must be <= {hard_cap}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_grep_response_budget(max_results: usize, max_line_bytes: usize) -> Result<()> {
+    let worst_case_bytes = max_results.checked_mul(max_line_bytes).ok_or_else(|| {
+        Error::InvalidPolicy(
+            "limits.max_results * limits.max_line_bytes overflowed usize".to_string(),
+        )
+    })?;
+    if worst_case_bytes > MAX_GREP_RESPONSE_BYTES_HARD_CAP {
+        return Err(Error::InvalidPolicy(format!(
+            "limits.max_results * limits.max_line_bytes must be <= {} bytes",
+            MAX_GREP_RESPONSE_BYTES_HARD_CAP
         )));
     }
     Ok(())
@@ -335,6 +351,7 @@ impl SandboxPolicy {
             "limits.max_line_bytes",
             MAX_LINE_BYTES_HARD_CAP,
         )?;
+        validate_grep_response_budget(self.limits.max_results, self.limits.max_line_bytes)?;
         let mut seen_ids = std::collections::HashSet::<&str>::new();
         for root in &self.roots {
             let normalized_id = root.id.trim();
