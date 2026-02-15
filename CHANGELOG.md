@@ -63,6 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `read` line-range skip-path memory tuning: skipped pre-range lines are now consumed in streaming chunks instead of buffering whole lines, avoiding large temporary allocations on very long prefix lines.
 - Unix metadata portability: fix ownership-preservation `gid` sentinel to use `libc::gid_t::MAX` (instead of `uid_t`) when preserving uid/gid deltas.
 - `grep` plain-query scan loop: reuse one query-window buffer per request in `read_line_capped` instead of allocating a new window per line/file, reducing hot-path allocation churn on large-file and many-file scans.
+- `grep` line scanning micro-optimization: replace front-`drain` window trimming with bounded suffix compaction (`copy_within` + `truncate`) to avoid repeated O(n) front-removal costs on long-line plain-query scans.
+- `list_dir` `max_entries=0` fast path: skip per-entry metadata/kind materialization and run count-only filtering, cutting unnecessary I/O while preserving truncation and error accounting behavior.
 
 ## [0.2.0] - 2026-02-14
 

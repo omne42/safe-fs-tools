@@ -99,6 +99,12 @@ enum EntryOutcome {
     SkippedIoError,
 }
 
+enum CountOnlyOutcome {
+    Counted,
+    Denied,
+    SkippedIoError,
+}
+
 fn directory_changed_during_list_error(relative_dir: &Path) -> Error {
     Error::InvalidPath(format!(
         "path {} changed during list_dir; refusing to continue",
@@ -184,6 +190,30 @@ fn process_dir_entry(
     }))
 }
 
+fn process_dir_entry_count_only(
+    ctx: &Context,
+    entry: fs::DirEntry,
+    root_path: &std::path::Path,
+) -> Result<CountOnlyOutcome> {
+    let path = entry.path();
+    let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, root_path) {
+        Some(relative) => relative,
+        None => return Ok(CountOnlyOutcome::SkippedIoError),
+    };
+
+    if ctx.redactor.is_path_denied(&relative) {
+        return Ok(CountOnlyOutcome::Denied);
+    }
+
+    // Keep parity with normal flow for best-effort IO error accounting, but skip metadata/kind
+    // work when callers only need matched-entry counts.
+    if entry.file_type().is_err() {
+        return Ok(CountOnlyOutcome::SkippedIoError);
+    }
+
+    Ok(CountOnlyOutcome::Counted)
+}
+
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
     ctx.ensure_policy_permission(ctx.policy.permissions.list_dir, "list_dir")?;
 
@@ -222,13 +252,22 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 continue;
             }
         };
+        if max_entries == 0 {
+            match process_dir_entry_count_only(ctx, entry, root_path)? {
+                CountOnlyOutcome::Counted => {
+                    matched_entries = matched_entries.saturating_add(1);
+                }
+                CountOnlyOutcome::Denied => {}
+                CountOnlyOutcome::SkippedIoError => {
+                    skipped_io_errors = skipped_io_errors.saturating_add(1);
+                }
+            }
+            continue;
+        }
+
         match process_dir_entry(ctx, entry, root_path)? {
             EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
-                if max_entries == 0 {
-                    continue;
-                }
-
                 let candidate = Candidate(entry);
                 if heap.len() < max_entries {
                     heap.push(candidate);

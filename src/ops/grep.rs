@@ -187,8 +187,11 @@ fn read_line_capped<R: BufRead>(
             if !query_matched {
                 let keep = query.len().saturating_sub(1);
                 if query_window.len() > keep {
-                    let drain = query_window.len().saturating_sub(keep);
-                    query_window.drain(..drain);
+                    let start = query_window.len().saturating_sub(keep);
+                    if keep > 0 {
+                        query_window.copy_within(start.., 0);
+                    }
+                    query_window.truncate(keep);
                 }
             }
         }
