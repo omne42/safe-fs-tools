@@ -148,7 +148,7 @@ fn build_grep_response(
     counters: GrepSkipCounters,
     started: &Instant,
 ) -> GrepResponse {
-    if matches.len() > 1 {
+    if matches.len() > 1 && !matches_sorted_by_path_line(&matches) {
         matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
     }
     GrepResponse {
@@ -168,6 +168,15 @@ fn build_grep_response(
 }
 
 #[cfg(feature = "grep")]
+fn matches_sorted_by_path_line(matches: &[GrepMatch]) -> bool {
+    matches.windows(2).all(|pair| {
+        let left = &pair[0];
+        let right = &pair[1];
+        left.path < right.path || (left.path == right.path && left.line <= right.line)
+    })
+}
+
+#[cfg(feature = "grep")]
 fn maybe_shrink_line_buffer(line_buf: &mut Vec<u8>, max_line_bytes: usize) {
     const DEFAULT_RETAINED_CAPACITY: usize = 8 * 1024;
     const MAX_RETAINED_CAPACITY: usize = 64 * 1024;
@@ -177,6 +186,34 @@ fn maybe_shrink_line_buffer(line_buf: &mut Vec<u8>, max_line_bytes: usize) {
     if line_buf.capacity() > retained_capacity.saturating_mul(SHRINK_FACTOR) {
         line_buf.clear();
         line_buf.shrink_to(retained_capacity);
+    }
+}
+
+#[cfg(all(test, feature = "grep"))]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{GrepMatch, matches_sorted_by_path_line};
+
+    fn m(path: &str, line: u64) -> GrepMatch {
+        GrepMatch {
+            path: PathBuf::from(path),
+            line,
+            text: String::new(),
+            line_truncated: false,
+        }
+    }
+
+    #[test]
+    fn match_order_detects_sorted_input() {
+        let matches = vec![m("a.txt", 1), m("a.txt", 2), m("b.txt", 1)];
+        assert!(matches_sorted_by_path_line(&matches));
+    }
+
+    #[test]
+    fn match_order_detects_unsorted_input() {
+        let matches = vec![m("b.txt", 1), m("a.txt", 2)];
+        assert!(!matches_sorted_by_path_line(&matches));
     }
 }
 
