@@ -90,6 +90,11 @@ fn initial_line_buffer_capacity(max_line_bytes: usize) -> usize {
 }
 
 #[cfg(feature = "grep")]
+fn max_grep_response_bytes(max_results: usize, max_line_bytes: usize) -> usize {
+    max_results.saturating_mul(max_line_bytes)
+}
+
+#[cfg(feature = "grep")]
 fn validate_query(query: &str) -> Result<()> {
     if query.trim().is_empty() {
         return Err(Error::InvalidPath(
@@ -605,9 +610,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let max_line_bytes = ctx.policy.limits.max_line_bytes;
+    let max_response_bytes = max_grep_response_bytes(ctx.policy.limits.max_results, max_line_bytes);
     let root_path = ctx.canonical_root(&request.root_id)?;
     let mut matches =
         Vec::<GrepMatch>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
+    let mut response_bytes = 0usize;
     let mut counters = GrepSkipCounters::default();
     let mut diag = TraversalDiagnostics::default();
     let mut line_buf = Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes));
@@ -865,6 +872,16 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     Some(first_idx) => matches[first_idx].path.clone(),
                     None => std::mem::take(&mut owned_relative_path),
                 };
+                let entry_bytes = path
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .len()
+                    .saturating_add(text.len());
+                if response_bytes.saturating_add(entry_bytes) > max_response_bytes {
+                    diag.mark_limit_reached(ScanLimitReason::Results);
+                    return Ok(std::ops::ControlFlow::Break(()));
+                }
+                response_bytes = response_bytes.saturating_add(entry_bytes);
                 let is_first_match_for_file = first_match_index.is_none();
                 matches.push(GrepMatch {
                     path,

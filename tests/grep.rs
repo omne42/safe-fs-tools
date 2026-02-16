@@ -929,6 +929,38 @@ fn grep_truncation_is_deterministic_under_max_results() {
 }
 
 #[test]
+fn grep_truncation_is_deterministic_under_response_byte_budget() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a-long-name.txt"), "needle\n").expect("write");
+    std::fs::write(dir.path().join("b-long-name.txt"), "needle\n").expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_results = 2;
+    policy.limits.max_line_bytes = 16;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: None,
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("a-long-name.txt"));
+    assert!(resp.truncated);
+    assert!(resp.scan_limit_reached);
+    assert_eq!(
+        resp.scan_limit_reason,
+        Some(safe_fs_tools::ops::ScanLimitReason::Results)
+    );
+}
+
+#[test]
 fn grep_truncates_on_utf8_boundary() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("utf8.txt"), "€€€\n").expect("write");
