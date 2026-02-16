@@ -83,7 +83,7 @@ impl SecretRedactor {
             .build()
             .map_err(|err| Error::InvalidPolicy(format!("invalid deny globs: {err}")))?;
 
-        let mut redact = Vec::<Regex>::new();
+        let mut redact = Vec::<Regex>::with_capacity(rules.redact_regexes.len());
         for (idx, pattern) in rules.redact_regexes.iter().enumerate() {
             if pattern.is_empty() {
                 return Err(Error::InvalidPolicy(

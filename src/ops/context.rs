@@ -61,7 +61,7 @@ impl Context {
         }
         validate_canonical_roots_non_overlapping(&canonical_roots)?;
 
-        let mut roots = HashMap::<String, RootRuntime>::new();
+        let mut roots = HashMap::<String, RootRuntime>::with_capacity(canonical_roots.len());
         for root in canonical_roots {
             let replaced = roots.insert(
                 root.id,
