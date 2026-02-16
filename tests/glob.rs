@@ -425,3 +425,48 @@ fn glob_truncates_when_response_byte_budget_is_exceeded() {
         Some(safe_fs_tools::ops::ScanLimitReason::Results)
     );
 }
+
+#[test]
+fn glob_uses_dedicated_response_budget_when_configured() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let files = [
+        "aaaaaaaaaaaaaaaaaaaaaaaa1.txt",
+        "aaaaaaaaaaaaaaaaaaaaaaaa2.txt",
+        "aaaaaaaaaaaaaaaaaaaaaaaa3.txt",
+        "aaaaaaaaaaaaaaaaaaaaaaaa4.txt",
+        "aaaaaaaaaaaaaaaaaaaaaaaa5.txt",
+    ];
+    for file in files {
+        std::fs::write(dir.path().join(file), "x\n").expect("write");
+    }
+
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_results = 10;
+    policy.limits.max_line_bytes = 1024;
+    policy.limits.max_glob_bytes = Some(100);
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert_eq!(
+        resp.matches,
+        vec![
+            PathBuf::from("aaaaaaaaaaaaaaaaaaaaaaaa1.txt"),
+            PathBuf::from("aaaaaaaaaaaaaaaaaaaaaaaa2.txt"),
+            PathBuf::from("aaaaaaaaaaaaaaaaaaaaaaaa3.txt"),
+        ]
+    );
+    assert!(resp.truncated);
+    assert!(resp.scan_limit_reached);
+    assert_eq!(
+        resp.scan_limit_reason,
+        Some(safe_fs_tools::ops::ScanLimitReason::Results)
+    );
+}

@@ -51,8 +51,10 @@ fn initial_match_capacity(max_results: usize) -> usize {
 }
 
 #[cfg(feature = "glob")]
-fn max_glob_response_bytes(max_results: usize, max_line_bytes: usize) -> usize {
-    max_results.saturating_mul(max_line_bytes)
+fn max_glob_response_bytes(limits: &crate::policy::Limits) -> usize {
+    limits
+        .max_glob_bytes
+        .unwrap_or_else(|| limits.max_results.saturating_mul(limits.max_line_bytes))
 }
 
 #[cfg(feature = "glob")]
@@ -122,10 +124,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let root_path = ctx.canonical_root(&request.root_id)?;
     let matcher = compile_glob(&request.pattern)?;
-    let max_response_bytes = max_glob_response_bytes(
-        ctx.policy.limits.max_results,
-        ctx.policy.limits.max_line_bytes,
-    );
+    let max_response_bytes = max_glob_response_bytes(&ctx.policy.limits);
 
     let mut matches =
         Vec::<PathBuf>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));

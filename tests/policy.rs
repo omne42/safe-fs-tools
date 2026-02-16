@@ -184,6 +184,26 @@ fn policy_rejects_zero_max_patch_bytes() {
 }
 
 #[test]
+fn policy_rejects_zero_max_glob_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_glob_bytes = Some(0);
+
+    let err = policy.validate().expect_err("should reject");
+    assert_invalid_policy_contains_all(err, &["limits.max_glob_bytes", "> 0"]);
+}
+
+#[test]
+fn policy_rejects_excessive_max_glob_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_glob_bytes = Some(64 * 1024 * 1024 + 1);
+
+    let err = policy.validate().expect_err("should reject");
+    assert_invalid_policy_contains_all(err, &["limits.max_glob_bytes", "<="]);
+}
+
+#[test]
 fn policy_rejects_max_walk_files_greater_than_entries() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut policy = test_policy(dir.path(), RootMode::ReadOnly);

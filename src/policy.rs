@@ -79,6 +79,12 @@ pub struct Limits {
     pub max_walk_ms: Option<u64>,
     #[serde(default = "default_max_line_bytes")]
     pub max_line_bytes: usize,
+    /// Optional byte budget for `glob` response payload (sum of matched relative-path bytes).
+    ///
+    /// - `None` => backward-compatible budget: `max_results * max_line_bytes`.
+    /// - `Some(0)` is invalid and rejected by policy validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_glob_bytes: Option<usize>,
 }
 
 const fn default_max_read_bytes() -> u64 {
@@ -115,6 +121,7 @@ const MAX_WALK_ENTRIES_HARD_CAP: usize = 10_000_000;
 const MAX_WALK_FILES_HARD_CAP: usize = 5_000_000;
 const MAX_LINE_BYTES_HARD_CAP: usize = 1024 * 1024;
 const MAX_GREP_RESPONSE_BYTES_HARD_CAP: usize = 64 * 1024 * 1024;
+const MAX_GLOB_RESPONSE_BYTES_HARD_CAP: usize = 64 * 1024 * 1024;
 
 fn is_valid_root_id(id: &str) -> bool {
     id.as_bytes().iter().all(|byte| {
@@ -175,6 +182,7 @@ impl Default for Limits {
             max_walk_files: default_max_walk_files(),
             max_walk_ms: None,
             max_line_bytes: default_max_line_bytes(),
+            max_glob_bytes: None,
         }
     }
 }
@@ -351,6 +359,13 @@ impl SandboxPolicy {
             "limits.max_line_bytes",
             MAX_LINE_BYTES_HARD_CAP,
         )?;
+        if let Some(max_glob_bytes) = self.limits.max_glob_bytes {
+            validate_usize_limit(
+                max_glob_bytes,
+                "limits.max_glob_bytes",
+                MAX_GLOB_RESPONSE_BYTES_HARD_CAP,
+            )?;
+        }
         validate_grep_response_budget(self.limits.max_results, self.limits.max_line_bytes)?;
         let mut seen_ids = std::collections::HashSet::<&str>::new();
         for root in &self.roots {
