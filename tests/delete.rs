@@ -250,6 +250,58 @@ fn delete_denies_after_canonicalization_when_symlink_parent_points_to_denied_pat
 }
 
 #[test]
+fn delete_recursive_rejects_when_tree_contains_denied_descendant() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let denied_dir = dir.path().join("project").join(".git");
+    std::fs::create_dir_all(&denied_dir).expect("mkdir denied dir");
+    std::fs::write(denied_dir.join("config"), "[core]\n").expect("write denied");
+    std::fs::write(dir.path().join("project").join("public.txt"), "ok\n").expect("write public");
+
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadWrite);
+    policy.secrets.deny_globs = vec!["project/.git/**".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = delete(
+        &ctx,
+        DeleteRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("project"),
+            recursive: true,
+            ignore_missing: false,
+        },
+    )
+    .expect_err("recursive delete should reject denied descendants");
+
+    match err {
+        safe_fs_tools::Error::SecretPathDenied(path) => {
+            assert!(
+                path.starts_with(Path::new("project").join(".git")),
+                "unexpected denied path: {}",
+                path.display()
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    assert!(
+        dir.path().join("project").exists(),
+        "recursive deny must keep parent directory"
+    );
+    assert!(
+        dir.path()
+            .join("project")
+            .join(".git")
+            .join("config")
+            .exists(),
+        "recursive deny must keep denied descendant"
+    );
+    assert!(
+        dir.path().join("project").join("public.txt").exists(),
+        "recursive deny should abort before deleting allowed siblings"
+    );
+}
+
+#[test]
 fn delete_is_not_allowed_on_readonly_root() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("file.txt");

@@ -47,6 +47,38 @@ fn missing_response(requested_path: &Path) -> DeleteResponse {
     }
 }
 
+fn ensure_recursive_delete_allows_descendants(
+    ctx: &Context,
+    target_abs: &Path,
+    target_relative: &Path,
+) -> Result<()> {
+    let mut stack = vec![(target_abs.to_path_buf(), target_relative.to_path_buf())];
+
+    while let Some((dir_abs, dir_relative)) = stack.pop() {
+        let entries =
+            fs::read_dir(&dir_abs).map_err(|err| Error::io_path("read_dir", &dir_relative, err))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|err| Error::io_path("read_dir", &dir_relative, err))?;
+            let child_name = entry.file_name();
+            let child_relative = dir_relative.join(&child_name);
+
+            if ctx.redactor.is_path_denied(&child_relative) {
+                return Err(Error::SecretPathDenied(child_relative));
+            }
+
+            let child_abs = entry.path();
+            let child_meta = fs::symlink_metadata(&child_abs)
+                .map_err(|err| Error::io_path("symlink_metadata", &child_relative, err))?;
+            if child_meta.file_type().is_dir() {
+                stack.push((child_abs, child_relative));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn unlink_symlink(target: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
@@ -356,6 +388,7 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
         if let Some(response) = ensure_target_stable_or_missing()? {
             return Ok(response);
         }
+        ensure_recursive_delete_allows_descendants(ctx, &target, &relative)?;
 
         if let Err(err) = fs::remove_dir_all(&target) {
             if err.kind() == std::io::ErrorKind::NotFound && request.ignore_missing {

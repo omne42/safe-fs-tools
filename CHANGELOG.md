@@ -136,6 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list_dir` non-UTF8 name ordering now caches lossy conversion per candidate for repeated heap comparisons, avoiding duplicate string allocation in large-directory top-k scans.
 - Unix xattr metadata copy now enforces explicit safety caps for xattr value/name-list lengths before allocation, reducing peak-memory risk on pathological filesystems.
 - `edit` range rewrite no longer builds a full `Vec<&str>` line index; it now scans once to locate byte offsets and rewrites via prefix/replacement/suffix slicing to reduce peak memory on large files.
+- `delete --recursive` now pre-scans descendants against `secrets.deny_globs` and fails closed on denied nested paths before `remove_dir_all`, preventing parent deletes from bypassing deny rules.
 
 ## [0.2.0] - 2026-02-14
 
