@@ -187,14 +187,37 @@ enum ReadLineCapped {
 }
 
 #[cfg(feature = "grep")]
+#[derive(Clone, Copy)]
+struct ReadLineCappedOptions<'a> {
+    started: Option<&'a Instant>,
+    max_walk: Option<Duration>,
+    stop_after_cap: bool,
+}
+
+#[cfg(feature = "grep")]
+impl<'a> ReadLineCappedOptions<'a> {
+    const fn new(started: Option<&'a Instant>, max_walk: Option<Duration>) -> Self {
+        Self {
+            started,
+            max_walk,
+            stop_after_cap: false,
+        }
+    }
+
+    const fn with_stop_after_cap(mut self, stop_after_cap: bool) -> Self {
+        self.stop_after_cap = stop_after_cap;
+        self
+    }
+}
+
+#[cfg(feature = "grep")]
 fn read_line_capped<R: BufRead>(
     reader: &mut R,
     line_buf: &mut Vec<u8>,
     max_line_bytes: usize,
     query: Option<&[u8]>,
     query_window: &mut Vec<u8>,
-    started: Option<&Instant>,
-    max_walk: Option<Duration>,
+    options: ReadLineCappedOptions<'_>,
 ) -> std::io::Result<ReadLineCapped> {
     line_buf.clear();
     query_window.clear();
@@ -216,7 +239,7 @@ fn read_line_capped<R: BufRead>(
                 contains_query: query_matched,
             });
         }
-        if let (Some(started), Some(limit)) = (started, max_walk)
+        if let (Some(started), Some(limit)) = (options.started, options.max_walk)
             && started.elapsed() >= limit
         {
             return Ok(ReadLineCapped::TimeLimit);
@@ -245,6 +268,13 @@ fn read_line_capped<R: BufRead>(
         }
 
         reader.consume(split_at);
+        if options.stop_after_cap && capped {
+            return Ok(ReadLineCapped::Line {
+                bytes_read,
+                capped,
+                contains_query: query_matched,
+            });
+        }
         if reached_line_end && ended_with_cr {
             let has_trailing_lf = {
                 let next = reader.fill_buf()?;
@@ -331,8 +361,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        GrepMatch, MAX_REGEX_LINE_BYTES, ReadLineCapped, matches_sorted_by_path_line,
-        max_capped_line_bytes_for_request, maybe_shrink_line_buffer,
+        GrepMatch, MAX_REGEX_LINE_BYTES, ReadLineCapped, ReadLineCappedOptions,
+        matches_sorted_by_path_line, max_capped_line_bytes_for_request, maybe_shrink_line_buffer,
     };
 
     fn m(path: &str, line: u64) -> GrepMatch {
@@ -375,8 +405,7 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
-            None,
-            None,
+            ReadLineCappedOptions::new(None, None),
         )
         .expect("first line");
         assert!(matches!(
@@ -393,8 +422,7 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
-            None,
-            None,
+            ReadLineCappedOptions::new(None, None),
         )
         .expect("second line");
         assert!(matches!(
@@ -419,8 +447,7 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
-            None,
-            None,
+            ReadLineCappedOptions::new(None, None),
         )
         .expect("first line");
         assert!(matches!(
@@ -437,8 +464,7 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
-            None,
-            None,
+            ReadLineCappedOptions::new(None, None),
         )
         .expect("second line");
         assert!(matches!(
@@ -463,8 +489,7 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
-            None,
-            None,
+            ReadLineCappedOptions::new(None, None),
         )
         .expect("line");
         assert!(matches!(
@@ -490,8 +515,7 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
-            Some(&started),
-            Some(std::time::Duration::ZERO),
+            ReadLineCappedOptions::new(Some(&started), Some(std::time::Duration::ZERO)),
         )
         .expect("line");
         assert!(matches!(line, ReadLineCapped::TimeLimit));
@@ -511,11 +535,41 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
-            Some(&started),
-            Some(std::time::Duration::ZERO),
+            ReadLineCappedOptions::new(Some(&started), Some(std::time::Duration::ZERO)),
         )
         .expect("line");
         assert!(matches!(line, ReadLineCapped::Eof));
+    }
+
+    #[test]
+    fn read_line_capped_can_short_circuit_after_cap() {
+        let input = Cursor::new(b"0123456789abcdef".to_vec());
+        let mut reader = BufReader::with_capacity(4, input);
+        let mut line_buf = Vec::new();
+        let mut query_window = Vec::new();
+
+        let line = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            4,
+            None,
+            &mut query_window,
+            ReadLineCappedOptions::new(None, None).with_stop_after_cap(true),
+        )
+        .expect("line");
+
+        match line {
+            ReadLineCapped::Line {
+                bytes_read,
+                capped,
+                contains_query,
+            } => {
+                assert!(capped);
+                assert!(!contains_query);
+                assert!(bytes_read < 16);
+            }
+            _ => panic!("expected capped line"),
+        }
     }
 
     #[test]
@@ -663,8 +717,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     max_capped_line_bytes,
                     plain_query,
                     &mut query_window,
-                    Some(&started),
-                    max_walk,
+                    ReadLineCappedOptions::new(Some(&started), max_walk)
+                        .with_stop_after_cap(request.regex),
                 ) {
                     Ok(ReadLineCapped::Eof) => break,
                     Ok(ReadLineCapped::TimeLimit) => {

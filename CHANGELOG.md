@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Docs overhaul: rebuilt project documentation into a structured portal (`docs/index.md`) with dedicated guides for getting started, concepts, policy/operations/CLI/library references, security usage, deployment/ops, and FAQ.
+- `grep` regex long-line fast skip: once a scanned line exceeds the regex line cap, line scanning now short-circuits immediately instead of draining the rest of that line before skipping the file.
 - `grep` plain-query memory smoothing: shrink oversized reusable query-window buffers between lines so isolated long-line scans do not retain multi-megabyte capacity for the rest of the request.
 - `copy_file` commit-path I/O trim: remove a redundant pre-commit temp-file `sync_all` and keep the single post-permissions sync before atomic replace, reducing large-copy latency without weakening durability semantics.
 - `resolve_path_in_root_lexically` hot-path trim: defer normalization of the original requested path to the rare error branch, removing one avoidable allocation on successful resolves.
