@@ -720,9 +720,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             let mut scanned_bytes = 0_u64;
             let mut line_no = 0_u64;
             let file_match_start = matches.len();
+            let file_path_bytes = relative_path.as_os_str().as_encoded_bytes().len();
             let mut owned_relative_path = relative_path;
             let mut first_match_index = None::<usize>;
-            let mut first_match_path_bytes = None::<usize>;
             loop {
                 let (n, line_was_capped, contains_query) = match read_line_capped(
                     &mut reader,
@@ -829,8 +829,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     diag.mark_limit_reached(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
-                let path_bytes = first_match_path_bytes
-                    .unwrap_or_else(|| owned_relative_path.as_os_str().as_encoded_bytes().len());
+                let path_bytes = file_path_bytes;
                 // If even an empty text payload would exceed budget, stop before expensive
                 // redaction/truncation work.
                 if response_bytes.saturating_add(path_bytes) > max_response_bytes {
@@ -898,7 +897,6 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 });
                 if is_first_match_for_file {
                     first_match_index = Some(matches.len().saturating_sub(1));
-                    first_match_path_bytes = Some(path_bytes);
                 }
             }
 

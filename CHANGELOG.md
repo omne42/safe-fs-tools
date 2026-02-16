@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Path-resolution allocation trim: `resolve_path_in_root_lexically` now returns borrowed canonical-root references (`&Path`) and `copy_file` path resolution now threads that borrow through intermediate state, removing extra per-request canonical-root `PathBuf` clones.
 - `grep` response-size guardrail: result assembly now tracks per-match `(path + text)` byte cost and truncates deterministically at the existing response budget boundary to avoid deep-path response bloat.
 - `grep` response-budget fast path: check per-match `(path + text)` byte budget before cloning match paths, avoiding wasted `PathBuf` clones when the next hit is dropped by truncation.
-- `grep` per-file match loop now caches the first matched path byte length and reuses it for later hits in the same file, trimming repeated path-byte recomputation in multi-match files.
+- `grep` per-file match loop now computes path byte length once per file and reuses it for all hits, trimming repeated path-byte recomputation in multi-match files.
 - `grep` response-budget guardrail now applies a path-only precheck before per-hit text truncation/redaction, avoiding unnecessary string work when remaining budget is already insufficient.
 - Windows regression coverage: add `delete` identity helper tests that lock in "all identity fields must be present" semantics.
 - Small allocation tuning: pre-size `Context` root runtime map and redaction regex vector during initialization to avoid avoidable growth reallocations.
