@@ -144,6 +144,10 @@ impl SecretRedactor {
     }
 
     pub fn redact_text_outcome<'a>(&self, input: &'a str) -> RedactionOutcome<'a> {
+        if self.redact.is_empty() {
+            return RedactionOutcome::Text(Cow::Borrowed(input));
+        }
+
         let mut current: Cow<'_, str> = Cow::Borrowed(input);
         for regex in &self.redact {
             match replace_regex_with_limit(current.as_ref(), regex, self.replacement.as_str()) {

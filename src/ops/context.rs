@@ -283,9 +283,13 @@ fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -
     }
 
     for roots in by_drive.values() {
-        validate_root_group_non_overlapping(roots)?;
+        if roots.len() > 1 {
+            validate_root_group_non_overlapping(roots)?;
+        }
     }
-    validate_root_group_non_overlapping(&non_disk_roots)?;
+    if non_disk_roots.len() > 1 {
+        validate_root_group_non_overlapping(&non_disk_roots)?;
+    }
 
     Ok(())
 }
