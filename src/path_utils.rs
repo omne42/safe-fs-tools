@@ -230,6 +230,9 @@ pub(crate) fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
                 only_curdir = false;
             }
         }
+        if needs_normalization && !only_curdir {
+            break;
+        }
     }
 
     if only_curdir {
