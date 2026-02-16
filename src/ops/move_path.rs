@@ -26,25 +26,36 @@ fn revalidate_parent_before_move(
 
     let rechecked_parent_meta = fs::symlink_metadata(&rechecked_parent)
         .map_err(|err| Error::io_path("symlink_metadata", requested_parent, err))?;
-    if !rechecked_parent_meta.is_dir()
-        || !metadata_same_file(expected_parent_meta, &rechecked_parent_meta)
-    {
+    if !rechecked_parent_meta.is_dir() {
         return Err(Error::InvalidPath(format!(
             "{side} parent identity changed during move; refusing to continue"
         )));
+    }
+    match metadata_same_file(expected_parent_meta, &rechecked_parent_meta) {
+        Some(true) => {}
+        Some(false) => {
+            return Err(Error::InvalidPath(format!(
+                "{side} parent identity changed during move; refusing to continue"
+            )));
+        }
+        None => {
+            // Best-effort fallback for filesystems that do not expose stable file IDs.
+            // Path re-resolution above still guarantees we are operating on the same
+            // canonical parent path inside the selected root.
+        }
     }
 
     Ok(rechecked_parent)
 }
 
 #[cfg(unix)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
+    Some(a.dev() == b.dev() && a.ino() == b.ino())
 }
 
 #[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::windows::fs::MetadataExt;
     match (
         a.volume_serial_number(),
@@ -53,15 +64,15 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
         b.file_index(),
     ) {
         (Some(a_serial), Some(a_index), Some(b_serial), Some(b_index)) => {
-            a_serial == b_serial && a_index == b_index
+            Some(a_serial == b_serial && a_index == b_index)
         }
-        _ => false,
+        _ => None,
     }
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
-    false
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
+    None
 }
 
 #[cfg(any(unix, windows))]
@@ -99,10 +110,17 @@ fn revalidate_source_before_move(
 ) -> Result<()> {
     let current_source_meta = fs::symlink_metadata(source)
         .map_err(|err| Error::io_path("symlink_metadata", source_relative, err))?;
-    if !metadata_same_file(expected_source_meta, &current_source_meta) {
-        return Err(Error::InvalidPath(
-            "source identity changed during move; refusing to continue".to_string(),
-        ));
+    match metadata_same_file(expected_source_meta, &current_source_meta) {
+        Some(true) => {}
+        Some(false) => {
+            return Err(Error::InvalidPath(
+                "source identity changed during move; refusing to continue".to_string(),
+            ));
+        }
+        None => {
+            // Best-effort fallback for filesystems that do not expose stable file IDs.
+            // The source path has already been lexically/canonically revalidated.
+        }
     }
     Ok(())
 }
@@ -126,8 +144,7 @@ fn validate_destination_before_move(
     };
 
     if let Some(dest_meta) = &destination_meta {
-        let same_destination_entity = metadata_same_file(source_meta, dest_meta);
-        if same_destination_entity {
+        if matches!(metadata_same_file(source_meta, dest_meta), Some(true)) {
             return Ok(true);
         }
         if dest_meta.is_dir() {

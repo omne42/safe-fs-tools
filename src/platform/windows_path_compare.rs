@@ -30,6 +30,12 @@ pub(crate) fn os_str_eq_case_insensitive(a: &OsStr, b: &OsStr) -> bool {
         return true;
     }
 
+    // Fast path: ASCII-only case-insensitive compare without allocations.
+    // Falls back when non-ASCII code units differ and require Windows ordinal rules.
+    if let Some(eq) = ascii_case_insensitive_eq_fast(a, b) {
+        return eq;
+    }
+
     let a_wide: Vec<u16> = a.encode_wide().collect();
     let b_wide: Vec<u16> = b.encode_wide().collect();
     let Ok(a_len) = i32::try_from(a_wide.len()) else {
@@ -55,4 +61,42 @@ pub(crate) fn os_str_eq_case_insensitive(a: &OsStr, b: &OsStr) -> bool {
     // - `a_wide`/`b_wide` live across the call and pointers do not escape.
     // - `ignore_case = 1` requests ordinal, case-insensitive comparison.
     unsafe { compare_string_ordinal(a_ptr, a_len, b_ptr, b_len, 1) == CSTR_EQUAL }
+}
+
+#[inline]
+fn lower_ascii_u16(unit: u16) -> u16 {
+    if (b'A' as u16..=b'Z' as u16).contains(&unit) {
+        unit + 32
+    } else {
+        unit
+    }
+}
+
+// Returns:
+// - `Some(true/false)` when ASCII-only comparison is conclusive.
+// - `None` when non-ASCII differences require Windows ordinal comparison.
+fn ascii_case_insensitive_eq_fast(a: &OsStr, b: &OsStr) -> Option<bool> {
+    let mut a_iter = a.encode_wide();
+    let mut b_iter = b.encode_wide();
+
+    loop {
+        match (a_iter.next(), b_iter.next()) {
+            (None, None) => return Some(true),
+            (Some(_), None) | (None, Some(_)) => return Some(false),
+            (Some(a_unit), Some(b_unit)) => {
+                if a_unit == b_unit {
+                    continue;
+                }
+                if a_unit <= 0x7f && b_unit <= 0x7f {
+                    let a_lower = lower_ascii_u16(a_unit);
+                    let b_lower = lower_ascii_u16(b_unit);
+                    if a_lower == b_lower {
+                        continue;
+                    }
+                    return Some(false);
+                }
+                return None;
+            }
+        }
+    }
 }

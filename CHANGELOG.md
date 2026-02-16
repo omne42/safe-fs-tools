@@ -18,12 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Redaction compilation cleanup: redact patterns now compile once into `Regex` values (remove duplicate `Regex` + `RegexSet` compilation of the same rules).
 - Redaction hot-path allocation trim: per-regex replacement now delays `String` allocation until first match instead of allocating on no-match paths.
 - Path-boundary fast path: add internal normalized-path helpers to avoid repeated lexical normalization in hot root-boundary checks.
+- `grep` line scanning now treats bare `\r` as a line terminator (and still normalizes `\r\n`), fixing cross-line matching/line-number errors on CR-delimited files.
 - Path-boundary helper fast path: avoid normalization allocation for already-clean paths (no `.`/`..` segments).
 - Policy docs/hardening note: add explicit TOCTOU warning comment at `resolve_path_checked` return site to emphasize lexical-only guarantees.
 - IO read-path allocation trim: preallocate read buffer from known file size when bounded by `max_read_bytes`.
 - `grep` match assembly: remove per-file intermediate match vector and append directly to output matches.
 - `read` line-range scanning: use a dedicated scratch buffer for pre-range skipped lines to avoid growing output capacity on skipped long lines.
 - `glob`/`grep` hot paths: preallocate output match vectors to `limits.max_results`.
+- `glob` response budget hardening: cap cumulative matched-path bytes using the existing policy budget (`limits.max_results * limits.max_line_bytes`) and stop with deterministic truncation when exceeded.
+- `glob` response-budget accounting now uses `OsStr::as_encoded_bytes().len()` per match, avoiding per-hit lossy UTF-8 allocation in large/non-UTF8 path sets.
 - `grep` hot loop: skip redaction regex processing entirely when no redact rules are configured.
 - Cleanup: simplify `list_dir` filename extraction and remove avoidable `Metadata` clone in `resolve/dir_ops` create path.
 - Context init cleanup: remove redundant runtime duplicate-`root.id` policy error path in `Context` construction and rely on `SandboxPolicy::validate_structural` as the single source of truth.
@@ -38,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Policy safety guardrail: reject configurations where `limits.max_results * limits.max_line_bytes` exceeds a hard response-budget cap, reducing worst-case grep memory amplification from misconfigured limits.
 - Context initialization optimization: on non-Windows platforms, canonical root-overlap checks now use sorted adjacent comparisons instead of quadratic pairwise scans.
 - `grep` long-line safety: line scanning now caps per-line buffering and drains oversized lines incrementally, preventing unbounded in-memory line growth on newline-free large files.
+- Windows path-compare fast path: add zero-allocation ASCII case-insensitive comparison before UTF-16 buffer allocation + FFI fallback, reducing hot-path compare overhead on common ASCII paths.
+- Windows identity revalidation correctness: `delete`/`move`/`copy_file` now treat missing filesystem identity fields as "cannot verify" (explicit error) instead of conflating them with "identity changed".
 - Traversal/grep allocation trim: traversal now constructs directory `probe` paths only for directory entries, and `grep` now reuses a single per-request line buffer across files.
 - `grep` response build fast path: skip final result sorting when matches are already in `(path, line)` order.
 - `glob` traversal-root setup: avoid cloning canonical root path when no safe traversal prefix is derived.
@@ -50,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `glob` response fast path: skip final sorting when traversal output is already in lexicographic path order.
 - `list_dir` hot path: avoid cloning canonical root `PathBuf` on each call; use borrowed root path directly during entry processing.
 - Unix metadata-copy docs: document why Linux/Android xattr preservation uses fd-scoped libc syscalls (std has no xattr API) and clarify syscall-level `unsafe` invariants.
+- Unix xattr sync allocation trim: stop cloning source xattr names into owned `Vec<u8>` set entries; reuse borrowed name bytes during destination-diff checks.
 - `grep` glob-prefix correctness: only apply directory-probe skip checks when the derived prefix is a directory, so file globs like `a.txt` are not incorrectly filtered by skip rules such as `a.txt/*`.
 - `grep` readability cleanup: flatten per-line regex/plain query match selection via `Option` combinator (`map_or_else`) in the hot scan loop.
 - Delete API cleanup: remove over-designed `DeleteKind`/`&str` `PartialEq` impls and keep comparisons explicit at call sites.
@@ -61,22 +67,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Policy docs: clarify lexical-only path-check wording for `resolve_path_checked`.
 - Combinator cleanup: replace selected small `match`/`if let` return plumbing with `and_then`/`map_or(_else)` chains in traversal/patch helpers.
 - Platform boundary cleanup: isolate platform-specific FFI/`unsafe` into `src/platform/{rename,windows_path_compare,unix_metadata}.rs` and keep `ops/io` + `path_utils` on safe wrappers.
-- Windows identity hardening: `copy_file`/`delete` now only treat two paths as the same file when all identity fields (`volume_serial_number`, `file_index`) are present on both sides; unknown IDs fail closed instead of `None == None` false positives.
+- Windows identity hardening: `copy_file`/`delete` now only treat two paths as the same file when all identity fields (`volume_serial_number`, `file_index`) are present on both sides; unknown IDs are no longer treated as implicit same-file matches.
+- Windows identity verification fallback: `copy_file`/`move_path`/`delete` now treat missing file-ID metadata as best-effort (continue with canonical-path revalidation) instead of hard-failing the operation.
 - `read` line-range memory tuning: switch from file-size-based upfront reservation to a small bounded initial capacity to avoid large allocations for narrow line windows.
 - `read` line-range skip-path memory tuning: skipped pre-range lines are now consumed in streaming chunks instead of buffering whole lines, avoiding large temporary allocations on very long prefix lines.
+- `read` line-range correctness: line-based reads now treat bare `\r` as a line ending (and handle `\r\n` as a single newline), fixing out-of-bounds errors on classic-Mac style files.
 - Unix metadata portability: fix ownership-preservation `gid` sentinel to use `libc::gid_t::MAX` (instead of `uid_t`) when preserving uid/gid deltas.
 - `grep` plain-query scan loop: reuse one query-window buffer per request in `read_line_capped` instead of allocating a new window per line/file, reducing hot-path allocation churn on large-file and many-file scans.
+- `grep` hot-path cleanup: precompute per-request capped-line budget once and reuse it across all scanned files, removing repeated invariant work inside the file loop.
 - `grep` line scanning micro-optimization: replace front-`drain` window trimming with bounded suffix compaction (`copy_within` + `truncate`) to avoid repeated O(n) front-removal costs on long-line plain-query scans.
 - `list_dir` `max_entries=0` fast path: skip per-entry metadata/kind materialization and run count-only filtering, cutting unnecessary I/O while preserving truncation and error accounting behavior.
 - `list_dir` zero-limit traversal fast path: stop scanning after the first visible entry when `max_entries=0`, avoiding full-directory scans when callers only need truncation presence.
+- `list_dir` zero-limit parity fix: `max_entries=0` count-only flow now classifies `file_type()` failures as skipped I/O errors (instead of counting them as visible entries), preserving diagnostics consistency.
+- `list_dir` allocation trim: keep candidate names as `OsString` and defer lossy UTF-8 allocation until response emission, reducing per-entry string churn in large directory scans.
 - Windows move/copy same-target fallback: when platform file IDs are unavailable, no-op same-path detection now uses lexical case-insensitive path equality (normalized) to avoid false `destination exists`/redundant move-copy behavior on case-only aliases.
 - Windows path-compare hot path: short-circuit exact `OsStr` equality before UTF-16 conversion/FFI, reducing per-call allocation overhead on already-identical segments.
 - Traversal glob matching on Windows now checks for backslashes first and skips UTF-16 normalization allocation when paths already use forward slashes.
+- Traversal glob matching on Windows now avoids double `encode_wide()` passes in the hot path by using a byte-level separator fast check before a single UTF-16 normalization pass.
+- `stat` now builds responses from post-revalidation metadata (instead of the pre-check snapshot), reducing stale size/timestamp responses under concurrent file mutation.
+- `grep` now enforces `max_walk_ms` inside per-file line scanning loops (not only between files), so large single-file scans respect time-budget truncation more predictably.
+- `grep` time-budget enforcement: line scanning now checks `max_walk_ms` inside the chunked `read_line_capped` loop as well, preventing oversized single-line inputs from overshooting the configured traversal budget.
+- `grep` hot-loop cleanup: remove duplicate per-line `elapsed()` guard in the line-scan loop and rely on the chunk-level `read_line_capped` budget check, reducing redundant time-budget probes on hot paths.
+- `grep` line-buffer reuse tuning: defer hot-loop shrink operations to per-file boundaries to reduce repeated grow/shrink allocation churn on long-line scans.
+- `grep` no-match scan path now opportunistically shrinks oversized reusable line buffers, preventing long-running scans from retaining multi-megabyte capacity after isolated long-line spikes.
+- Policy hard caps for `limits.max_read_bytes` / `limits.max_patch_bytes` / `limits.max_write_bytes` are reduced from 1 GiB to 256 MiB to lower worst-case in-memory operation risk under misconfiguration.
 - `grep` plain-query scan loop now bypasses UTF-8 decode for ASCII no-match lines while preserving non-UTF8 file-skip behavior.
+- `grep` path allocation trim: delay per-file match-path cloning until the second match so single-match files avoid one `PathBuf` clone.
 - Windows rename error mapping: `copy_file`/`write_file` now treat raw OS errors `80/183` as destination-exists when `overwrite=false`, matching `move_path` semantics under race conditions.
 - `list_dir` top-k selection now defers file `metadata()` reads until an entry is a real heap candidate, reducing syscall pressure on large directories with small `max_entries`.
+- `list_dir` result materialization now uses `BinaryHeap::into_sorted_vec()` directly, removing a redundant extra sort pass during response assembly.
+- `list_dir` hot-path syscall trim: remove per-entry preflight `file_type()` probes and keep no-follow metadata reads only on selected candidates, reducing directory-scan syscall volume.
+- `list_dir` zero-limit count path: restore a lightweight `file_type()` guard in `max_entries=0` counting mode so transient entry-read failures are tracked as `skipped_io_errors` instead of being overcounted as visible entries.
+- `glob`/`grep` prefix precheck: run deny/skip short-circuit before `walk_root.is_dir()` probing, avoiding unnecessary filesystem metadata checks when traversal is already excluded by policy.
+- `list_dir` TOCTOU hardening: candidate finalization now uses `symlink_metadata` (no-follow) to derive final type/size, preventing raced symlink replacements from being followed while collecting entry metadata.
 - `resolve/dir_ops` deep-path traversal now reuses borrowed parent-relative paths instead of cloning `PathBuf` on every segment, reducing O(depth²) path-copy overhead.
-- `list_dir` candidate-name handling now keeps `OsString` internally and lazily caches one lossy comparison string per candidate, avoiding repeated `to_string_lossy()` work in top-k heap comparisons.
+- `list_dir` candidate-name comparison now uses borrowed lossy views in heap ordering checks, deferring owned `String` allocation to final response materialization for selected entries only.
+- `list_dir` non-UTF8 name ordering now caches lossy conversion per candidate for repeated heap comparisons, avoiding duplicate string allocation in large-directory top-k scans.
 - Unix xattr metadata copy now enforces explicit safety caps for xattr value/name-list lengths before allocation, reducing peak-memory risk on pathological filesystems.
 - `edit` range rewrite no longer builds a full `Vec<&str>` line index; it now scans once to locate byte offsets and rewrites via prefix/replacement/suffix slicing to reduce peak memory on large files.
 

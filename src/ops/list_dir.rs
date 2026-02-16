@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::BinaryHeap;
 use std::ffi::OsString;
 use std::fs;
@@ -110,31 +111,38 @@ struct EntryCandidate {
     absolute_path: PathBuf,
     path: PathBuf,
     name: OsString,
-    cached_lossy_name: Option<String>,
-    kind: &'static str,
-    is_file: bool,
+    cached_lossy_name: OnceCell<String>,
 }
 
 impl EntryCandidate {
     #[inline]
-    fn sorts_before(&mut self, other: &ListDirEntry) -> bool {
-        let name = self
-            .cached_lossy_name
-            .get_or_insert_with(|| self.name.to_string_lossy().into_owned());
-        name.as_str()
-            .cmp(other.name.as_str())
+    fn compare_name(&self, other: &str) -> std::cmp::Ordering {
+        if let Some(valid_utf8) = self.name.to_str() {
+            valid_utf8.cmp(other)
+        } else {
+            self.cached_lossy_name
+                .get_or_init(|| self.name.to_string_lossy().into_owned())
+                .as_str()
+                .cmp(other)
+        }
+    }
+
+    #[inline]
+    fn sorts_before(&self, other: &ListDirEntry) -> bool {
+        self.compare_name(other.name.as_str())
             .then_with(|| self.path.cmp(&other.path))
             == std::cmp::Ordering::Less
     }
 
-    fn into_list_entry(self, size_bytes: u64) -> ListDirEntry {
+    fn into_list_entry(self, kind: &'static str, size_bytes: u64) -> ListDirEntry {
         let name = self
             .cached_lossy_name
+            .into_inner()
             .unwrap_or_else(|| self.name.to_string_lossy().into_owned());
         ListDirEntry {
             path: self.path,
             name,
-            kind: self.kind.to_string(),
+            kind: kind.to_string(),
             size_bytes,
         }
     }
@@ -178,6 +186,20 @@ fn ensure_directory_identity_unchanged(
     }
 }
 
+fn entry_kind_and_size_no_follow(path: &Path) -> std::io::Result<(&'static str, u64)> {
+    let meta = fs::symlink_metadata(path)?;
+    let file_type = meta.file_type();
+    if file_type.is_file() {
+        Ok(("file", meta.len()))
+    } else if file_type.is_dir() {
+        Ok(("dir", 0))
+    } else if file_type.is_symlink() {
+        Ok(("symlink", 0))
+    } else {
+        Ok(("other", 0))
+    }
+}
+
 fn process_dir_entry(
     ctx: &Context,
     entry: fs::DirEntry,
@@ -193,28 +215,11 @@ fn process_dir_entry(
         return Ok(EntryOutcome::Denied);
     }
 
-    let file_type = match entry.file_type() {
-        Ok(value) => value,
-        Err(_) => return Ok(EntryOutcome::SkippedIoError),
-    };
-
-    let kind = if file_type.is_file() {
-        "file"
-    } else if file_type.is_dir() {
-        "dir"
-    } else if file_type.is_symlink() {
-        "symlink"
-    } else {
-        "other"
-    };
-
     Ok(EntryOutcome::Accepted(EntryCandidate {
         absolute_path: path,
         path: relative,
         name: entry.file_name(),
-        cached_lossy_name: None,
-        kind,
-        is_file: file_type.is_file(),
+        cached_lossy_name: OnceCell::new(),
     }))
 }
 
@@ -233,8 +238,9 @@ fn process_dir_entry_count_only(
         return Ok(CountOnlyOutcome::Denied);
     }
 
-    // Keep parity with normal flow for best-effort IO error accounting, but skip metadata/kind
-    // work when callers only need matched-entry counts.
+    // Keep parity with normal flow for best-effort IO error accounting.
+    // For `max_entries=0`, callers only need truncation presence, but entries that
+    // fail basic type probing should still count toward `skipped_io_errors`.
     if entry.file_type().is_err() {
         return Ok(CountOnlyOutcome::SkippedIoError);
     }
@@ -298,7 +304,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         }
 
         match process_dir_entry(ctx, entry, root_path)? {
-            EntryOutcome::Accepted(mut entry) => {
+            EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
 
                 let should_insert = if heap.len() < max_entries {
@@ -310,21 +316,18 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                     continue;
                 }
 
-                // Defer metadata syscall until the entry is a real top-k candidate.
-                let size_bytes = if entry.is_file {
-                    match fs::metadata(&entry.absolute_path) {
-                        Ok(meta) => meta.len(),
-                        Err(_) => {
-                            skipped_io_errors = skipped_io_errors.saturating_add(1);
-                            matched_entries = matched_entries.saturating_sub(1);
-                            continue;
-                        }
+                // Re-read final type/size via `symlink_metadata` for the selected candidate.
+                // This avoids following a raced symlink replacement when collecting file size.
+                let (kind, size_bytes) = match entry_kind_and_size_no_follow(&entry.absolute_path) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        skipped_io_errors = skipped_io_errors.saturating_add(1);
+                        matched_entries = matched_entries.saturating_sub(1);
+                        continue;
                     }
-                } else {
-                    0
                 };
 
-                let candidate = Candidate(entry.into_list_entry(size_bytes));
+                let candidate = Candidate(entry.into_list_entry(kind, size_bytes));
                 if heap.len() < max_entries {
                     heap.push(candidate);
                 } else {
@@ -349,9 +352,10 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let entries = if max_entries == 0 {
         Vec::new()
     } else {
-        let mut entries = heap.into_vec().into_iter().map(|c| c.0).collect::<Vec<_>>();
-        entries.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
-        entries
+        heap.into_sorted_vec()
+            .into_iter()
+            .map(|candidate| candidate.0)
+            .collect::<Vec<_>>()
     };
 
     Ok(ListDirResponse {
@@ -365,7 +369,10 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
 
 #[cfg(test)]
 mod tests {
-    use super::initial_heap_capacity;
+    use std::collections::BinaryHeap;
+    use std::path::PathBuf;
+
+    use super::{Candidate, ListDirEntry, entry_kind_and_size_no_follow, initial_heap_capacity};
 
     #[test]
     fn initial_heap_capacity_is_capped() {
@@ -373,5 +380,86 @@ mod tests {
         assert_eq!(initial_heap_capacity(16), 16);
         assert_eq!(initial_heap_capacity(1024), 1024);
         assert_eq!(initial_heap_capacity(4096), 1024);
+    }
+
+    #[test]
+    fn candidate_heap_into_sorted_vec_preserves_name_then_path_order() {
+        let mut heap = BinaryHeap::new();
+        heap.push(Candidate(ListDirEntry {
+            path: PathBuf::from("b/alpha"),
+            name: "alpha".to_string(),
+            kind: "file".to_string(),
+            size_bytes: 1,
+        }));
+        heap.push(Candidate(ListDirEntry {
+            path: PathBuf::from("a/beta"),
+            name: "beta".to_string(),
+            kind: "file".to_string(),
+            size_bytes: 1,
+        }));
+        heap.push(Candidate(ListDirEntry {
+            path: PathBuf::from("a/alpha"),
+            name: "alpha".to_string(),
+            kind: "file".to_string(),
+            size_bytes: 1,
+        }));
+
+        let ordered = heap
+            .into_sorted_vec()
+            .into_iter()
+            .map(|candidate| (candidate.0.name, candidate.0.path))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ordered,
+            vec![
+                ("alpha".to_string(), PathBuf::from("a/alpha")),
+                ("alpha".to_string(), PathBuf::from("b/alpha")),
+                ("beta".to_string(), PathBuf::from("a/beta")),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sorts_before_caches_lossy_name_for_non_utf8_entries() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let candidate = super::EntryCandidate {
+            absolute_path: PathBuf::from("x"),
+            path: PathBuf::from("x"),
+            name: OsString::from_vec(vec![0xff]),
+            cached_lossy_name: std::cell::OnceCell::new(),
+        };
+        let other = ListDirEntry {
+            path: PathBuf::from("y"),
+            name: "z".to_string(),
+            kind: "file".to_string(),
+            size_bytes: 0,
+        };
+
+        let _ = candidate.sorts_before(&other);
+        assert!(candidate.cached_lossy_name.get().is_some());
+        let first_cached = candidate.cached_lossy_name.get().cloned();
+        let _ = candidate.sorts_before(&other);
+        assert_eq!(candidate.cached_lossy_name.get().cloned(), first_cached);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entry_kind_no_follow_reports_symlink_after_replacement() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = dir.path().join("outside.txt");
+        std::fs::write(&outside, "outside target").expect("write outside");
+
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "x").expect("write victim");
+        std::fs::remove_file(&victim).expect("remove victim");
+        std::os::unix::fs::symlink(&outside, &victim).expect("create symlink");
+
+        let (kind, size_bytes) = entry_kind_and_size_no_follow(&victim).expect("metadata");
+        assert_eq!(kind, "symlink");
+        assert_eq!(size_bytes, 0);
     }
 }

@@ -67,9 +67,9 @@ fn unlink_symlink(target: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
+    Some(a.dev() == b.dev() && a.ino() == b.ino())
 }
 
 #[cfg(windows)]
@@ -79,17 +79,17 @@ fn windows_identity_fields_match<T: Eq, U: Eq>(
     a_index: Option<U>,
     b_volume: Option<T>,
     b_index: Option<U>,
-) -> bool {
+) -> Option<bool> {
     match (a_volume, a_index, b_volume, b_index) {
         (Some(a_volume), Some(a_index), Some(b_volume), Some(b_index)) => {
-            a_volume == b_volume && a_index == b_index
+            Some(a_volume == b_volume && a_index == b_index)
         }
-        _ => false,
+        _ => None,
     }
 }
 
 #[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::windows::fs::MetadataExt;
     windows_identity_fields_match(
         a.volume_serial_number(),
@@ -100,8 +100,8 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
-    false
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
+    None
 }
 
 #[cfg(any(unix, windows))]
@@ -143,12 +143,23 @@ fn revalidate_parent_before_delete(
                         return Err(Error::io_path("symlink_metadata", requested_parent, err));
                     }
                 };
-                if !rechecked_parent_meta.is_dir()
-                    || !metadata_same_file(canonical_parent_meta, &rechecked_parent_meta)
-                {
+                if !rechecked_parent_meta.is_dir() {
                     return Err(Error::InvalidPath(
                         "parent identity changed during delete; refusing to continue".to_string(),
                     ));
+                }
+                match metadata_same_file(canonical_parent_meta, &rechecked_parent_meta) {
+                    Some(true) => {}
+                    Some(false) => {
+                        return Err(Error::InvalidPath(
+                            "parent identity changed during delete; refusing to continue"
+                                .to_string(),
+                        ));
+                    }
+                    None => {
+                        // Best-effort fallback for filesystems that do not expose stable file IDs.
+                        // Parent path has already been re-resolved and validated under root.
+                    }
                 }
                 Ok(None)
             }
@@ -278,10 +289,17 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
             }
             Err(err) => return Err(Error::io_path("symlink_metadata", &relative, err)),
         };
-        if !metadata_same_file(&meta, &current_meta) {
-            return Err(Error::InvalidPath(
-                "target identity changed during delete; refusing to continue".to_string(),
-            ));
+        match metadata_same_file(&meta, &current_meta) {
+            Some(true) => {}
+            Some(false) => {
+                return Err(Error::InvalidPath(
+                    "target identity changed during delete; refusing to continue".to_string(),
+                ));
+            }
+            None => {
+                // Best-effort fallback for filesystems that do not expose stable file IDs.
+                // Target path was already validated under the selected root.
+            }
         }
         Ok(None)
     };

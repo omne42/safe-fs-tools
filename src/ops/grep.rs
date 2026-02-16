@@ -139,8 +139,33 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 #[cfg(feature = "grep")]
+fn update_query_match_state(
+    query_window: &mut Vec<u8>,
+    query: &[u8],
+    chunk: &[u8],
+    query_matched: &mut bool,
+) {
+    if *query_matched {
+        return;
+    }
+    query_window.extend_from_slice(chunk);
+    *query_matched = contains_subslice(query_window, query);
+    if !*query_matched {
+        let keep = query.len().saturating_sub(1);
+        if query_window.len() > keep {
+            let start = query_window.len().saturating_sub(keep);
+            if keep > 0 {
+                query_window.copy_within(start.., 0);
+            }
+            query_window.truncate(keep);
+        }
+    }
+}
+
+#[cfg(feature = "grep")]
 enum ReadLineCapped {
     Eof,
+    TimeLimit,
     Line {
         bytes_read: usize,
         capped: bool,
@@ -155,6 +180,8 @@ fn read_line_capped<R: BufRead>(
     max_line_bytes: usize,
     query: Option<&[u8]>,
     query_window: &mut Vec<u8>,
+    started: Option<&Instant>,
+    max_walk: Option<Duration>,
 ) -> std::io::Result<ReadLineCapped> {
     line_buf.clear();
     query_window.clear();
@@ -173,27 +200,24 @@ fn read_line_capped<R: BufRead>(
                 contains_query: query_matched,
             });
         }
+        if let (Some(started), Some(limit)) = (started, max_walk)
+            && started.elapsed() >= limit
+        {
+            return Ok(ReadLineCapped::TimeLimit);
+        }
 
-        let newline_idx = chunk.iter().position(|byte| *byte == b'\n');
-        let split_at = newline_idx.map_or(chunk.len(), |idx| idx.saturating_add(1));
+        let line_end = chunk
+            .iter()
+            .position(|byte| *byte == b'\n' || *byte == b'\r');
+        let (split_at, reached_line_end, ended_with_cr) = match line_end {
+            Some(idx) => (idx.saturating_add(1), true, chunk[idx] == b'\r'),
+            None => (chunk.len(), false, false),
+        };
         let consumed = &chunk[..split_at];
         bytes_read = bytes_read.saturating_add(consumed.len());
 
-        if let Some(query) = query
-            && !query_matched
-        {
-            query_window.extend_from_slice(consumed);
-            query_matched = contains_subslice(query_window, query);
-            if !query_matched {
-                let keep = query.len().saturating_sub(1);
-                if query_window.len() > keep {
-                    let start = query_window.len().saturating_sub(keep);
-                    if keep > 0 {
-                        query_window.copy_within(start.., 0);
-                    }
-                    query_window.truncate(keep);
-                }
-            }
+        if let Some(query) = query {
+            update_query_match_state(query_window, query, consumed, &mut query_matched);
         }
 
         if !capped {
@@ -206,9 +230,29 @@ fn read_line_capped<R: BufRead>(
             }
         }
 
-        let had_newline = newline_idx.is_some();
         reader.consume(split_at);
-        if had_newline {
+        if reached_line_end && ended_with_cr {
+            let has_trailing_lf = {
+                let next = reader.fill_buf()?;
+                !next.is_empty() && next[0] == b'\n'
+            };
+            if has_trailing_lf {
+                if let Some(query) = query {
+                    update_query_match_state(query_window, query, b"\n", &mut query_matched);
+                }
+                if !capped {
+                    if line_buf.len() < max_line_bytes {
+                        line_buf.push(b'\n');
+                    } else {
+                        capped = true;
+                    }
+                }
+                reader.consume(1);
+                bytes_read = bytes_read.saturating_add(1);
+            }
+        }
+
+        if reached_line_end {
             return Ok(ReadLineCapped::Line {
                 bytes_read,
                 capped,
@@ -273,7 +317,7 @@ mod tests {
 
     use super::{
         GrepMatch, MAX_REGEX_LINE_BYTES, ReadLineCapped, matches_sorted_by_path_line,
-        max_capped_line_bytes_for_request,
+        max_capped_line_bytes_for_request, maybe_shrink_line_buffer,
     };
 
     fn m(path: &str, line: u64) -> GrepMatch {
@@ -316,6 +360,8 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
+            None,
+            None,
         )
         .expect("first line");
         assert!(matches!(
@@ -332,6 +378,52 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
+            None,
+            None,
+        )
+        .expect("second line");
+        assert!(matches!(
+            second,
+            ReadLineCapped::Line {
+                contains_query: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn read_line_capped_does_not_match_across_bare_cr_boundaries() {
+        let input = Cursor::new(b"aaane\redle\r".to_vec());
+        let mut reader = BufReader::with_capacity(3, input);
+        let mut line_buf = Vec::new();
+        let mut query_window = Vec::new();
+
+        let first = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            1024,
+            Some(b"needle"),
+            &mut query_window,
+            None,
+            None,
+        )
+        .expect("first line");
+        assert!(matches!(
+            first,
+            ReadLineCapped::Line {
+                contains_query: false,
+                ..
+            }
+        ));
+
+        let second = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            1024,
+            Some(b"needle"),
+            &mut query_window,
+            None,
+            None,
         )
         .expect("second line");
         assert!(matches!(
@@ -356,6 +448,8 @@ mod tests {
             1024,
             Some(b"needle"),
             &mut query_window,
+            None,
+            None,
         )
         .expect("line");
         assert!(matches!(
@@ -365,6 +459,56 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn read_line_capped_honors_time_budget_during_chunk_scan() {
+        let input = Cursor::new(b"needle\n".to_vec());
+        let mut reader = BufReader::with_capacity(1, input);
+        let mut line_buf = Vec::new();
+        let mut query_window = Vec::new();
+        let started = std::time::Instant::now();
+
+        let line = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            1024,
+            Some(b"needle"),
+            &mut query_window,
+            Some(&started),
+            Some(std::time::Duration::ZERO),
+        )
+        .expect("line");
+        assert!(matches!(line, ReadLineCapped::TimeLimit));
+    }
+
+    #[test]
+    fn read_line_capped_reports_eof_before_time_limit() {
+        let input = Cursor::new(Vec::<u8>::new());
+        let mut reader = BufReader::with_capacity(1, input);
+        let mut line_buf = Vec::new();
+        let mut query_window = Vec::new();
+        let started = std::time::Instant::now();
+
+        let line = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            1024,
+            Some(b"needle"),
+            &mut query_window,
+            Some(&started),
+            Some(std::time::Duration::ZERO),
+        )
+        .expect("line");
+        assert!(matches!(line, ReadLineCapped::Eof));
+    }
+
+    #[test]
+    fn maybe_shrink_line_buffer_releases_oversized_capacity() {
+        let mut buf = Vec::<u8>::with_capacity(512 * 1024);
+        buf.extend(std::iter::repeat_n(b'x', 256 * 1024));
+        maybe_shrink_line_buffer(&mut buf, 1024);
+        assert!(buf.capacity() <= 8 * 1024);
     }
 }
 
@@ -405,16 +549,20 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     {
         Some(prefix) => {
             let walk_root = root_path.join(&prefix);
-            let prefix_is_dir = walk_root.is_dir();
             let prefix_denied_or_skipped =
                 ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
-            let probe_denied_or_skipped = if prefix_is_dir {
+            if prefix_denied_or_skipped {
+                return Ok(build_grep_response(matches, diag, counters, &started));
+            }
+
+            // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
+            let probe_denied_or_skipped = if walk_root.is_dir() {
                 let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
                 ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
             } else {
                 false
             };
-            if prefix_denied_or_skipped || probe_denied_or_skipped {
+            if probe_denied_or_skipped {
                 return Ok(build_grep_response(matches, diag, counters, &started));
             }
             Some(walk_root)
@@ -431,6 +579,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     } else {
         None
     };
+    let max_capped_line_bytes = max_capped_line_bytes_for_request(
+        max_line_bytes,
+        ctx.policy.limits.max_read_bytes,
+        request.regex,
+    );
 
     diag = match walk_traversal_files(
         ctx,
@@ -474,17 +627,12 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
             let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
             let mut reader = std::io::BufReader::new(file.take(limit));
-            let max_capped_line_bytes = max_capped_line_bytes_for_request(
-                max_line_bytes,
-                ctx.policy.limits.max_read_bytes,
-                request.regex,
-            );
             let plain_query = (!request.regex).then_some(request.query.as_bytes());
             let mut scanned_bytes = 0_u64;
             let mut line_no = 0_u64;
             let file_match_start = matches.len();
             let mut owned_relative_path = relative_path;
-            let mut repeated_match_path = None::<PathBuf>;
+            let mut first_match_index = None::<usize>;
             loop {
                 let (n, line_was_capped, contains_query) = match read_line_capped(
                     &mut reader,
@@ -492,8 +640,15 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     max_capped_line_bytes,
                     plain_query,
                     &mut query_window,
+                    Some(&started),
+                    max_walk,
                 ) {
                     Ok(ReadLineCapped::Eof) => break,
+                    Ok(ReadLineCapped::TimeLimit) => {
+                        diag.mark_limit_reached(ScanLimitReason::Time);
+                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                        return Ok(std::ops::ControlFlow::Break(()));
+                    }
                     Ok(ReadLineCapped::Line {
                         bytes_read,
                         capped,
@@ -622,24 +777,25 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     (line[..end].to_string(), line_truncated)
                 };
 
-                // Response schema owns `PathBuf` per match; move once, clone only for repeats.
-                let path = match &repeated_match_path {
-                    Some(path) => path.clone(),
-                    None => {
-                        let path = std::mem::take(&mut owned_relative_path);
-                        repeated_match_path = Some(path.clone());
-                        path
-                    }
+                // Response schema owns `PathBuf` per match. Avoid cloning in the common
+                // single-match case by cloning only after the first match already exists.
+                let path = match first_match_index {
+                    Some(first_idx) => matches[first_idx].path.clone(),
+                    None => std::mem::take(&mut owned_relative_path),
                 };
+                let is_first_match_for_file = first_match_index.is_none();
                 matches.push(GrepMatch {
                     path,
                     line: line_no,
                     text,
                     line_truncated,
                 });
-                maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                if is_first_match_for_file {
+                    first_match_index = Some(matches.len().saturating_sub(1));
+                }
             }
 
+            maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
             Ok(std::ops::ControlFlow::Continue(()))
         },
     ) {

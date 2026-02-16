@@ -77,7 +77,8 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
         const BACKSLASH: u16 = b'\\' as u16;
         const SLASH: u16 = b'/' as u16;
 
-        if !path.as_os_str().encode_wide().any(|unit| unit == BACKSLASH) {
+        // Fast path: no backslash means the path is already in glob-compatible separator form.
+        if !path.as_os_str().as_encoded_bytes().contains(&b'\\') {
             return glob.is_match(path);
         }
         let normalized_wide: Vec<u16> = path

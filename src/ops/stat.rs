@@ -85,7 +85,7 @@ fn revalidate_path_stability(
     relative_path: &Path,
     requested_path: &Path,
     expected_identity: FileIdentity,
-) -> Result<()> {
+) -> Result<fs::Metadata> {
     let (rechecked_canonical, rechecked_relative, rechecked_requested) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
 
@@ -124,7 +124,7 @@ fn revalidate_path_stability(
         }
     }
 
-    Ok(())
+    Ok(rechecked_meta)
 }
 
 pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
@@ -151,7 +151,7 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
     })?;
 
     // Re-resolve after metadata read to narrow the path-rebinding window on parent components.
-    revalidate_path_stability(
+    let stable_meta = revalidate_path_stability(
         ctx,
         &request,
         &path,
@@ -160,21 +160,25 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
         expected_identity,
     )?;
 
-    let kind = if meta.is_file() {
+    let kind = if stable_meta.is_file() {
         StatKind::File
-    } else if meta.is_dir() {
+    } else if stable_meta.is_dir() {
         StatKind::Dir
     } else {
         StatKind::Other
     };
 
-    let size_bytes = if meta.is_file() { meta.len() } else { 0 };
+    let size_bytes = if stable_meta.is_file() {
+        stable_meta.len()
+    } else {
+        0
+    };
 
     // Time fields are best-effort metadata; stat should not fail if a filesystem cannot provide them.
-    let modified_ms = metadata_time_to_millis(meta.modified());
-    let accessed_ms = metadata_time_to_millis(meta.accessed());
-    let created_ms = metadata_time_to_millis(meta.created());
-    let readonly = meta.permissions().readonly();
+    let modified_ms = metadata_time_to_millis(stable_meta.modified());
+    let accessed_ms = metadata_time_to_millis(stable_meta.accessed());
+    let created_ms = metadata_time_to_millis(stable_meta.created());
+    let readonly = stable_meta.permissions().readonly();
 
     Ok(StatResponse {
         path: relative,

@@ -177,10 +177,7 @@ pub(crate) fn preserve_unix_security_metadata(
     let fd = tmp_file.as_raw_fd();
 
     let src_names = xattr_list_fd(src_fd)?;
-    let src_name_set: HashSet<Vec<u8>> = src_names
-        .iter()
-        .map(|name| name.as_bytes().to_vec())
-        .collect();
+    let src_name_set: HashSet<&[u8]> = src_names.iter().map(|name| name.as_bytes()).collect();
     for dst_name in xattr_list_fd(fd)? {
         if src_name_set.contains(dst_name.as_bytes()) {
             continue;

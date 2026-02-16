@@ -137,8 +137,7 @@ fn read_line_range(
             read_line_discarding_bytes(&mut reader)
                 .map_err(|err| Error::io_path("read", relative, err))?
         } else {
-            reader
-                .read_until(b'\n', &mut out)
+            read_line_appending_bytes(&mut reader, &mut out)
                 .map_err(|err| Error::io_path("read", relative, err))?
         };
         if n == 0 {
@@ -184,6 +183,20 @@ fn initial_line_range_capacity(max_read_bytes: u64) -> usize {
 }
 
 fn read_line_discarding_bytes<R: BufRead>(reader: &mut R) -> std::io::Result<usize> {
+    consume_next_line_bytes(reader, |_| {})
+}
+
+fn read_line_appending_bytes<R: BufRead>(
+    reader: &mut R,
+    out: &mut Vec<u8>,
+) -> std::io::Result<usize> {
+    consume_next_line_bytes(reader, |chunk| out.extend_from_slice(chunk))
+}
+
+fn consume_next_line_bytes<R: BufRead, F: FnMut(&[u8])>(
+    reader: &mut R,
+    mut on_chunk: F,
+) -> std::io::Result<usize> {
     let mut total = 0usize;
     loop {
         let available = reader.fill_buf()?;
@@ -191,16 +204,33 @@ fn read_line_discarding_bytes<R: BufRead>(reader: &mut R) -> std::io::Result<usi
             return Ok(total);
         }
 
-        let (to_consume, reached_line_end) = match available.iter().position(|byte| *byte == b'\n')
-        {
-            Some(idx) => (idx.saturating_add(1), true),
-            None => (available.len(), false),
+        let line_end = available
+            .iter()
+            .position(|byte| *byte == b'\n' || *byte == b'\r');
+        let (to_consume, reached_line_end, ended_with_cr) = match line_end {
+            Some(idx) => (idx.saturating_add(1), true, available[idx] == b'\r'),
+            None => (available.len(), false, false),
         };
 
+        on_chunk(&available[..to_consume]);
         reader.consume(to_consume);
         total = total
             .checked_add(to_consume)
             .ok_or_else(|| std::io::Error::other("line length overflowed usize"))?;
+
+        if reached_line_end && ended_with_cr {
+            let has_trailing_lf = {
+                let next = reader.fill_buf()?;
+                !next.is_empty() && next[0] == b'\n'
+            };
+            if has_trailing_lf {
+                on_chunk(b"\n");
+                reader.consume(1);
+                total = total
+                    .checked_add(1)
+                    .ok_or_else(|| std::io::Error::other("line length overflowed usize"))?;
+            }
+        }
 
         if reached_line_end {
             return Ok(total);

@@ -241,6 +241,22 @@ fn read_supports_line_ranges_without_trailing_newline() {
 }
 
 #[test]
+fn read_supports_line_ranges_with_bare_cr_line_endings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("lines.txt");
+    std::fs::write(&path, "one\rtwo\rthree\rfour\r").expect("write");
+
+    let ctx = Context::new(read_enabled_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let response = read_ok(&ctx, "lines.txt", Some(2), Some(3));
+
+    assert_eq!(response.content, "two\rthree\r");
+    assert_eq!(response.start_line, Some(2));
+    assert_eq!(response.end_line, Some(3));
+    assert!(!response.truncated);
+    assert_eq!(response.bytes_read, 14);
+}
+
+#[test]
 fn read_line_ranges_skip_large_prefix_line_without_retaining_scratch_buffer() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("lines.txt");

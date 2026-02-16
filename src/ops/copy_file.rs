@@ -9,9 +9,9 @@ use crate::error::{Error, Result};
 use super::Context;
 
 #[cfg(unix)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
+    Some(a.dev() == b.dev() && a.ino() == b.ino())
 }
 
 #[cfg(windows)]
@@ -21,17 +21,17 @@ fn windows_identity_fields_match<T: Eq, U: Eq>(
     a_index: Option<U>,
     b_volume: Option<T>,
     b_index: Option<U>,
-) -> bool {
+) -> Option<bool> {
     match (a_volume, a_index, b_volume, b_index) {
         (Some(a_volume), Some(a_index), Some(b_volume), Some(b_index)) => {
-            a_volume == b_volume && a_index == b_index
+            Some(a_volume == b_volume && a_index == b_index)
         }
-        _ => false,
+        _ => None,
     }
 }
 
 #[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::windows::fs::MetadataExt;
     windows_identity_fields_match(
         a.volume_serial_number(),
@@ -42,8 +42,8 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
-    false
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
+    None
 }
 
 #[cfg(all(test, windows))]
@@ -52,43 +52,34 @@ mod tests {
 
     #[test]
     fn windows_identity_requires_all_fields_present() {
-        assert!(!windows_identity_fields_match::<u32, u64>(
-            None,
-            Some(1),
-            None,
-            Some(1),
-        ));
-        assert!(!windows_identity_fields_match::<u32, u64>(
-            Some(1),
-            None,
-            Some(1),
-            None,
-        ));
-        assert!(!windows_identity_fields_match::<u32, u64>(
-            None, None, None, None,
-        ));
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(None, Some(1), None, Some(1),),
+            None
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(1), None, Some(1), None,),
+            None
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(None, None, None, None,),
+            None
+        );
     }
 
     #[test]
     fn windows_identity_compares_values_when_all_present() {
-        assert!(windows_identity_fields_match::<u32, u64>(
-            Some(7),
-            Some(11),
-            Some(7),
-            Some(11),
-        ));
-        assert!(!windows_identity_fields_match::<u32, u64>(
-            Some(7),
-            Some(11),
-            Some(8),
-            Some(11),
-        ));
-        assert!(!windows_identity_fields_match::<u32, u64>(
-            Some(7),
-            Some(11),
-            Some(7),
-            Some(12),
-        ));
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(7), Some(11), Some(7), Some(11),),
+            Some(true)
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(7), Some(11), Some(8), Some(11),),
+            Some(false)
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(7), Some(11), Some(7), Some(12),),
+            Some(false)
+        );
     }
 }
 
@@ -174,7 +165,7 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         }
     };
     if let Some(meta) = &destination_meta {
-        if metadata_same_file(&source_meta, meta) {
+        if matches!(metadata_same_file(&source_meta, meta), Some(true)) {
             return Ok(noop_response(
                 paths.from_relative.clone(),
                 destination.to_effective_relative.clone(),
@@ -491,12 +482,22 @@ fn verify_destination_parent_identity(
 ) -> Result<()> {
     let actual_parent_meta = fs::symlink_metadata(destination_parent)
         .map_err(|err| Error::io_path("symlink_metadata", to_effective_relative, err))?;
-    if !actual_parent_meta.is_dir()
-        || !destination_parent_identity_matches(expected_parent_meta, &actual_parent_meta)
-    {
+    if !actual_parent_meta.is_dir() {
         return Err(Error::InvalidPath(
             "destination parent directory changed during copy".to_string(),
         ));
+    }
+    match destination_parent_identity_matches(expected_parent_meta, &actual_parent_meta) {
+        Some(true) => {}
+        Some(false) => {
+            return Err(Error::InvalidPath(
+                "destination parent directory changed during copy".to_string(),
+            ));
+        }
+        None => {
+            // Best-effort fallback for filesystems that do not expose stable file IDs.
+            // We still require the canonical parent path to remain unchanged.
+        }
     }
     Ok(())
 }
@@ -505,7 +506,7 @@ fn verify_destination_parent_identity(
 fn destination_parent_identity_matches(
     expected_parent_meta: &fs::Metadata,
     actual_parent_meta: &fs::Metadata,
-) -> bool {
+) -> Option<bool> {
     metadata_same_file(expected_parent_meta, actual_parent_meta)
 }
 

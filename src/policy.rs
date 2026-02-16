@@ -107,9 +107,9 @@ const fn default_max_line_bytes() -> usize {
 
 const ROOT_ID_MAX_LEN: usize = 64;
 // Hard caps are policy-level guardrails against misconfiguration and accidental DoS.
-const MAX_READ_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
-const MAX_PATCH_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
-const MAX_WRITE_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
+const MAX_READ_BYTES_HARD_CAP: u64 = 256 * 1024 * 1024;
+const MAX_PATCH_BYTES_HARD_CAP: u64 = 256 * 1024 * 1024;
+const MAX_WRITE_BYTES_HARD_CAP: u64 = 256 * 1024 * 1024;
 const MAX_RESULTS_HARD_CAP: usize = 1_000_000;
 const MAX_WALK_ENTRIES_HARD_CAP: usize = 10_000_000;
 const MAX_WALK_FILES_HARD_CAP: usize = 5_000_000;

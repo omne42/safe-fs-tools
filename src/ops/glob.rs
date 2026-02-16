@@ -51,6 +51,11 @@ fn initial_match_capacity(max_results: usize) -> usize {
 }
 
 #[cfg(feature = "glob")]
+fn max_glob_response_bytes(max_results: usize, max_line_bytes: usize) -> usize {
+    max_results.saturating_mul(max_line_bytes)
+}
+
+#[cfg(feature = "glob")]
 fn build_glob_response(
     mut matches: Vec<PathBuf>,
     diag: TraversalDiagnostics,
@@ -117,23 +122,32 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
     let matcher = compile_glob(&request.pattern)?;
+    let max_response_bytes = max_glob_response_bytes(
+        ctx.policy.limits.max_results,
+        ctx.policy.limits.max_line_bytes,
+    );
 
     let mut matches =
         Vec::<PathBuf>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
+    let mut response_bytes = 0usize;
     let mut diag = TraversalDiagnostics::default();
     let walk_root_storage = match derive_safe_traversal_prefix(&request.pattern) {
         Some(prefix) => {
             let walk_root = root_path.join(&prefix);
-            let prefix_is_dir = walk_root.is_dir();
             let prefix_denied_or_skipped =
                 ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
-            let probe_denied_or_skipped = if prefix_is_dir {
+            if prefix_denied_or_skipped {
+                return Ok(build_glob_response(matches, diag, &started));
+            }
+
+            // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
+            let probe_denied_or_skipped = if walk_root.is_dir() {
                 let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
                 ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
             } else {
                 false
             };
-            if prefix_denied_or_skipped || probe_denied_or_skipped {
+            if probe_denied_or_skipped {
                 return Ok(build_glob_response(matches, diag, &started));
             }
             Some(walk_root)
@@ -157,6 +171,12 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                     diag.mark_limit_reached(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
+                let path_bytes = file.relative_path.as_os_str().as_encoded_bytes().len();
+                if response_bytes.saturating_add(path_bytes) > max_response_bytes {
+                    diag.mark_limit_reached(ScanLimitReason::Results);
+                    return Ok(std::ops::ControlFlow::Break(()));
+                }
+                response_bytes = response_bytes.saturating_add(path_bytes);
                 matches.push(file.relative_path);
             }
             Ok(std::ops::ControlFlow::Continue(()))
