@@ -168,6 +168,14 @@ fn update_query_match_state(
 }
 
 #[cfg(feature = "grep")]
+#[inline]
+fn update_single_byte_match_state(query_byte: u8, chunk: &[u8], query_matched: &mut bool) {
+    if !*query_matched && memchr::memchr(query_byte, chunk).is_some() {
+        *query_matched = true;
+    }
+}
+
+#[cfg(feature = "grep")]
 fn maybe_shrink_query_window(query_window: &mut Vec<u8>, query_len: usize) {
     const DEFAULT_RETAINED_CAPACITY: usize = 64;
     const MAX_RETAINED_CAPACITY: usize = 8 * 1024;
@@ -226,9 +234,12 @@ fn read_line_capped<R: BufRead>(
 ) -> std::io::Result<ReadLineCapped> {
     line_buf.clear();
     query_window.clear();
-    if let Some(query) = query {
+    if let Some(query) = query
+        && query.len() > 1
+    {
         maybe_shrink_query_window(query_window, query.len());
     }
+    let single_query_byte = query.and_then(|q| (q.len() == 1).then_some(q[0]));
     let mut bytes_read = 0usize;
     let mut capped = false;
     let mut query_matched = false;
@@ -258,7 +269,9 @@ fn read_line_capped<R: BufRead>(
         let consumed = &chunk[..split_at];
         bytes_read = bytes_read.saturating_add(consumed.len());
 
-        if let Some(query) = query {
+        if let Some(query_byte) = single_query_byte {
+            update_single_byte_match_state(query_byte, consumed, &mut query_matched);
+        } else if let Some(query) = query {
             update_query_match_state(query_window, query, consumed, &mut query_matched);
         }
 
@@ -286,7 +299,9 @@ fn read_line_capped<R: BufRead>(
                 !next.is_empty() && next[0] == b'\n'
             };
             if has_trailing_lf {
-                if let Some(query) = query {
+                if let Some(query_byte) = single_query_byte {
+                    update_single_byte_match_state(query_byte, b"\n", &mut query_matched);
+                } else if let Some(query) = query {
                     update_query_match_state(query_window, query, b"\n", &mut query_matched);
                 }
                 if !capped {
@@ -497,6 +512,59 @@ mod tests {
             ReadLineCappedOptions::new(None, None),
         )
         .expect("line");
+        assert!(matches!(
+            line,
+            ReadLineCapped::Line {
+                contains_query: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn read_line_capped_single_byte_query_uses_zero_window_state() {
+        let input = Cursor::new(b"axb\n".to_vec());
+        let mut reader = BufReader::with_capacity(1, input);
+        let mut line_buf = Vec::new();
+        let mut query_window = Vec::with_capacity(1024);
+
+        let line = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            1024,
+            Some(b"x"),
+            &mut query_window,
+            ReadLineCappedOptions::new(None, None),
+        )
+        .expect("line");
+
+        assert!(matches!(
+            line,
+            ReadLineCapped::Line {
+                contains_query: true,
+                ..
+            }
+        ));
+        assert!(query_window.is_empty());
+    }
+
+    #[test]
+    fn read_line_capped_single_byte_newline_query_matches_crlf() {
+        let input = Cursor::new(b"abc\r\n".to_vec());
+        let mut reader = BufReader::with_capacity(2, input);
+        let mut line_buf = Vec::new();
+        let mut query_window = Vec::new();
+
+        let line = super::read_line_capped(
+            &mut reader,
+            &mut line_buf,
+            1024,
+            Some(b"\n"),
+            &mut query_window,
+            ReadLineCappedOptions::new(None, None),
+        )
+        .expect("line");
+
         assert!(matches!(
             line,
             ReadLineCapped::Line {
