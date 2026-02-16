@@ -27,6 +27,9 @@ fn resolve_walk_root_for_traversal(
     } else {
         relative_walk_root
     };
+    if relative_walk_root == Path::new(".") {
+        return Ok(canonical_root.to_path_buf());
+    }
     let requested_walk_root = canonical_root.join(&relative_walk_root);
 
     match ctx.canonical_path_in_root(root_id, &relative_walk_root) {
