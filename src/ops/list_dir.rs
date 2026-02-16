@@ -98,7 +98,6 @@ impl Ord for Candidate {
 enum EntryOutcome {
     Accepted(EntryCandidate),
     Denied,
-    SkippedIoError,
 }
 
 enum CountOnlyOutcome {
@@ -203,13 +202,11 @@ fn entry_kind_and_size_no_follow(path: &Path) -> std::io::Result<(&'static str, 
 fn process_dir_entry(
     ctx: &Context,
     entry: fs::DirEntry,
-    root_path: &std::path::Path,
+    relative_dir: &Path,
 ) -> Result<EntryOutcome> {
     let path = entry.path();
-    let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, root_path) {
-        Some(relative) => relative,
-        None => return Ok(EntryOutcome::SkippedIoError),
-    };
+    let name = entry.file_name();
+    let relative = relative_entry_path(relative_dir, &name);
 
     if ctx.redactor.is_path_denied(&relative) {
         return Ok(EntryOutcome::Denied);
@@ -218,7 +215,7 @@ fn process_dir_entry(
     Ok(EntryOutcome::Accepted(EntryCandidate {
         absolute_path: path,
         path: relative,
-        name: entry.file_name(),
+        name,
         cached_lossy_name: OnceCell::new(),
     }))
 }
@@ -226,13 +223,9 @@ fn process_dir_entry(
 fn process_dir_entry_count_only(
     ctx: &Context,
     entry: fs::DirEntry,
-    root_path: &std::path::Path,
+    relative_dir: &Path,
 ) -> Result<CountOnlyOutcome> {
-    let path = entry.path();
-    let relative = match crate::path_utils::strip_prefix_case_insensitive(&path, root_path) {
-        Some(relative) => relative,
-        None => return Ok(CountOnlyOutcome::SkippedIoError),
-    };
+    let relative = relative_entry_path(relative_dir, &entry.file_name());
 
     if ctx.redactor.is_path_denied(&relative) {
         return Ok(CountOnlyOutcome::Denied);
@@ -246,6 +239,15 @@ fn process_dir_entry_count_only(
     }
 
     Ok(CountOnlyOutcome::Counted)
+}
+
+#[inline]
+fn relative_entry_path(relative_dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    if relative_dir == Path::new(".") {
+        PathBuf::from(name)
+    } else {
+        relative_dir.join(name)
+    }
 }
 
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
@@ -268,7 +270,6 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         )));
     }
 
-    let root_path = ctx.canonical_root(&request.root_id)?;
     let mut heap = BinaryHeap::<Candidate>::with_capacity(initial_heap_capacity(max_entries));
     let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;
@@ -288,7 +289,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
             }
         };
         if max_entries == 0 {
-            match process_dir_entry_count_only(ctx, entry, root_path)? {
+            match process_dir_entry_count_only(ctx, entry, &relative_dir)? {
                 CountOnlyOutcome::Counted => {
                     // With `max_entries=0`, callers only need to know whether any entry exists.
                     // Stop after the first visible match to avoid scanning huge directories.
@@ -303,7 +304,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
             continue;
         }
 
-        match process_dir_entry(ctx, entry, root_path)? {
+        match process_dir_entry(ctx, entry, &relative_dir)? {
             EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
 
@@ -336,9 +337,6 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 }
             }
             EntryOutcome::Denied => {}
-            EntryOutcome::SkippedIoError => {
-                skipped_io_errors = skipped_io_errors.saturating_add(1);
-            }
         }
     }
     ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
@@ -370,9 +368,13 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
 #[cfg(test)]
 mod tests {
     use std::collections::BinaryHeap;
+    use std::ffi::OsStr;
     use std::path::PathBuf;
 
-    use super::{Candidate, ListDirEntry, entry_kind_and_size_no_follow, initial_heap_capacity};
+    use super::{
+        Candidate, ListDirEntry, entry_kind_and_size_no_follow, initial_heap_capacity,
+        relative_entry_path,
+    };
 
     #[test]
     fn initial_heap_capacity_is_capped() {
@@ -418,6 +420,18 @@ mod tests {
                 ("beta".to_string(), PathBuf::from("a/beta")),
             ]
         );
+    }
+
+    #[test]
+    fn relative_entry_path_uses_file_name_for_root_dot() {
+        let path = relative_entry_path(std::path::Path::new("."), OsStr::new("a.txt"));
+        assert_eq!(path, PathBuf::from("a.txt"));
+    }
+
+    #[test]
+    fn relative_entry_path_joins_non_root_parent() {
+        let path = relative_entry_path(std::path::Path::new("nested"), OsStr::new("a.txt"));
+        assert_eq!(path, PathBuf::from("nested").join("a.txt"));
     }
 
     #[cfg(unix)]

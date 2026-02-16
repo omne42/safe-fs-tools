@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `grep` glob-filter optimization: when `grep.glob` is set, traversal defers file open until after glob match filtering (avoids opening non-matching files).
 - Traversal filter fast path: when both `secrets.deny_globs` and `traversal.skip_globs` are empty, directory walking now skips per-entry glob/path normalization checks and keeps the iterator on a cheaper straight-through path.
 - Traversal root setup trim: `resolve_walk_root_for_traversal` now reuses one borrowed canonical-root lookup instead of repeating root map lookups in the same call.
+- `list_dir` entry-path derivation now builds root-relative paths from `(relative_dir, file_name)` directly, removing per-entry `strip_prefix` work in large-directory scans.
 - Result collection tuning: `glob`/`grep` now cap initial match-vector reservation and skip sorting when zero/one result to reduce avoidable CPU and allocation overhead.
 - Large-line memory smoothing: `grep` and `read` line-range loops now trim oversized reusable line buffers after long-line reads to reduce post-spike retained capacity.
 - Internal write path cleanup: `commit_write` now consumes `WriteCommitContext` so permission metadata is moved into temp-file commit without an extra `Permissions` clone.
