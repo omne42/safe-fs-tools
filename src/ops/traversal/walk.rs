@@ -18,10 +18,11 @@ fn resolve_walk_root_for_traversal(
     walk_root: &Path,
 ) -> Result<PathBuf> {
     let canonical_root = ctx.canonical_root(root_id)?;
-    let relative_walk_root = crate::path_utils::strip_prefix_case_insensitive(walk_root, root_path)
-        .ok_or_else(|| {
-            Error::InvalidPath("derived traversal root escapes selected root".to_string())
-        })?;
+    let relative_walk_root =
+        crate::path_utils::strip_prefix_case_insensitive_normalized(walk_root, root_path)
+            .ok_or_else(|| {
+                Error::InvalidPath("derived traversal root escapes selected root".to_string())
+            })?;
     let relative_walk_root = if relative_walk_root.as_os_str().is_empty() {
         PathBuf::from(".")
     } else {
@@ -34,7 +35,10 @@ fn resolve_walk_root_for_traversal(
 
     match ctx.canonical_path_in_root(root_id, &relative_walk_root) {
         Ok((canonical, _, _)) => {
-            if crate::path_utils::paths_equal_case_insensitive(&canonical, &requested_walk_root) {
+            if crate::path_utils::paths_equal_case_insensitive_normalized(
+                &canonical,
+                &requested_walk_root,
+            ) {
                 return Ok(canonical);
             }
             // Preserve alias paths for file/symlink roots so pattern matching sees the
@@ -58,9 +62,10 @@ fn resolve_walk_root_for_traversal(
 }
 
 fn walkdir_root_error(root_path: &Path, walk_root: &Path, err: walkdir::Error) -> Error {
-    let relative = crate::path_utils::strip_prefix_case_insensitive(walk_root, root_path)
-        .filter(|relative| !relative.as_os_str().is_empty())
-        .unwrap_or_else(|| PathBuf::from("."));
+    let relative =
+        crate::path_utils::strip_prefix_case_insensitive_normalized(walk_root, root_path)
+            .filter(|relative| !relative.as_os_str().is_empty())
+            .unwrap_or_else(|| PathBuf::from("."));
 
     let source = err
         .io_error()
@@ -103,14 +108,16 @@ pub(super) fn walkdir_traversal_iter<'a>(
                 Err(_) => {
                     #[cfg(windows)]
                     {
-                        if let Some(relative) = crate::path_utils::strip_prefix_case_insensitive(
-                            entry.path(),
-                            root_path,
-                        ) {
+                        if let Some(relative) =
+                            crate::path_utils::strip_prefix_case_insensitive_normalized(
+                                entry.path(),
+                                root_path,
+                            )
+                        {
                             std::borrow::Cow::Owned(relative)
                         } else {
                             debug_assert!(
-                                crate::path_utils::strip_prefix_case_insensitive(
+                                crate::path_utils::strip_prefix_case_insensitive_normalized(
                                     entry.path(),
                                     root_path,
                                 )
@@ -123,7 +130,7 @@ pub(super) fn walkdir_traversal_iter<'a>(
                     #[cfg(not(windows))]
                     {
                         debug_assert!(
-                            crate::path_utils::strip_prefix_case_insensitive(
+                            crate::path_utils::strip_prefix_case_insensitive_normalized(
                                 entry.path(),
                                 root_path,
                             )
@@ -204,7 +211,8 @@ fn relative_from_walk_entry(
 
     #[cfg(windows)]
     {
-        let relative = crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path);
+        let relative =
+            crate::path_utils::strip_prefix_case_insensitive_normalized(entry.path(), root_path);
         if relative.is_none() {
             diag.inc_skipped_walk_errors();
         }
@@ -214,7 +222,8 @@ fn relative_from_walk_entry(
     #[cfg(not(windows))]
     {
         debug_assert!(
-            crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path).is_some(),
+            crate::path_utils::strip_prefix_case_insensitive_normalized(entry.path(), root_path)
+                .is_some(),
             "walkdir yielded a path outside the selected root"
         );
         diag.inc_skipped_walk_errors();
