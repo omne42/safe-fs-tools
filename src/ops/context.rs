@@ -268,21 +268,26 @@ fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -
     }
 
     // Windows roots on different drive letters are guaranteed disjoint.
-    // Partitioning by drive avoids unnecessary cross-drive pair checks.
-    let mut by_drive = std::collections::BTreeMap::<u8, Vec<&CanonicalRoot>>::new();
+    // Partition by disk letter in fixed buckets to avoid map overhead and
+    // unnecessary cross-drive pair checks.
+    let mut disk_roots = std::array::from_fn::<_, 26, _>(|_| Vec::<&CanonicalRoot>::new());
     let mut non_disk_roots = Vec::<&CanonicalRoot>::with_capacity(canonical_roots.len());
     for root in canonical_roots {
         if let Some(letter) = windows_disk_letter(&root.canonical_path) {
-            by_drive
-                .entry(letter.to_ascii_lowercase())
-                .or_default()
-                .push(root);
+            let lower = letter.to_ascii_lowercase();
+            match lower {
+                b'a'..=b'z' => {
+                    let idx = usize::from(lower - b'a');
+                    disk_roots[idx].push(root);
+                }
+                _ => non_disk_roots.push(root),
+            }
         } else {
             non_disk_roots.push(root);
         }
     }
 
-    for roots in by_drive.values() {
+    for roots in &disk_roots {
         if roots.len() > 1 {
             validate_root_group_non_overlapping(roots)?;
         }
