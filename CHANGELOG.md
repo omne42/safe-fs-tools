@@ -141,6 +141,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list_dir` finalization no longer mutates visible-entry counters on post-selection metadata races; those races now only impact entry materialization and `skipped_io_errors`, preserving truncation semantics from the initial scan pass.
 - `list_dir` now marks `truncated=true` when post-selection metadata races drop retained entries under the `max_entries` limit, making incomplete responses explicit instead of appearing fully complete with only `skipped_io_errors`.
 - Unix xattr metadata copy now retries boundedly on `ERANGE` races during two-phase `flistxattr`/`fgetxattr` reads, reducing spurious failures when attributes mutate concurrently.
+- `copy_file` no-op fast paths now move already-owned request/response paths instead of cloning them, trimming hot-path allocations when source and destination resolve to the same file.
 
 ## [0.2.0] - 2026-02-14
 

@@ -146,10 +146,10 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
     if crate::path_utils::paths_equal_case_insensitive_normalized(&paths.source, &destination.path)
     {
         return Ok(noop_response(
-            paths.from_relative.clone(),
-            destination.to_effective_relative.clone(),
-            paths.requested_from.clone(),
-            paths.requested_to.clone(),
+            paths.from_relative,
+            destination.to_effective_relative,
+            paths.requested_from,
+            paths.requested_to,
         ));
     }
 
@@ -167,10 +167,10 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
     if let Some(meta) = &destination_meta {
         if matches!(metadata_same_file(&source_meta, meta), Some(true)) {
             return Ok(noop_response(
-                paths.from_relative.clone(),
-                destination.to_effective_relative.clone(),
-                paths.requested_from.clone(),
-                paths.requested_to.clone(),
+                paths.from_relative,
+                destination.to_effective_relative,
+                paths.requested_from,
+                paths.requested_to,
             ));
         }
         if meta.is_dir() {
