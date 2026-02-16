@@ -139,6 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `delete --recursive` now pre-scans descendants against `secrets.deny_globs` and fails closed on denied nested paths before `remove_dir_all`, preventing parent deletes from bypassing deny rules.
 - `delete --recursive` deny-prescan now short-circuits when `secrets.deny_globs` is empty and uses `DirEntry::file_type()` during traversal, reducing unnecessary directory-tree scan overhead and metadata syscalls on non-secret-policy workloads.
 - `list_dir` finalization no longer mutates visible-entry counters on post-selection metadata races; those races now only impact entry materialization and `skipped_io_errors`, preserving truncation semantics from the initial scan pass.
+- `list_dir` now marks `truncated=true` when post-selection metadata races drop retained entries under the `max_entries` limit, making incomplete responses explicit instead of appearing fully complete with only `skipped_io_errors`.
+- Unix xattr metadata copy now retries boundedly on `ERANGE` races during two-phase `flistxattr`/`fgetxattr` reads, reducing spurious failures when attributes mutate concurrently.
 
 ## [0.2.0] - 2026-02-14
 

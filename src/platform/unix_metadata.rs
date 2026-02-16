@@ -24,6 +24,7 @@ pub(crate) fn preserve_unix_security_metadata(
 
     const MAX_XATTR_VALUE_BYTES: usize = 1024 * 1024;
     const MAX_XATTR_NAME_LIST_BYTES: usize = 4 * 1024 * 1024;
+    const MAX_XATTR_RACE_RETRIES: usize = 4;
 
     fn checked_kernel_len(len: libc::ssize_t, cap: usize, what: &str) -> std::io::Result<usize> {
         let len = usize::try_from(len).map_err(|_| {
@@ -38,116 +39,158 @@ pub(crate) fn preserve_unix_security_metadata(
         Ok(len)
     }
 
+    #[inline]
+    fn is_retryable_xattr_race(err: &std::io::Error) -> bool {
+        err.raw_os_error() == Some(libc::ERANGE)
+    }
+
     fn xattr_read_fd_required(fd: libc::c_int, name: &CStr) -> std::io::Result<Vec<u8>> {
-        // SAFETY: `name` is NUL-terminated and both pointers are valid for this call.
-        let len = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
-        if len < 0 {
-            return Err(std::io::Error::last_os_error());
+        for _ in 0..MAX_XATTR_RACE_RETRIES {
+            // SAFETY: `name` is NUL-terminated and both pointers are valid for this call.
+            let len = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
+            if len < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let len = checked_kernel_len(len, MAX_XATTR_VALUE_BYTES, "xattr value length")?;
+            if len == 0 {
+                return Ok(Vec::new());
+            }
+            let mut buf = vec![0_u8; len];
+            // SAFETY: destination buffer is valid for `buf.len()` bytes.
+            let read = unsafe {
+                libc::fgetxattr(
+                    fd,
+                    name.as_ptr(),
+                    buf.as_mut_ptr().cast::<libc::c_void>(),
+                    buf.len(),
+                )
+            };
+            if read < 0 {
+                let err = std::io::Error::last_os_error();
+                if is_retryable_xattr_race(&err) {
+                    continue;
+                }
+                return Err(err);
+            }
+            let read = usize::try_from(read).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "xattr read length overflow",
+                )
+            })?;
+            buf.truncate(read);
+            return Ok(buf);
         }
-        let len = checked_kernel_len(len, MAX_XATTR_VALUE_BYTES, "xattr value length")?;
-        if len == 0 {
-            return Ok(Vec::new());
-        }
-        let mut buf = vec![0_u8; len];
-        // SAFETY: destination buffer is valid for `buf.len()` bytes.
-        let read = unsafe {
-            libc::fgetxattr(
-                fd,
-                name.as_ptr(),
-                buf.as_mut_ptr().cast::<libc::c_void>(),
-                buf.len(),
-            )
-        };
-        if read < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let read = usize::try_from(read).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "xattr read length overflow",
-            )
-        })?;
-        buf.truncate(read);
-        Ok(buf)
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ResourceBusy,
+            "xattr value changed concurrently during read",
+        ))
     }
 
     fn xattr_read_fd(fd: libc::c_int, name: &CStr) -> std::io::Result<Option<Vec<u8>>> {
-        // SAFETY: `name` is NUL-terminated and both pointers are valid for this call.
-        let len = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
-        if len < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::ENODATA) {
-                return Ok(None);
+        for _ in 0..MAX_XATTR_RACE_RETRIES {
+            // SAFETY: `name` is NUL-terminated and both pointers are valid for this call.
+            let len = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
+            if len < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::ENODATA) {
+                    return Ok(None);
+                }
+                return Err(err);
             }
-            return Err(err);
+            let len = checked_kernel_len(len, MAX_XATTR_VALUE_BYTES, "xattr value length")?;
+            if len == 0 {
+                return Ok(Some(Vec::new()));
+            }
+            let mut buf = vec![0_u8; len];
+            // SAFETY: destination buffer is valid for `buf.len()` bytes.
+            let read = unsafe {
+                libc::fgetxattr(
+                    fd,
+                    name.as_ptr(),
+                    buf.as_mut_ptr().cast::<libc::c_void>(),
+                    buf.len(),
+                )
+            };
+            if read < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::ENODATA) {
+                    return Ok(None);
+                }
+                if is_retryable_xattr_race(&err) {
+                    continue;
+                }
+                return Err(err);
+            }
+            let read = usize::try_from(read).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "xattr read length overflow",
+                )
+            })?;
+            buf.truncate(read);
+            return Ok(Some(buf));
         }
-        let len = checked_kernel_len(len, MAX_XATTR_VALUE_BYTES, "xattr value length")?;
-        if len == 0 {
-            return Ok(Some(Vec::new()));
-        }
-        let mut buf = vec![0_u8; len];
-        // SAFETY: destination buffer is valid for `buf.len()` bytes.
-        let read = unsafe {
-            libc::fgetxattr(
-                fd,
-                name.as_ptr(),
-                buf.as_mut_ptr().cast::<libc::c_void>(),
-                buf.len(),
-            )
-        };
-        if read < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let read = usize::try_from(read).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "xattr read length overflow",
-            )
-        })?;
-        buf.truncate(read);
-        Ok(Some(buf))
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ResourceBusy,
+            "xattr value changed concurrently during read",
+        ))
     }
 
     fn xattr_list_fd(fd: libc::c_int) -> std::io::Result<Vec<CString>> {
-        // SAFETY: null buffer with size 0 asks kernel for the required size.
-        let list_len = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
-        if list_len < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let list_len = checked_kernel_len(
-            list_len,
-            MAX_XATTR_NAME_LIST_BYTES,
-            "xattr name list length",
-        )?;
-        if list_len == 0 {
-            return Ok(Vec::new());
-        }
+        for _ in 0..MAX_XATTR_RACE_RETRIES {
+            // SAFETY: null buffer with size 0 asks kernel for the required size.
+            let list_len = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
+            if list_len < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let list_len = checked_kernel_len(
+                list_len,
+                MAX_XATTR_NAME_LIST_BYTES,
+                "xattr name list length",
+            )?;
+            if list_len == 0 {
+                return Ok(Vec::new());
+            }
 
-        let mut names = vec![0_u8; list_len];
-        // SAFETY: `names` is a writable buffer of `names.len()` bytes.
-        let list_read =
-            unsafe { libc::flistxattr(fd, names.as_mut_ptr().cast::<libc::c_char>(), names.len()) };
-        if list_read < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let list_read = checked_kernel_len(
-            list_read,
-            MAX_XATTR_NAME_LIST_BYTES,
-            "xattr name list read length",
-        )?;
+            let mut names = vec![0_u8; list_len];
+            // SAFETY: `names` is a writable buffer of `names.len()` bytes.
+            let list_read = unsafe {
+                libc::flistxattr(fd, names.as_mut_ptr().cast::<libc::c_char>(), names.len())
+            };
+            if list_read < 0 {
+                let err = std::io::Error::last_os_error();
+                if is_retryable_xattr_race(&err) {
+                    continue;
+                }
+                return Err(err);
+            }
+            let list_read = checked_kernel_len(
+                list_read,
+                MAX_XATTR_NAME_LIST_BYTES,
+                "xattr name list read length",
+            )?;
 
-        names[..list_read]
-            .split(|byte| *byte == 0)
-            .filter(|raw_name| !raw_name.is_empty())
-            .map(|raw_name| {
-                CString::new(raw_name).map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "xattr name contains interior NUL byte",
-                    )
+            return names[..list_read]
+                .split(|byte| *byte == 0)
+                .filter(|raw_name| !raw_name.is_empty())
+                .map(|raw_name| {
+                    CString::new(raw_name).map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "xattr name contains interior NUL byte",
+                        )
+                    })
                 })
-            })
-            .collect()
+                .collect();
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ResourceBusy,
+            "xattr name list changed concurrently during read",
+        ))
     }
 
     let tmp_meta = tmp_file.metadata()?;

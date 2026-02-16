@@ -275,6 +275,24 @@ fn relative_entry_path(relative_dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
     }
 }
 
+#[inline]
+fn is_list_dir_truncated(
+    max_entries: usize,
+    zero_limit_truncated: bool,
+    matched_entries: usize,
+    skipped_io_errors: u64,
+    materialized_entries: usize,
+) -> bool {
+    if max_entries == 0 {
+        return zero_limit_truncated;
+    }
+
+    let hit_entry_limit = matched_entries > max_entries;
+    let incomplete_due_to_io =
+        !hit_entry_limit && skipped_io_errors > 0 && materialized_entries < matched_entries;
+    hit_entry_limit || incomplete_due_to_io
+}
+
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
     ctx.ensure_policy_permission(ctx.policy.permissions.list_dir, "list_dir")?;
 
@@ -356,12 +374,6 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     }
     ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
 
-    let truncated = if max_entries == 0 {
-        zero_limit_truncated
-    } else {
-        matched_entries > max_entries
-    };
-
     let entries = if max_entries == 0 {
         Vec::new()
     } else {
@@ -383,6 +395,13 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         }
         entries
     };
+    let truncated = is_list_dir_truncated(
+        max_entries,
+        zero_limit_truncated,
+        matched_entries,
+        skipped_io_errors,
+        entries.len(),
+    );
 
     Ok(ListDirResponse {
         path: relative_dir,
@@ -401,7 +420,7 @@ mod tests {
 
     use super::{
         Candidate, ListDirEntry, entry_kind_and_size_no_follow, initial_heap_capacity,
-        relative_entry_path,
+        is_list_dir_truncated, relative_entry_path,
     };
 
     #[test]
@@ -469,6 +488,27 @@ mod tests {
     fn relative_entry_path_joins_non_root_parent() {
         let path = relative_entry_path(std::path::Path::new("nested"), OsStr::new("a.txt"));
         assert_eq!(path, PathBuf::from("nested").join("a.txt"));
+    }
+
+    #[test]
+    fn truncated_when_visible_entries_exceed_limit() {
+        assert!(is_list_dir_truncated(2, false, 3, 0, 2));
+    }
+
+    #[test]
+    fn not_truncated_when_within_limit_and_no_io_losses() {
+        assert!(!is_list_dir_truncated(3, false, 2, 0, 2));
+    }
+
+    #[test]
+    fn truncated_when_metadata_losses_drop_entries_under_limit() {
+        assert!(is_list_dir_truncated(4, false, 2, 1, 1));
+    }
+
+    #[test]
+    fn zero_max_entries_uses_zero_limit_flag() {
+        assert!(!is_list_dir_truncated(0, false, 0, 0, 0));
+        assert!(is_list_dir_truncated(0, true, 0, 0, 0));
     }
 
     #[cfg(unix)]
