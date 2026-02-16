@@ -211,7 +211,7 @@ fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
 }
 
 #[inline]
-fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
+pub(crate) fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
     if path.as_os_str().is_empty() {
         return Cow::Owned(PathBuf::from("."));
     }

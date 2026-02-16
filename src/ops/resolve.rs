@@ -11,22 +11,21 @@ pub(super) fn derive_requested_path(
     canonical_root: &Path,
     resolved: &Path,
 ) -> Result<PathBuf> {
-    let normalized_resolved = crate::path_utils_internal::normalize_path_lexical(resolved);
-    let normalized_root_path = crate::path_utils_internal::normalize_path_lexical(root_path);
-    let normalized_canonical_root =
-        crate::path_utils_internal::normalize_path_lexical(canonical_root);
+    let normalized_resolved = crate::path_utils::normalized_for_boundary(resolved);
+    let normalized_root_path = crate::path_utils::normalized_for_boundary(root_path);
+    let normalized_canonical_root = crate::path_utils::normalized_for_boundary(canonical_root);
 
     let relative_requested = crate::path_utils::strip_prefix_case_insensitive_normalized(
-        &normalized_resolved,
-        &normalized_root_path,
+        normalized_resolved.as_ref(),
+        normalized_root_path.as_ref(),
     )
     .or_else(|| {
         crate::path_utils::strip_prefix_case_insensitive_normalized(
-            &normalized_resolved,
-            &normalized_canonical_root,
+            normalized_resolved.as_ref(),
+            normalized_canonical_root.as_ref(),
         )
     })
-    .ok_or_else(|| outside_root_error(root_id, &normalized_resolved))?;
+    .ok_or_else(|| outside_root_error(root_id, normalized_resolved.as_ref()))?;
 
     let normalized = crate::path_utils_internal::normalize_path_lexical(&relative_requested);
     if normalized.as_os_str().is_empty() {

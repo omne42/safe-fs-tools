@@ -104,6 +104,43 @@ fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
     None
 }
 
+#[cfg(all(test, windows))]
+mod tests {
+    use super::windows_identity_fields_match;
+
+    #[test]
+    fn windows_identity_requires_all_fields_present() {
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(None, Some(1), None, Some(1),),
+            None
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(1), None, Some(1), None,),
+            None
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(None, None, None, None,),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_identity_compares_values_when_all_present() {
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(7), Some(11), Some(7), Some(11),),
+            Some(true)
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(7), Some(11), Some(8), Some(11),),
+            Some(false)
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(7), Some(11), Some(7), Some(12),),
+            Some(false)
+        );
+    }
+}
+
 #[cfg(any(unix, windows))]
 fn ensure_delete_identity_verification_supported() -> Result<()> {
     Ok(())

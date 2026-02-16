@@ -471,11 +471,11 @@ impl SandboxPolicy {
     pub fn resolve_path_checked(&self, root_id: &str, path: &Path) -> Result<PathBuf> {
         let root = self.root(root_id)?;
         let resolved = self.resolve_path_unchecked(root_id, path)?;
-        let normalized_resolved = crate::path_utils::normalize_path_lexical(&resolved);
-        let normalized_root = crate::path_utils::normalize_path_lexical(&root.path);
+        let normalized_resolved = crate::path_utils::normalized_for_boundary(&resolved);
+        let normalized_root = crate::path_utils::normalized_for_boundary(&root.path);
         if !crate::path_utils::starts_with_case_insensitive_normalized(
-            &normalized_resolved,
-            &normalized_root,
+            normalized_resolved.as_ref(),
+            normalized_root.as_ref(),
         ) {
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
@@ -485,7 +485,10 @@ impl SandboxPolicy {
         // WARNING: lexical-only boundary check. This does not resolve symlinks and is not
         // TOCTOU-hardened. Security-sensitive callers must still canonicalize against live
         // filesystem state (see `ops::Context` resolution path).
-        Ok(normalized_resolved)
+        Ok(match normalized_resolved {
+            std::borrow::Cow::Borrowed(_) => resolved,
+            std::borrow::Cow::Owned(path) => path,
+        })
     }
 
     /// Compatibility alias for unchecked lexical path resolution.

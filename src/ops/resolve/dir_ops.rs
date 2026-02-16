@@ -249,12 +249,12 @@ pub(super) fn ensure_dir_under_root(
         } else {
             None
         };
+        let next = current.join(&segment);
         let next_relative = if parent_relative.as_os_str().is_empty() {
-            segment.clone()
+            segment
         } else {
             current_relative.join(&segment)
         };
-        let next = current.join(&segment);
         let mut created_meta: Option<fs::Metadata> = None;
 
         let resolved_current = match fs::symlink_metadata(&next) {

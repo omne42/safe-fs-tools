@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CLI JSON path-output hardening: `list-dir`/`glob`/`grep` now emit lossy UTF-8 path strings for non-UTF8 filesystem paths instead of failing response serialization with `path contains invalid UTF-8 characters`.
+- Boundary-check allocation trim: `resolve_path_checked`/`derive_requested_path` now reuse borrowed normalized-path fast paths and avoid extra normalization allocations when inputs are already lexical-clean.
+- `resolve/dir_ops` micro-optimization: avoid one first-segment `PathBuf` clone in `ensure_dir_under_root` traversal when building relative paths.
+- `grep` query-window tuning: preallocate a bounded per-request plain-query window to reduce initial growth reallocations for long query strings.
+- Windows regression coverage: add `delete` identity helper tests that lock in "all identity fields must be present" semantics.
 - Small allocation tuning: pre-size `Context` root runtime map and redaction regex vector during initialization to avoid avoidable growth reallocations.
 - `ensure_dir_under_root` allocation trim: reuse borrowed canonical-root reference and avoid one extra `PathBuf` clone per directory resolution.
 - Docs overhaul: rebuilt project documentation into a structured portal (`docs/index.md`) with dedicated guides for getting started, concepts, policy/operations/CLI/library references, security usage, deployment/ops, and FAQ.

@@ -611,7 +611,12 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut counters = GrepSkipCounters::default();
     let mut diag = TraversalDiagnostics::default();
     let mut line_buf = Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes));
-    let mut query_window = Vec::<u8>::new();
+    let query_window_capacity = if request.regex {
+        0
+    } else {
+        request.query.len().saturating_sub(1).min(8 * 1024)
+    };
+    let mut query_window = Vec::<u8>::with_capacity(query_window_capacity);
     let has_redact_regexes = ctx.redactor.has_redact_regexes();
     let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
     let traversal_open_mode = if file_glob.is_some() {
