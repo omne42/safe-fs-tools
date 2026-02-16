@@ -215,6 +215,9 @@ pub(crate) fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
     if path.as_os_str().is_empty() {
         return Cow::Borrowed(Path::new("."));
     }
+    if path == Path::new(".") {
+        return Cow::Borrowed(Path::new("."));
+    }
     let mut needs_normalization = false;
     let mut only_curdir = true;
     for component in path.components() {

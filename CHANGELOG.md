@@ -58,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Path-boundary fast path: add internal normalized-path helpers to avoid repeated lexical normalization in hot root-boundary checks.
 - `grep` line scanning now treats bare `\r` as a line terminator (and still normalizes `\r\n`), fixing cross-line matching/line-number errors on CR-delimited files.
 - Path-boundary helper fast path: avoid normalization allocation for already-clean paths (no `.`/`..` segments).
-- Path-boundary empty/curdir fast path: `normalized_for_boundary` now returns borrowed `"."` for empty and curdir-only inputs instead of allocating a new `PathBuf`.
+- Path-boundary empty/curdir fast path: `normalized_for_boundary` now returns borrowed `"."` for empty/curdir-only inputs and direct `"."`, avoiding tiny-path allocation/scan overhead.
 - Path-boundary scan short-circuit: `normalized_for_boundary` now stops component scanning early once normalization is known and curdir-only is impossible.
 - Policy docs/hardening note: add explicit TOCTOU warning comment at `resolve_path_checked` return site to emphasize lexical-only guarantees.
 - IO read-path allocation trim: preallocate read buffer from known file size when bounded by `max_read_bytes`.
