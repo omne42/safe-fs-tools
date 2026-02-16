@@ -395,11 +395,6 @@ fn copy_to_temp(
         });
     }
 
-    tmp_file
-        .as_file_mut()
-        .sync_all()
-        .map_err(|err| Error::io_path("sync", to_effective_relative, err))?;
-
     let tmp_path = tmp_file.into_temp_path();
     Ok((tmp_path, bytes))
 }
