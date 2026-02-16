@@ -144,6 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `copy_file` no-op fast paths now move already-owned request/response paths instead of cloning them, trimming hot-path allocations when source and destination resolve to the same file.
 - Policy validation now enforces the effective `glob` response budget (explicit `limits.max_glob_bytes` or default `limits.max_results * limits.max_line_bytes`) against the hard cap, closing a large-budget configuration gap when `max_glob_bytes` is omitted.
 - Traversal no longer re-checks secret deny globs for files after `walkdir` entry filtering, removing duplicate hot-path glob matches while preserving filtering behavior.
+- `list_dir` now defers `DirEntry::path()` materialization until after deny-glob filtering, avoiding unnecessary absolute-path allocations for denied entries during large-directory scans.
 
 ## [0.2.0] - 2026-02-14
 

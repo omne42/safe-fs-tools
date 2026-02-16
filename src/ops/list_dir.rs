@@ -229,13 +229,13 @@ fn process_dir_entry(
     entry: fs::DirEntry,
     relative_dir: &Path,
 ) -> Result<EntryOutcome> {
-    let path = entry.path();
     let name = entry.file_name();
     let relative = relative_entry_path(relative_dir, &name);
 
     if ctx.redactor.is_path_denied(&relative) {
         return Ok(EntryOutcome::Denied);
     }
+    let path = entry.path();
 
     Ok(EntryOutcome::Accepted(EntryCandidate {
         absolute_path: path,
