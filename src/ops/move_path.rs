@@ -166,12 +166,12 @@ fn validate_destination_before_move(
 }
 
 fn validate_directory_move_target(source: &Path, destination: &Path) -> Result<()> {
-    let normalized_source = crate::path_utils_internal::normalize_path_lexical(source);
-    let normalized_destination = crate::path_utils_internal::normalize_path_lexical(destination);
-    if normalized_destination != normalized_source
-        && crate::path_utils::starts_with_case_insensitive(
-            &normalized_destination,
-            &normalized_source,
+    let normalized_source = crate::path_utils::normalized_for_boundary(source);
+    let normalized_destination = crate::path_utils::normalized_for_boundary(destination);
+    if normalized_destination.as_ref() != normalized_source.as_ref()
+        && crate::path_utils::starts_with_case_insensitive_normalized(
+            normalized_destination.as_ref(),
+            normalized_source.as_ref(),
         )
     {
         return Err(Error::InvalidPath(
