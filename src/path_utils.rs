@@ -213,7 +213,7 @@ fn components_eq_case_insensitive(a: Component<'_>, b: Component<'_>) -> bool {
 #[inline]
 pub(crate) fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
     if path.as_os_str().is_empty() {
-        return Cow::Owned(PathBuf::from("."));
+        return Cow::Borrowed(Path::new("."));
     }
     if !path
         .components()
@@ -341,6 +341,13 @@ mod tests {
             PathBuf::from(".")
         );
         assert_eq!(normalize_path_lexical(Path::new("")), PathBuf::from("."));
+    }
+
+    #[test]
+    fn normalized_for_boundary_empty_path_uses_borrowed_dot() {
+        let normalized = normalized_for_boundary(Path::new(""));
+        assert!(matches!(normalized, Cow::Borrowed(_)));
+        assert_eq!(normalized.as_ref(), Path::new("."));
     }
 
     #[test]
