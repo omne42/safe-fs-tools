@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `resolve/dir_ops` micro-optimization: avoid one first-segment `PathBuf` clone in `ensure_dir_under_root` traversal when building relative paths.
 - `grep` query-window tuning: preallocate a bounded per-request plain-query window to reduce initial growth reallocations for long query strings.
 - `glob`/`grep` root setup now reuses borrowed canonical-root references instead of cloning them into temporary `PathBuf`s per request.
+- Traversal root setup trim: `resolve_walk_root_for_traversal` now reuses case-insensitive prefix helpers directly and removes an extra pair of per-call lexical-normalization `PathBuf` allocations.
 - Windows regression coverage: add `delete` identity helper tests that lock in "all identity fields must be present" semantics.
 - Small allocation tuning: pre-size `Context` root runtime map and redaction regex vector during initialization to avoid avoidable growth reallocations.
 - `ensure_dir_under_root` allocation trim: reuse borrowed canonical-root reference and avoid one extra `PathBuf` clone per directory resolution.

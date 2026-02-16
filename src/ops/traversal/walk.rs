@@ -18,16 +18,10 @@ fn resolve_walk_root_for_traversal(
     walk_root: &Path,
 ) -> Result<PathBuf> {
     let canonical_root = ctx.canonical_root(root_id)?;
-    let normalized_root_path = crate::path_utils_internal::normalize_path_lexical(root_path);
-    let normalized_walk_root = crate::path_utils_internal::normalize_path_lexical(walk_root);
-
-    let relative_walk_root = crate::path_utils::strip_prefix_case_insensitive(
-        &normalized_walk_root,
-        &normalized_root_path,
-    )
-    .ok_or_else(|| {
-        Error::InvalidPath("derived traversal root escapes selected root".to_string())
-    })?;
+    let relative_walk_root = crate::path_utils::strip_prefix_case_insensitive(walk_root, root_path)
+        .ok_or_else(|| {
+            Error::InvalidPath("derived traversal root escapes selected root".to_string())
+        })?;
     let relative_walk_root = if relative_walk_root.as_os_str().is_empty() {
         PathBuf::from(".")
     } else {
