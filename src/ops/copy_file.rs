@@ -112,7 +112,6 @@ struct ResolvedCopyPaths {
     requested_to: PathBuf,
     from_relative: PathBuf,
     source: PathBuf,
-    to_parent_rel: PathBuf,
     to_name: PathBuf,
     to_parent: Option<PathBuf>,
 }
@@ -270,17 +269,11 @@ fn resolve_and_validate_paths(
     })?;
     let to_name = PathBuf::from(to_name);
 
-    let from_parent_rel = requested_from
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .to_path_buf();
-    let to_parent_rel = requested_to
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .to_path_buf();
+    let from_parent_rel = requested_from.parent().unwrap_or_else(|| Path::new(""));
+    let to_parent_rel = requested_to.parent().unwrap_or_else(|| Path::new(""));
 
-    let from_parent = ctx.ensure_dir_under_root(&request.root_id, &from_parent_rel, false)?;
-    let to_parent = match ctx.ensure_dir_under_root(&request.root_id, &to_parent_rel, false) {
+    let from_parent = ctx.ensure_dir_under_root(&request.root_id, from_parent_rel, false)?;
+    let to_parent = match ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, false) {
         Ok(path) => Some(path),
         Err(Error::IoPath { source, .. })
             if request.create_parents && source.kind() == std::io::ErrorKind::NotFound =>
@@ -297,13 +290,11 @@ fn resolve_and_validate_paths(
                 path: requested_from.clone(),
             })?;
     let from_relative = from_relative_parent.join(from_name);
-    let to_requested_relative = requested_to.clone();
-
     if ctx.redactor.is_path_denied(&from_relative) {
         return Err(Error::SecretPathDenied(from_relative));
     }
-    if ctx.redactor.is_path_denied(&to_requested_relative) {
-        return Err(Error::SecretPathDenied(to_requested_relative));
+    if ctx.redactor.is_path_denied(&requested_to) {
+        return Err(Error::SecretPathDenied(requested_to.clone()));
     }
 
     let source = from_parent.join(from_name);
@@ -320,7 +311,6 @@ fn resolve_and_validate_paths(
         requested_to,
         from_relative,
         source,
-        to_parent_rel,
         to_name,
         to_parent,
     })
@@ -332,8 +322,8 @@ fn prepare_destination(
     paths: &mut ResolvedCopyPaths,
 ) -> Result<PreparedDestination> {
     if paths.to_parent.is_none() {
-        paths.to_parent =
-            Some(ctx.ensure_dir_under_root(&request.root_id, &paths.to_parent_rel, true)?);
+        let to_parent_rel = paths.requested_to.parent().unwrap_or_else(|| Path::new(""));
+        paths.to_parent = Some(ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, true)?);
     }
     let to_parent = paths.to_parent.clone().ok_or_else(|| {
         Error::InvalidPath("failed to prepare destination parent directory".to_string())
