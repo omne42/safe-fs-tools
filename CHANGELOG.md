@@ -138,6 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `edit` range rewrite no longer builds a full `Vec<&str>` line index; it now scans once to locate byte offsets and rewrites via prefix/replacement/suffix slicing to reduce peak memory on large files.
 - `delete --recursive` now pre-scans descendants against `secrets.deny_globs` and fails closed on denied nested paths before `remove_dir_all`, preventing parent deletes from bypassing deny rules.
 - `delete --recursive` deny-prescan now short-circuits when `secrets.deny_globs` is empty and uses `DirEntry::file_type()` during traversal, reducing unnecessary directory-tree scan overhead and metadata syscalls on non-secret-policy workloads.
+- `list_dir` finalization no longer mutates visible-entry counters on post-selection metadata races; those races now only impact entry materialization and `skipped_io_errors`, preserving truncation semantics from the initial scan pass.
 
 ## [0.2.0] - 2026-02-14
 

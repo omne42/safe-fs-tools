@@ -373,7 +373,9 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 Ok(value) => value,
                 Err(_) => {
                     skipped_io_errors = skipped_io_errors.saturating_add(1);
-                    matched_entries = matched_entries.saturating_sub(1);
+                    // Keep `truncated` based on the visible-entry count gathered during the
+                    // directory scan; metadata races here should only affect returned entry
+                    // materialization and `skipped_io_errors`.
                     continue;
                 }
             };
