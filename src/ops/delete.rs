@@ -52,6 +52,10 @@ fn ensure_recursive_delete_allows_descendants(
     target_abs: &Path,
     target_relative: &Path,
 ) -> Result<()> {
+    if ctx.policy.secrets.deny_globs.is_empty() {
+        return Ok(());
+    }
+
     let mut stack = vec![(target_abs.to_path_buf(), target_relative.to_path_buf())];
 
     while let Some((dir_abs, dir_relative)) = stack.pop() {
@@ -67,10 +71,11 @@ fn ensure_recursive_delete_allows_descendants(
                 return Err(Error::SecretPathDenied(child_relative));
             }
 
-            let child_abs = entry.path();
-            let child_meta = fs::symlink_metadata(&child_abs)
-                .map_err(|err| Error::io_path("symlink_metadata", &child_relative, err))?;
-            if child_meta.file_type().is_dir() {
+            let child_type = entry
+                .file_type()
+                .map_err(|err| Error::io_path("file_type", &child_relative, err))?;
+            if child_type.is_dir() {
+                let child_abs = entry.path();
                 stack.push((child_abs, child_relative));
             }
         }
