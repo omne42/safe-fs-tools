@@ -81,6 +81,27 @@ fn read_redacts_matches() {
 }
 
 #[test]
+fn read_fails_when_redaction_output_exceeds_limit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("huge-redacted.txt");
+    std::fs::write(&path, "a".repeat(8_200)).expect("write");
+
+    let mut policy = read_enabled_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.redact_regexes = vec!["a".to_string()];
+    policy.secrets.replacement = "x".repeat(1024);
+    let ctx = Context::new(policy).expect("ctx");
+
+    let err = read_err(&ctx, "huge-redacted.txt", None, None);
+    match err {
+        safe_fs_tools::Error::IoPath { op, path, .. } => {
+            assert_eq!(op, "redact");
+            assert_eq!(path, PathBuf::from("huge-redacted.txt"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn read_absolute_paths_return_root_relative_requested_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let abs_path = dir.path().join("hello.txt");

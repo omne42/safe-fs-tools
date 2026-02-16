@@ -585,23 +585,34 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
                 let (text, line_truncated) = if has_redact_regexes {
-                    let redacted = ctx.redactor.redact_text_cow(line);
-                    let line_truncated = line_was_capped || redacted.len() > max_line_bytes;
-                    let mut end = redacted.len().min(max_line_bytes);
-                    while end > 0 && !redacted.is_char_boundary(end) {
-                        end = end.saturating_sub(1);
-                    }
-                    let text = match redacted {
-                        std::borrow::Cow::Borrowed(redacted) => redacted[..end].to_string(),
-                        std::borrow::Cow::Owned(redacted) => {
-                            if end == redacted.len() {
-                                redacted
-                            } else {
-                                redacted[..end].to_string()
+                    match ctx.redactor.redact_text_outcome(line) {
+                        crate::redaction::RedactionOutcome::Text(redacted) => {
+                            let line_truncated = line_was_capped || redacted.len() > max_line_bytes;
+                            let mut end = redacted.len().min(max_line_bytes);
+                            while end > 0 && !redacted.is_char_boundary(end) {
+                                end = end.saturating_sub(1);
                             }
+                            let text = match redacted {
+                                std::borrow::Cow::Borrowed(redacted) => redacted[..end].to_string(),
+                                std::borrow::Cow::Owned(redacted) => {
+                                    if end == redacted.len() {
+                                        redacted
+                                    } else {
+                                        redacted[..end].to_string()
+                                    }
+                                }
+                            };
+                            (text, line_truncated)
                         }
-                    };
-                    (text, line_truncated)
+                        crate::redaction::RedactionOutcome::OutputLimitExceeded => {
+                            let marker = crate::redaction::REDACTION_OUTPUT_LIMIT_MARKER;
+                            let mut end = marker.len().min(max_line_bytes);
+                            while end > 0 && !marker.is_char_boundary(end) {
+                                end = end.saturating_sub(1);
+                            }
+                            (marker[..end].to_string(), true)
+                        }
+                    }
                 } else {
                     let line_truncated = line_was_capped || line.len() > max_line_bytes;
                     let mut end = line.len().min(max_line_bytes);

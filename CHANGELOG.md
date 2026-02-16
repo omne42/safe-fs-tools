@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI input IO trim: reuse metadata from no-follow open and preallocate file-read buffers from known file size in `load_text_limited`.
 - CLI stdin read-path allocation trim: preallocate a bounded initial buffer before `read_to_end` to reduce realloc churn on large piped inputs.
 - Rename durability semantics: when path replacement succeeds but parent-directory sync fails on Unix, operations now return an explicit `committed_unsynced` error code instead of collapsing into a generic rename I/O failure.
+- Redaction-limit correctness: `read` now fails with an explicit `redact` I/O-path error when redacted output exceeds the hard cap, and `grep` now marks `line_truncated=true` when redaction output limit is exceeded instead of silently reporting a non-truncated marker line.
 - `grep` read-path memory trim: switch per-file scan from full-buffer reads to streaming `BufRead` line scanning while preserving too-large/non-UTF-8 skip semantics.
 - `grep`/`list_dir` allocation tuning: preallocate per-file grep line buffers and list-directory candidate heap capacity to reduce repeated growth in hot paths.
 - Policy safety guardrail: reject configurations where `limits.max_results * limits.max_line_bytes` exceeds a hard response-budget cap, reducing worst-case grep memory amplification from misconfigured limits.

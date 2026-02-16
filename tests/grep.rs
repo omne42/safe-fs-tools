@@ -502,6 +502,35 @@ fn grep_redacts_sensitive_match_text() {
 }
 
 #[test]
+fn grep_marks_truncated_when_redaction_output_exceeds_limit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("huge.txt"), "a".repeat(8_200)).expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.redact_regexes = vec!["a".to_string()];
+    policy.secrets.replacement = "x".repeat(1024);
+    policy.limits.max_line_bytes = 1024 * 1024;
+    policy.limits.max_results = 1;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "a".to_string(),
+            regex: false,
+            glob: Some("huge.txt".to_string()),
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), 1);
+    assert_eq!(resp.matches[0].path, PathBuf::from("huge.txt"));
+    assert_eq!(resp.matches[0].text, "[REDACTION_OUTPUT_LIMIT_EXCEEDED]");
+    assert!(resp.matches[0].line_truncated);
+}
+
+#[test]
 fn grep_skips_non_utf8_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "API_KEY=abc123 hello\n").expect("write");
