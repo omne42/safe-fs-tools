@@ -70,11 +70,49 @@ pub struct ListDirResponse {
 }
 
 #[derive(Debug)]
-struct Candidate(ListDirEntry);
+struct Candidate {
+    entry: ListDirEntry,
+    absolute_path: PathBuf,
+}
+
+impl Candidate {
+    #[inline]
+    fn from_entry(entry: EntryCandidate) -> Self {
+        let EntryCandidate {
+            absolute_path,
+            path,
+            name,
+            cached_lossy_name,
+        } = entry;
+        let name = match cached_lossy_name.into_inner() {
+            Some(name) => name,
+            None => name
+                .into_string()
+                .unwrap_or_else(|name| name.to_string_lossy().into_owned()),
+        };
+        Self {
+            absolute_path,
+            entry: ListDirEntry {
+                path,
+                name,
+                kind: String::new(),
+                size_bytes: 0,
+            },
+        }
+    }
+
+    #[inline]
+    fn into_list_entry(self, kind: &'static str, size_bytes: u64) -> ListDirEntry {
+        let mut entry = self.entry;
+        entry.kind = kind.to_string();
+        entry.size_bytes = size_bytes;
+        entry
+    }
+}
 
 impl PartialEq for Candidate {
     fn eq(&self, other: &Self) -> bool {
-        self.0.name == other.0.name && self.0.path == other.0.path
+        self.entry.name == other.entry.name && self.entry.path == other.entry.path
     }
 }
 
@@ -88,10 +126,10 @@ impl PartialOrd for Candidate {
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0
+        self.entry
             .name
-            .cmp(&other.0.name)
-            .then_with(|| self.0.path.cmp(&other.0.path))
+            .cmp(&other.entry.name)
+            .then_with(|| self.entry.path.cmp(&other.entry.path))
     }
 }
 
@@ -131,22 +169,6 @@ impl EntryCandidate {
         self.compare_name(other.name.as_str())
             .then_with(|| self.path.cmp(&other.path))
             == std::cmp::Ordering::Less
-    }
-
-    fn into_list_entry(self, kind: &'static str, size_bytes: u64) -> ListDirEntry {
-        let name = match self.cached_lossy_name.into_inner() {
-            Some(name) => name,
-            None => self
-                .name
-                .into_string()
-                .unwrap_or_else(|name| name.to_string_lossy().into_owned()),
-        };
-        ListDirEntry {
-            path: self.path,
-            name,
-            kind: kind.to_string(),
-            size_bytes,
-        }
     }
 }
 
@@ -314,24 +336,14 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 let should_insert = if heap.len() < max_entries {
                     true
                 } else {
-                    heap.peek().is_some_and(|top| entry.sorts_before(&top.0))
+                    heap.peek()
+                        .is_some_and(|top| entry.sorts_before(&top.entry))
                 };
                 if !should_insert {
                     continue;
                 }
 
-                // Re-read final type/size via `symlink_metadata` for the selected candidate.
-                // This avoids following a raced symlink replacement when collecting file size.
-                let (kind, size_bytes) = match entry_kind_and_size_no_follow(&entry.absolute_path) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        skipped_io_errors = skipped_io_errors.saturating_add(1);
-                        matched_entries = matched_entries.saturating_sub(1);
-                        continue;
-                    }
-                };
-
-                let candidate = Candidate(entry.into_list_entry(kind, size_bytes));
+                let candidate = Candidate::from_entry(entry);
                 if heap.len() < max_entries {
                     heap.push(candidate);
                 } else {
@@ -353,10 +365,21 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let entries = if max_entries == 0 {
         Vec::new()
     } else {
-        heap.into_sorted_vec()
-            .into_iter()
-            .map(|candidate| candidate.0)
-            .collect::<Vec<_>>()
+        let mut entries = Vec::with_capacity(heap.len());
+        for candidate in heap.into_sorted_vec() {
+            // Resolve final type/size only for retained top-k entries, avoiding
+            // repeated metadata probes for candidates that were later evicted.
+            let (kind, size_bytes) = match entry_kind_and_size_no_follow(&candidate.absolute_path) {
+                Ok(value) => value,
+                Err(_) => {
+                    skipped_io_errors = skipped_io_errors.saturating_add(1);
+                    matched_entries = matched_entries.saturating_sub(1);
+                    continue;
+                }
+            };
+            entries.push(candidate.into_list_entry(kind, size_bytes));
+        }
+        entries
     };
 
     Ok(ListDirResponse {
@@ -390,29 +413,38 @@ mod tests {
     #[test]
     fn candidate_heap_into_sorted_vec_preserves_name_then_path_order() {
         let mut heap = BinaryHeap::new();
-        heap.push(Candidate(ListDirEntry {
-            path: PathBuf::from("b/alpha"),
-            name: "alpha".to_string(),
-            kind: "file".to_string(),
-            size_bytes: 1,
-        }));
-        heap.push(Candidate(ListDirEntry {
-            path: PathBuf::from("a/beta"),
-            name: "beta".to_string(),
-            kind: "file".to_string(),
-            size_bytes: 1,
-        }));
-        heap.push(Candidate(ListDirEntry {
-            path: PathBuf::from("a/alpha"),
-            name: "alpha".to_string(),
-            kind: "file".to_string(),
-            size_bytes: 1,
-        }));
+        heap.push(Candidate {
+            entry: ListDirEntry {
+                path: PathBuf::from("b/alpha"),
+                name: "alpha".to_string(),
+                kind: "file".to_string(),
+                size_bytes: 1,
+            },
+            absolute_path: PathBuf::from("abs/b/alpha"),
+        });
+        heap.push(Candidate {
+            entry: ListDirEntry {
+                path: PathBuf::from("a/beta"),
+                name: "beta".to_string(),
+                kind: "file".to_string(),
+                size_bytes: 1,
+            },
+            absolute_path: PathBuf::from("abs/a/beta"),
+        });
+        heap.push(Candidate {
+            entry: ListDirEntry {
+                path: PathBuf::from("a/alpha"),
+                name: "alpha".to_string(),
+                kind: "file".to_string(),
+                size_bytes: 1,
+            },
+            absolute_path: PathBuf::from("abs/a/alpha"),
+        });
 
         let ordered = heap
             .into_sorted_vec()
             .into_iter()
-            .map(|candidate| (candidate.0.name, candidate.0.path))
+            .map(|candidate| (candidate.entry.name, candidate.entry.path))
             .collect::<Vec<_>>();
 
         assert_eq!(

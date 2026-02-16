@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canonical-path boundary checks in `copy_file`/`move_path`/`mkdir`/`write`/`delete`/`resolve` now use internal normalized-path fast helpers, reducing repeated lexical-normalization overhead on hot validation paths without changing boundary semantics.
 - Traversal walk hot path now uses normalized prefix helpers for `walk_root`/entry relative derivation, reducing repeated lexical-normalization overhead during large directory walks.
 - `glob` response-byte budgeting now supports a dedicated optional `limits.max_glob_bytes` override, decoupling glob truncation behavior from `limits.max_line_bytes` while preserving backward-compatible defaults.
+- `list_dir` now defers type/size metadata probing to retained top-k candidates, reducing `symlink_metadata` call volume on large directories while preserving stable result ordering and security checks.
 - Boundary-check allocation trim: `resolve_path_checked`/`derive_requested_path` now reuse borrowed normalized-path fast paths and avoid extra normalization allocations when inputs are already lexical-clean.
 - `derive_requested_path` now returns the already-normalized stripped relative path directly, removing a redundant second lexical-normalization pass on successful resolves.
 - `resolve/dir_ops` micro-optimization: avoid one first-segment `PathBuf` clone in `ensure_dir_under_root` traversal when building relative paths.
