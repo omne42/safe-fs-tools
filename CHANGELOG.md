@@ -10,8 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Docs overhaul: rebuilt project documentation into a structured portal (`docs/index.md`) with dedicated guides for getting started, concepts, policy/operations/CLI/library references, security usage, deployment/ops, and FAQ.
+- `grep` plain-query memory smoothing: shrink oversized reusable query-window buffers between lines so isolated long-line scans do not retain multi-megabyte capacity for the rest of the request.
+- `resolve_path_in_root_lexically` hot-path trim: defer normalization of the original requested path to the rare error branch, removing one avoidable allocation on successful resolves.
 - Traversal I/O optimization: `walk_traversal_files` now supports per-operation open mode so `grep` reuses a single no-follow open per file and `glob` avoids unnecessary pre-open checks.
 - `grep` glob-filter optimization: when `grep.glob` is set, traversal defers file open until after glob match filtering (avoids opening non-matching files).
+- Traversal filter fast path: when both `secrets.deny_globs` and `traversal.skip_globs` are empty, directory walking now skips per-entry glob/path normalization checks and keeps the iterator on a cheaper straight-through path.
+- Traversal root setup trim: `resolve_walk_root_for_traversal` now reuses one borrowed canonical-root lookup instead of repeating root map lookups in the same call.
 - Result collection tuning: `glob`/`grep` now cap initial match-vector reservation and skip sorting when zero/one result to reduce avoidable CPU and allocation overhead.
 - Large-line memory smoothing: `grep` and `read` line-range loops now trim oversized reusable line buffers after long-line reads to reduce post-spike retained capacity.
 - Internal write path cleanup: `commit_write` now consumes `WriteCommitContext` so permission metadata is moved into temp-file commit without an extra `Permissions` clone.

@@ -163,6 +163,19 @@ fn update_query_match_state(
 }
 
 #[cfg(feature = "grep")]
+fn maybe_shrink_query_window(query_window: &mut Vec<u8>, query_len: usize) {
+    const DEFAULT_RETAINED_CAPACITY: usize = 64;
+    const MAX_RETAINED_CAPACITY: usize = 8 * 1024;
+    const SHRINK_FACTOR: usize = 4;
+
+    let keep = query_len.saturating_sub(1);
+    let retained_capacity = keep.clamp(DEFAULT_RETAINED_CAPACITY, MAX_RETAINED_CAPACITY);
+    if query_window.capacity() > retained_capacity.saturating_mul(SHRINK_FACTOR) {
+        query_window.shrink_to(retained_capacity);
+    }
+}
+
+#[cfg(feature = "grep")]
 enum ReadLineCapped {
     Eof,
     TimeLimit,
@@ -185,6 +198,9 @@ fn read_line_capped<R: BufRead>(
 ) -> std::io::Result<ReadLineCapped> {
     line_buf.clear();
     query_window.clear();
+    if let Some(query) = query {
+        maybe_shrink_query_window(query_window, query.len());
+    }
     let mut bytes_read = 0usize;
     let mut capped = false;
     let mut query_matched = false;
@@ -206,9 +222,7 @@ fn read_line_capped<R: BufRead>(
             return Ok(ReadLineCapped::TimeLimit);
         }
 
-        let line_end = chunk
-            .iter()
-            .position(|byte| *byte == b'\n' || *byte == b'\r');
+        let line_end = memchr::memchr2(b'\n', b'\r', chunk);
         let (split_at, reached_line_end, ended_with_cr) = match line_end {
             Some(idx) => (idx.saturating_add(1), true, chunk[idx] == b'\r'),
             None => (chunk.len(), false, false),
@@ -298,12 +312,13 @@ fn matches_sorted_by_path_line(matches: &[GrepMatch]) -> bool {
 }
 
 #[cfg(feature = "grep")]
-fn maybe_shrink_line_buffer(line_buf: &mut Vec<u8>, max_line_bytes: usize) {
+fn maybe_shrink_line_buffer(line_buf: &mut Vec<u8>, retained_hint_bytes: usize) {
     const DEFAULT_RETAINED_CAPACITY: usize = 8 * 1024;
-    const MAX_RETAINED_CAPACITY: usize = 64 * 1024;
+    const MAX_RETAINED_CAPACITY: usize = 256 * 1024;
     const SHRINK_FACTOR: usize = 4;
 
-    let retained_capacity = max_line_bytes.clamp(DEFAULT_RETAINED_CAPACITY, MAX_RETAINED_CAPACITY);
+    let retained_capacity =
+        retained_hint_bytes.clamp(DEFAULT_RETAINED_CAPACITY, MAX_RETAINED_CAPACITY);
     if line_buf.capacity() > retained_capacity.saturating_mul(SHRINK_FACTOR) {
         line_buf.clear();
         line_buf.shrink_to(retained_capacity);
@@ -510,6 +525,14 @@ mod tests {
         maybe_shrink_line_buffer(&mut buf, 1024);
         assert!(buf.capacity() <= 8 * 1024);
     }
+
+    #[test]
+    fn maybe_shrink_line_buffer_keeps_capacity_for_large_retained_hint() {
+        let mut buf = Vec::<u8>::with_capacity(300 * 1024);
+        buf.extend(std::iter::repeat_n(b'x', 64 * 1024));
+        maybe_shrink_line_buffer(&mut buf, 200 * 1024);
+        assert!(buf.capacity() >= 300 * 1024);
+    }
 }
 
 #[cfg(not(feature = "grep"))]
@@ -646,7 +669,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     Ok(ReadLineCapped::Eof) => break,
                     Ok(ReadLineCapped::TimeLimit) => {
                         diag.mark_limit_reached(ScanLimitReason::Time);
-                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                        maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                         return Ok(std::ops::ControlFlow::Break(()));
                     }
                     Ok(ReadLineCapped::Line {
@@ -656,7 +679,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     }) => (bytes_read, capped, contains_query),
                     Err(_) => {
                         matches.truncate(file_match_start);
-                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                        maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                         diag.inc_skipped_io_errors();
                         return Ok(std::ops::ControlFlow::Continue(()));
                     }
@@ -665,7 +688,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     Ok(n) => n,
                     Err(_) => {
                         matches.truncate(file_match_start);
-                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                        maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                         diag.inc_skipped_io_errors();
                         return Ok(std::ops::ControlFlow::Continue(()));
                     }
@@ -673,7 +696,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 scanned_bytes = scanned_bytes.saturating_add(n);
                 if scanned_bytes > ctx.policy.limits.max_read_bytes {
                     matches.truncate(file_match_start);
-                    maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                    maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                     counters.skipped_too_large_files =
                         counters.skipped_too_large_files.saturating_add(1);
                     return Ok(std::ops::ControlFlow::Continue(()));
@@ -682,7 +705,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 line_no = line_no.saturating_add(1);
                 if request.regex && line_was_capped {
                     matches.truncate(file_match_start);
-                    maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                    maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                     counters.skipped_too_large_files =
                         counters.skipped_too_large_files.saturating_add(1);
                     return Ok(std::ops::ControlFlow::Continue(()));
@@ -707,12 +730,12 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     };
                     if !utf8_ok {
                         matches.truncate(file_match_start);
-                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                        maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                         counters.skipped_non_utf8_files =
                             counters.skipped_non_utf8_files.saturating_add(1);
                         return Ok(std::ops::ControlFlow::Continue(()));
                     }
-                    maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                    maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                     continue;
                 }
                 let line = match std::str::from_utf8(&line_buf) {
@@ -722,7 +745,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     }
                     Err(_) => {
                         matches.truncate(file_match_start);
-                        maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                        maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                         counters.skipped_non_utf8_files =
                             counters.skipped_non_utf8_files.saturating_add(1);
                         return Ok(std::ops::ControlFlow::Continue(()));
@@ -732,7 +755,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     .as_ref()
                     .map_or_else(|| contains_query, |regex| regex.is_match(line));
                 if !ok {
-                    maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+                    maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                     continue;
                 }
                 if matches.len() >= ctx.policy.limits.max_results {
@@ -795,7 +818,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
             }
 
-            maybe_shrink_line_buffer(&mut line_buf, max_line_bytes);
+            maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
             Ok(std::ops::ControlFlow::Continue(()))
         },
     ) {

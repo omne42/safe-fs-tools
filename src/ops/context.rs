@@ -167,6 +167,12 @@ impl Context {
             .is_some_and(|skip| super::traversal::globset_is_match(skip, relative))
     }
 
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    #[inline]
+    pub(super) fn has_traversal_path_filters(&self) -> bool {
+        !self.policy.secrets.deny_globs.is_empty() || self.traversal_skip_globs.is_some()
+    }
+
     pub(super) fn reject_secret_path(&self, path: PathBuf) -> Result<PathBuf> {
         if self.redactor.is_path_denied(&path) {
             return Err(Error::SecretPathDenied(path));

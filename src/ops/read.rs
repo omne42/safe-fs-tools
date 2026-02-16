@@ -204,9 +204,7 @@ fn consume_next_line_bytes<R: BufRead, F: FnMut(&[u8])>(
             return Ok(total);
         }
 
-        let line_end = available
-            .iter()
-            .position(|byte| *byte == b'\n' || *byte == b'\r');
+        let line_end = memchr::memchr2(b'\n', b'\r', available);
         let (to_consume, reached_line_end, ended_with_cr) = match line_end {
             Some(idx) => (idx.saturating_add(1), true, available[idx] == b'\r'),
             None => (available.len(), false, false),

@@ -17,6 +17,7 @@ fn resolve_walk_root_for_traversal(
     root_path: &Path,
     walk_root: &Path,
 ) -> Result<PathBuf> {
+    let canonical_root = ctx.canonical_root(root_id)?;
     let normalized_root_path = crate::path_utils_internal::normalize_path_lexical(root_path);
     let normalized_walk_root = crate::path_utils_internal::normalize_path_lexical(walk_root);
 
@@ -32,7 +33,7 @@ fn resolve_walk_root_for_traversal(
     } else {
         relative_walk_root
     };
-    let requested_walk_root = ctx.canonical_root(root_id)?.join(&relative_walk_root);
+    let requested_walk_root = canonical_root.join(&relative_walk_root);
 
     match ctx.canonical_path_in_root(root_id, &relative_walk_root) {
         Ok((canonical, _, _)) => {
@@ -49,7 +50,7 @@ fn resolve_walk_root_for_traversal(
             source,
             ..
         }) if source.kind() == std::io::ErrorKind::NotFound => {
-            Ok(ctx.canonical_root(root_id)?.join(relative_walk_root))
+            Ok(canonical_root.join(relative_walk_root))
         }
         Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => Err(
             Error::InvalidPath("derived traversal root escapes selected root".to_string()),
@@ -85,6 +86,7 @@ pub(super) fn walkdir_traversal_iter<'a>(
     root_path: &'a Path,
     walk_root: &'a Path,
 ) -> impl Iterator<Item = walkdir::Result<walkdir::DirEntry>> + 'a {
+    let has_path_filters = ctx.has_traversal_path_filters();
     WalkDir::new(walk_root)
         .follow_root_links(false)
         .follow_links(false)
@@ -92,6 +94,9 @@ pub(super) fn walkdir_traversal_iter<'a>(
         .into_iter()
         .filter_entry(move |entry| {
             if entry.depth() == 0 {
+                return true;
+            }
+            if !has_path_filters {
                 return true;
             }
             let is_dir = entry.file_type().is_dir();
