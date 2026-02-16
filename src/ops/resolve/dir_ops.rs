@@ -232,11 +232,11 @@ pub(super) fn ensure_dir_under_root(
     relative: &Path,
     create_missing: bool,
 ) -> Result<PathBuf> {
-    let canonical_root = ctx.canonical_root(root_id)?.to_path_buf();
+    let canonical_root = ctx.canonical_root(root_id)?;
     if create_missing {
         ensure_create_missing_identity_verification_supported()?;
     }
-    let mut current = canonical_root.clone();
+    let mut current = canonical_root.to_path_buf();
     let mut current_relative = PathBuf::new();
 
     for component in relative.components() {
@@ -259,7 +259,7 @@ pub(super) fn ensure_dir_under_root(
 
         let resolved_current = match fs::symlink_metadata(&next) {
             Ok(meta) => {
-                handle_existing_component(&next, &meta, &next_relative, &canonical_root, root_id)?
+                handle_existing_component(&next, &meta, &next_relative, canonical_root, root_id)?
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 if !create_missing {
@@ -274,7 +274,7 @@ pub(super) fn ensure_dir_under_root(
                     }
                 };
                 verify_parent_identity(&current, parent_relative, expected_parent_meta)?;
-                reject_secret_canonical_path(ctx, &next, &canonical_root, root_id, &next_relative)?;
+                reject_secret_canonical_path(ctx, &next, canonical_root, root_id, &next_relative)?;
                 let created_now = match fs::create_dir(&next) {
                     Ok(()) => true,
                     Err(create_err) if create_err.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -320,7 +320,7 @@ pub(super) fn ensure_dir_under_root(
                     &next,
                     post_create_meta,
                     &next_relative,
-                    &canonical_root,
+                    canonical_root,
                     root_id,
                 ) {
                     Ok(canonical) => canonical,
@@ -347,7 +347,7 @@ pub(super) fn ensure_dir_under_root(
         if let Err(err) = reject_secret_canonical_path(
             ctx,
             &resolved_current,
-            &canonical_root,
+            canonical_root,
             root_id,
             &next_relative,
         ) {
