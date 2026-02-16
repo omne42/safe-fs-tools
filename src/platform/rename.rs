@@ -1,6 +1,42 @@
 use std::fs;
 use std::path::Path;
 
+#[derive(Debug)]
+pub(crate) enum RenameReplaceError {
+    Io(std::io::Error),
+    CommittedButUnsynced(std::io::Error),
+}
+
+impl RenameReplaceError {
+    pub(crate) fn io_error(&self) -> &std::io::Error {
+        match self {
+            Self::Io(err) | Self::CommittedButUnsynced(err) => err,
+        }
+    }
+}
+
+impl std::fmt::Display for RenameReplaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(err) => err.fmt(f),
+            Self::CommittedButUnsynced(err) => write!(
+                f,
+                "rename already applied, but failed to sync parent directories: {err}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RenameReplaceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.io_error())
+    }
+}
+
+fn map_post_rename_sync(sync_result: std::io::Result<()>) -> Result<(), RenameReplaceError> {
+    sync_result.map_err(RenameReplaceError::CommittedButUnsynced)
+}
+
 #[cfg(unix)]
 fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
     let Some(parent) = path.parent() else {
@@ -39,7 +75,7 @@ pub(crate) fn rename_replace(
     src_path: &Path,
     dest_path: &Path,
     replace_existing: bool,
-) -> std::io::Result<()> {
+) -> Result<(), RenameReplaceError> {
     use std::os::windows::ffi::OsStrExt;
 
     use windows_sys::Win32::Storage::FileSystem::{
@@ -74,7 +110,7 @@ pub(crate) fn rename_replace(
     // - Win32 does not retain these pointers after return.
     let moved = unsafe { MoveFileExW(src_w.as_ptr(), dest_w.as_ptr(), flags) };
     if moved == 0 {
-        return Err(std::io::Error::last_os_error());
+        return Err(RenameReplaceError::Io(std::io::Error::last_os_error()));
     }
     Ok(())
 }
@@ -84,18 +120,13 @@ pub(crate) fn rename_replace(
     src_path: &Path,
     dest_path: &Path,
     replace_existing: bool,
-) -> std::io::Result<()> {
+) -> Result<(), RenameReplaceError> {
     if replace_existing {
-        fs::rename(src_path, dest_path)?;
+        fs::rename(src_path, dest_path).map_err(RenameReplaceError::Io)?;
     } else {
-        rename_no_replace(src_path, dest_path)?;
+        rename_no_replace(src_path, dest_path).map_err(RenameReplaceError::Io)?;
     }
-    sync_rename_parents(src_path, dest_path).map_err(|err| {
-        std::io::Error::new(
-            err.kind(),
-            format!("rename already applied, but failed to sync parent directories: {err}"),
-        )
-    })
+    map_post_rename_sync(sync_rename_parents(src_path, dest_path))
 }
 
 #[cfg(all(unix, not(windows), any(target_os = "linux", target_os = "android")))]
@@ -136,6 +167,18 @@ fn rename_no_replace(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
         return Ok(());
     }
     Err(std::io::Error::last_os_error())
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::{RenameReplaceError, map_post_rename_sync};
+
+    #[test]
+    fn sync_failure_is_marked_as_post_commit_error() {
+        let err = map_post_rename_sync(Err(std::io::Error::other("sync failed")))
+            .expect_err("expected sync failure");
+        assert!(matches!(err, RenameReplaceError::CommittedButUnsynced(_)));
+    }
 }
 
 #[cfg(all(

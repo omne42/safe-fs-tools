@@ -133,7 +133,7 @@ fn commit_write<F>(
     map_rename_error: F,
 ) -> Result<()>
 where
-    F: FnOnce(std::io::Error) -> Error,
+    F: FnOnce(super::io::RenameReplaceError) -> Error,
 {
     verify_parent_identity(
         context.canonical_parent,
@@ -350,8 +350,11 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
             bytes: request.content.as_bytes(),
             permissions: Some(meta.permissions()),
         };
-        commit_write(commit_context, true, |err| {
-            Error::io_path("rename", &relative, err)
+        commit_write(commit_context, true, |err| match err {
+            super::io::RenameReplaceError::Io(err) => Error::io_path("rename", &relative, err),
+            super::io::RenameReplaceError::CommittedButUnsynced(err) => {
+                Error::committed_but_unsynced("rename", &relative, err)
+            }
         })?;
         return Ok(WriteFileResponse {
             path: relative,
@@ -370,16 +373,21 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
         bytes: request.content.as_bytes(),
         permissions: None,
     };
-    commit_write(commit_context, request.overwrite, |err| {
-        if !request.overwrite && super::io::is_destination_exists_rename_error(&err) {
-            return Error::InvalidPath("file exists".to_string());
+    commit_write(commit_context, request.overwrite, |err| match err {
+        super::io::RenameReplaceError::Io(err) => {
+            if !request.overwrite && super::io::is_destination_exists_rename_error(&err) {
+                return Error::InvalidPath("file exists".to_string());
+            }
+            if err.kind() == std::io::ErrorKind::Unsupported && !request.overwrite {
+                return Error::InvalidPath(
+                    "create without overwrite is unsupported on this platform".to_string(),
+                );
+            }
+            Error::io_path("rename", &relative, err)
         }
-        if err.kind() == std::io::ErrorKind::Unsupported && !request.overwrite {
-            return Error::InvalidPath(
-                "create without overwrite is unsupported on this platform".to_string(),
-            );
+        super::io::RenameReplaceError::CommittedButUnsynced(err) => {
+            Error::committed_but_unsynced("rename", &relative, err)
         }
-        Error::io_path("rename", &relative, err)
     })?;
 
     Ok(WriteFileResponse {

@@ -459,7 +459,7 @@ fn rename_replace_honors_replace_existing_flag_with_assertion(
     fs::write(&dest, "old").expect("write dest");
 
     let err = io::rename_replace(&src, &dest, false).expect_err("should not overwrite");
-    assert_error(&err);
+    assert_error(err.io_error());
     assert!(
         src.exists(),
         "source should remain when overwrite is disabled"

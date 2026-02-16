@@ -400,29 +400,41 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     }
 
     let replace_existing = request.overwrite;
-    super::io::rename_replace(&source, &destination, replace_existing).map_err(|err| {
-        if !replace_existing && super::io::is_destination_exists_rename_error(&err) {
-            return Error::InvalidPath("destination exists".to_string());
-        }
-        if !replace_existing && err.kind() == std::io::ErrorKind::Unsupported {
-            return Error::InvalidPath(
-                "overwrite=false move is unsupported on this platform".to_string(),
-            );
-        }
-        let source_missing = matches!(
-            fs::symlink_metadata(&source),
-            Err(source_err) if source_err.kind() == std::io::ErrorKind::NotFound
-        );
-        if source_missing {
-            return Error::io_path("rename", &from_relative, err);
-        }
-        let rename_context = PathBuf::from(format!(
-            "{} -> {}",
-            from_relative.display(),
-            to_relative.display()
-        ));
-        Error::io_path("rename", rename_context, err)
-    })?;
+    super::io::rename_replace(&source, &destination, replace_existing).map_err(
+        |err| match err {
+            super::io::RenameReplaceError::Io(err) => {
+                if !replace_existing && super::io::is_destination_exists_rename_error(&err) {
+                    return Error::InvalidPath("destination exists".to_string());
+                }
+                if !replace_existing && err.kind() == std::io::ErrorKind::Unsupported {
+                    return Error::InvalidPath(
+                        "overwrite=false move is unsupported on this platform".to_string(),
+                    );
+                }
+                let source_missing = matches!(
+                    fs::symlink_metadata(&source),
+                    Err(source_err) if source_err.kind() == std::io::ErrorKind::NotFound
+                );
+                if source_missing {
+                    return Error::io_path("rename", &from_relative, err);
+                }
+                let rename_context = PathBuf::from(format!(
+                    "{} -> {}",
+                    from_relative.display(),
+                    to_relative.display()
+                ));
+                Error::io_path("rename", rename_context, err)
+            }
+            super::io::RenameReplaceError::CommittedButUnsynced(err) => {
+                let rename_context = PathBuf::from(format!(
+                    "{} -> {}",
+                    from_relative.display(),
+                    to_relative.display()
+                ));
+                Error::committed_but_unsynced("rename", rename_context, err)
+            }
+        },
+    )?;
 
     Ok(MovePathResponse {
         from: from_relative,

@@ -272,6 +272,39 @@ fn render_tool_error_with_mode(
                 },
             }
         }
+        safe_fs_tools::Error::CommittedButUnsynced { op, path, source } => {
+            let rendered_path = format_path_for_error_with_mode(path, redaction, mode);
+            let mut out = details_map(safe_fs_tools::Error::CODE_COMMITTED_UNSYNCED);
+            out.insert("op".to_string(), serde_json::Value::String(op.to_string()));
+            out.insert(
+                "path".to_string(),
+                serde_json::Value::String(rendered_path.clone()),
+            );
+            out.insert(
+                "io_kind".to_string(),
+                serde_json::Value::String(format!("{:?}", source.kind())),
+            );
+            if let Some(raw_os_error) = source.raw_os_error() {
+                out.insert("raw_os_error".to_string(), serde_json::json!(raw_os_error));
+            }
+            if !redact_paths {
+                out.insert(
+                    "message".to_string(),
+                    serde_json::Value::String(source.to_string()),
+                );
+            }
+
+            ToolErrorRender {
+                details: serde_json::Value::Object(out),
+                public_message: if redact_paths {
+                    format!(
+                        "filesystem update committed but parent sync failed during {op} ({rendered_path})"
+                    )
+                } else {
+                    tool.to_string()
+                },
+            }
+        }
         safe_fs_tools::Error::InvalidPolicy(message) => {
             let mut out = details_map(safe_fs_tools::Error::CODE_INVALID_POLICY);
             out.insert(
@@ -600,6 +633,11 @@ mod tests {
                 op: "open",
                 path: PathBuf::from("/tmp/file.txt"),
                 source: std::io::Error::other("io path"),
+            },
+            safe_fs_tools::Error::CommittedButUnsynced {
+                op: "rename",
+                path: PathBuf::from("/tmp/file.txt"),
+                source: std::io::Error::other("sync"),
             },
             safe_fs_tools::Error::InvalidPolicy("bad policy".to_string()),
             safe_fs_tools::Error::InvalidPath("bad path".to_string()),

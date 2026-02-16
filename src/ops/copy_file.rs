@@ -437,16 +437,21 @@ fn commit_replace(
         expected_parent_meta,
         to_effective_relative,
     )?;
-    super::io::rename_replace(tmp_path_ref, destination, overwrite).map_err(|err| {
-        if !overwrite && super::io::is_destination_exists_rename_error(&err) {
-            return Error::InvalidPath("destination exists".to_string());
+    super::io::rename_replace(tmp_path_ref, destination, overwrite).map_err(|err| match err {
+        super::io::RenameReplaceError::Io(err) => {
+            if !overwrite && super::io::is_destination_exists_rename_error(&err) {
+                return Error::InvalidPath("destination exists".to_string());
+            }
+            if !overwrite && err.kind() == std::io::ErrorKind::Unsupported {
+                return Error::InvalidPath(
+                    "overwrite=false copy is unsupported on this platform".to_string(),
+                );
+            }
+            Error::io_path("rename", to_effective_relative, err)
         }
-        if !overwrite && err.kind() == std::io::ErrorKind::Unsupported {
-            return Error::InvalidPath(
-                "overwrite=false copy is unsupported on this platform".to_string(),
-            );
+        super::io::RenameReplaceError::CommittedButUnsynced(err) => {
+            Error::committed_but_unsynced("rename", to_effective_relative, err)
         }
-        Error::io_path("rename", to_effective_relative, err)
     })?;
     Ok(())
 }

@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::error::{Error, Result};
+pub(super) use crate::platform::rename::RenameReplaceError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FileIdentity {
@@ -313,8 +314,12 @@ fn write_bytes_atomic_impl(
         )?;
     }
 
-    rename_replace(tmp_path.as_ref(), path, true)
-        .map_err(|err| Error::io_path("replace_file", relative, err))?;
+    rename_replace(tmp_path.as_ref(), path, true).map_err(|err| match err {
+        RenameReplaceError::Io(err) => Error::io_path("replace_file", relative, err),
+        RenameReplaceError::CommittedButUnsynced(err) => {
+            Error::committed_but_unsynced("replace_file", relative, err)
+        }
+    })?;
 
     Ok(())
 }
@@ -323,6 +328,6 @@ pub(super) fn rename_replace(
     src_path: &Path,
     dest_path: &Path,
     replace_existing: bool,
-) -> std::io::Result<()> {
+) -> std::result::Result<(), RenameReplaceError> {
     crate::platform::rename::rename_replace(src_path, dest_path, replace_existing)
 }

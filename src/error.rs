@@ -27,6 +27,14 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error("filesystem update committed but parent sync failed during {op} ({path}): {source}")]
+    CommittedButUnsynced {
+        op: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[cfg(any(feature = "glob", feature = "grep"))]
     #[error("walkdir error: {0}")]
     WalkDir(#[from] walkdir::Error),
@@ -90,6 +98,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl Error {
     pub const CODE_IO: &'static str = "io";
     pub const CODE_IO_PATH: &'static str = "io_path";
+    pub const CODE_COMMITTED_UNSYNCED: &'static str = "committed_unsynced";
     #[cfg(any(feature = "glob", feature = "grep"))]
     pub const CODE_WALKDIR: &'static str = "walkdir";
     #[cfg(any(feature = "glob", feature = "grep"))]
@@ -118,6 +127,18 @@ impl Error {
         }
     }
 
+    pub(crate) fn committed_but_unsynced(
+        op: &'static str,
+        path: impl Into<PathBuf>,
+        source: std::io::Error,
+    ) -> Self {
+        Self::CommittedButUnsynced {
+            op,
+            path: path.into(),
+            source,
+        }
+    }
+
     pub(crate) fn invalid_utf8(path: impl Into<PathBuf>, source: impl Into<Utf8Source>) -> Self {
         Self::InvalidUtf8 {
             path: path.into(),
@@ -138,6 +159,7 @@ impl Error {
         match self {
             Error::Io(_) => Self::CODE_IO,
             Error::IoPath { .. } => Self::CODE_IO_PATH,
+            Error::CommittedButUnsynced { .. } => Self::CODE_COMMITTED_UNSYNCED,
             #[cfg(any(feature = "glob", feature = "grep"))]
             Error::WalkDir(_) => Self::CODE_WALKDIR,
             #[cfg(any(feature = "glob", feature = "grep"))]
@@ -201,6 +223,14 @@ mod tests {
                     source: not_found_error(),
                 },
                 Error::CODE_IO_PATH,
+            ),
+            (
+                Error::CommittedButUnsynced {
+                    op: "rename",
+                    path: PathBuf::from("file.txt"),
+                    source: not_found_error(),
+                },
+                Error::CODE_COMMITTED_UNSYNCED,
             ),
             (
                 Error::InvalidPolicy("x".to_string()),
