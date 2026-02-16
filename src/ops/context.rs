@@ -259,8 +259,33 @@ fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -
 
 #[cfg(windows)]
 fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -> Result<()> {
-    for (idx, a) in canonical_roots.iter().enumerate() {
-        for b in canonical_roots.iter().skip(idx + 1) {
+    // Windows roots on different drive letters are guaranteed disjoint.
+    // Partitioning by drive avoids unnecessary cross-drive pair checks.
+    let mut by_drive = std::collections::BTreeMap::<u8, Vec<&CanonicalRoot>>::new();
+    let mut non_disk_roots = Vec::<&CanonicalRoot>::new();
+    for root in canonical_roots {
+        if let Some(letter) = windows_disk_letter(&root.canonical_path) {
+            by_drive
+                .entry(letter.to_ascii_lowercase())
+                .or_default()
+                .push(root);
+        } else {
+            non_disk_roots.push(root);
+        }
+    }
+
+    for roots in by_drive.values() {
+        validate_root_group_non_overlapping(roots)?;
+    }
+    validate_root_group_non_overlapping(&non_disk_roots)?;
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_root_group_non_overlapping(roots: &[&CanonicalRoot]) -> Result<()> {
+    for (idx, a) in roots.iter().enumerate() {
+        for b in roots.iter().skip(idx + 1) {
             if canonical_paths_equal(&a.canonical_path, &b.canonical_path) {
                 return Err(overlap_error(
                     &a.id,
@@ -281,8 +306,20 @@ fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -
             }
         }
     }
-
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_disk_letter(path: &Path) -> Option<u8> {
+    use std::path::{Component, Prefix};
+
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => Some(letter),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 impl ContextBuilder {

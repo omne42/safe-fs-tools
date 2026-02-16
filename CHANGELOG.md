@@ -71,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `grep`/`list_dir` allocation tuning: preallocate per-file grep line buffers and list-directory candidate heap capacity to reduce repeated growth in hot paths.
 - Policy safety guardrail: reject configurations where `limits.max_results * limits.max_line_bytes` exceeds a hard response-budget cap, reducing worst-case grep memory amplification from misconfigured limits.
 - Context initialization optimization: on non-Windows platforms, canonical root-overlap checks now use sorted adjacent comparisons instead of quadratic pairwise scans.
+- Context initialization optimization (Windows): canonical root-overlap checks now partition disk roots by drive letter before pairwise overlap checks, avoiding unnecessary cross-drive comparisons while preserving overlap semantics.
 - `grep` long-line safety: line scanning now caps per-line buffering and drains oversized lines incrementally, preventing unbounded in-memory line growth on newline-free large files.
 - Windows path-compare fast path: add zero-allocation ASCII case-insensitive comparison before UTF-16 buffer allocation + FFI fallback, reducing hot-path compare overhead on common ASCII paths.
 - Windows identity revalidation correctness: `delete`/`move`/`copy_file` now treat missing filesystem identity fields as "cannot verify" (explicit error) instead of conflating them with "identity changed".
