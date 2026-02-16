@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CLI JSON path-output hardening: `list-dir`/`glob`/`grep` now emit lossy UTF-8 path strings for non-UTF8 filesystem paths instead of failing response serialization with `path contains invalid UTF-8 characters`.
+- Context root-overlap checks now return immediately for 0/1 roots (all platforms) and pre-size Windows non-disk root buckets, trimming avoidable setup work in small policies.
+- Redaction marker fast path: `redact_text_cow` now returns a borrowed static marker on output-limit overflow instead of allocating a new `String`.
 - `list_dir` entry materialization now uses `OsString::into_string()` fast path for UTF-8 names and only falls back to lossy conversion for non-UTF8 names, trimming avoidable string conversion overhead on large directories.
 - Canonical-path boundary checks in `copy_file`/`move_path`/`mkdir`/`write`/`delete`/`resolve` now use internal normalized-path fast helpers, reducing repeated lexical-normalization overhead on hot validation paths without changing boundary semantics.
 - Traversal walk hot path now uses normalized prefix helpers for `walk_root`/entry relative derivation, reducing repeated lexical-normalization overhead during large directory walks.

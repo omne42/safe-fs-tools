@@ -134,14 +134,12 @@ impl SecretRedactor {
         }
     }
 
-    /// Compatibility helper: returns an owned marker when output hits the hard limit.
+    /// Compatibility helper: returns a marker when output hits the hard limit.
     /// Use `redact_text_outcome` when callers must distinguish state from content.
     pub fn redact_text_cow<'a>(&self, input: &'a str) -> Cow<'a, str> {
         match self.redact_text_outcome(input) {
             RedactionOutcome::Text(text) => text,
-            RedactionOutcome::OutputLimitExceeded => {
-                Cow::Owned(REDACTION_OUTPUT_LIMIT_MARKER.to_string())
-            }
+            RedactionOutcome::OutputLimitExceeded => Cow::Borrowed(REDACTION_OUTPUT_LIMIT_MARKER),
         }
     }
 

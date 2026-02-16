@@ -237,6 +237,10 @@ fn overlap_error(a_id: &str, a_path: &Path, b_id: &str, b_path: &Path, same: boo
 
 #[cfg(not(windows))]
 fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -> Result<()> {
+    if canonical_roots.len() < 2 {
+        return Ok(());
+    }
+
     let mut sorted = canonical_roots
         .iter()
         .map(|root| (root.id.as_str(), root.canonical_path.as_path()))
@@ -259,10 +263,14 @@ fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -
 
 #[cfg(windows)]
 fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -> Result<()> {
+    if canonical_roots.len() < 2 {
+        return Ok(());
+    }
+
     // Windows roots on different drive letters are guaranteed disjoint.
     // Partitioning by drive avoids unnecessary cross-drive pair checks.
     let mut by_drive = std::collections::BTreeMap::<u8, Vec<&CanonicalRoot>>::new();
-    let mut non_disk_roots = Vec::<&CanonicalRoot>::new();
+    let mut non_disk_roots = Vec::<&CanonicalRoot>::with_capacity(canonical_roots.len());
     for root in canonical_roots {
         if let Some(letter) = windows_disk_letter(&root.canonical_path) {
             by_drive
