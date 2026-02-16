@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::Path;
 
 const HARD_MAX_TEXT_INPUT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_INITIAL_STDIN_CAPACITY: usize = 64 * 1024;
 
 fn symlink_rejected_error(path: &Path) -> safe_fs_tools::Error {
     safe_fs_tools::Error::InvalidPath(format!(
@@ -61,10 +62,15 @@ pub(crate) fn load_text_limited(
     }
 
     let limit = max_bytes.saturating_add(1);
-    let mut bytes = Vec::<u8>::new();
+    let reads_stdin = path.as_os_str() == "-";
+    let mut bytes = if reads_stdin {
+        Vec::<u8>::with_capacity(initial_stdin_capacity(max_bytes))
+    } else {
+        Vec::<u8>::new()
+    };
     let mut known_size = None;
 
-    if path.as_os_str() == "-" {
+    if reads_stdin {
         std::io::stdin()
             .take(limit)
             .read_to_end(&mut bytes)
@@ -112,4 +118,12 @@ pub(crate) fn load_text_limited(
 
 fn initial_input_capacity(file_size: u64, max_bytes: u64) -> Option<usize> {
     usize::try_from(file_size.min(max_bytes)).ok()
+}
+
+fn initial_stdin_capacity(max_bytes: u64) -> usize {
+    usize::try_from(max_bytes)
+        .ok()
+        .map_or(MAX_INITIAL_STDIN_CAPACITY, |max| {
+            max.min(MAX_INITIAL_STDIN_CAPACITY)
+        })
 }
