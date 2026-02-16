@@ -605,7 +605,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let max_line_bytes = ctx.policy.limits.max_line_bytes;
-    let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
+    let root_path = ctx.canonical_root(&request.root_id)?;
     let mut matches =
         Vec::<GrepMatch>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
     let mut counters = GrepSkipCounters::default();
@@ -651,7 +651,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         }
         None => None,
     };
-    let walk_root = walk_root_storage.as_deref().unwrap_or(root_path.as_path());
+    let walk_root = walk_root_storage.as_deref().unwrap_or(root_path);
 
     let regex = if request.regex {
         Some(
@@ -670,7 +670,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     diag = match walk_traversal_files(
         ctx,
         &request.root_id,
-        &root_path,
+        root_path,
         walk_root,
         TraversalWalkOptions {
             open_mode: traversal_open_mode,

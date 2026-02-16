@@ -27,11 +27,12 @@ pub(super) fn derive_requested_path(
     })
     .ok_or_else(|| outside_root_error(root_id, normalized_resolved.as_ref()))?;
 
-    let normalized = crate::path_utils_internal::normalize_path_lexical(&relative_requested);
-    if normalized.as_os_str().is_empty() {
+    // `relative_requested` comes from stripping a normalized prefix from a normalized path, so
+    // it is already lexically normalized. Only map empty path to "." for API stability.
+    if relative_requested.as_os_str().is_empty() {
         Ok(PathBuf::from("."))
     } else {
-        Ok(normalized)
+        Ok(relative_requested)
     }
 }
 

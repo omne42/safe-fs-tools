@@ -120,7 +120,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
     ctx.ensure_policy_permission(ctx.policy.permissions.glob, "glob")?;
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
-    let root_path = ctx.canonical_root(&request.root_id)?.to_path_buf();
+    let root_path = ctx.canonical_root(&request.root_id)?;
     let matcher = compile_glob(&request.pattern)?;
     let max_response_bytes = max_glob_response_bytes(
         ctx.policy.limits.max_results,
@@ -154,11 +154,11 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         }
         None => None,
     };
-    let walk_root = walk_root_storage.as_deref().unwrap_or(root_path.as_path());
+    let walk_root = walk_root_storage.as_deref().unwrap_or(root_path);
     diag = match walk_traversal_files(
         ctx,
         &request.root_id,
-        &root_path,
+        root_path,
         walk_root,
         TraversalWalkOptions {
             open_mode: TraversalOpenMode::None,
