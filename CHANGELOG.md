@@ -142,6 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list_dir` now marks `truncated=true` when post-selection metadata races drop retained entries under the `max_entries` limit, making incomplete responses explicit instead of appearing fully complete with only `skipped_io_errors`.
 - Unix xattr metadata copy now retries boundedly on `ERANGE` races during two-phase `flistxattr`/`fgetxattr` reads, reducing spurious failures when attributes mutate concurrently.
 - `copy_file` no-op fast paths now move already-owned request/response paths instead of cloning them, trimming hot-path allocations when source and destination resolve to the same file.
+- Policy validation now enforces the effective `glob` response budget (explicit `limits.max_glob_bytes` or default `limits.max_results * limits.max_line_bytes`) against the hard cap, closing a large-budget configuration gap when `max_glob_bytes` is omitted.
 
 ## [0.2.0] - 2026-02-14
 

@@ -171,6 +171,28 @@ fn validate_grep_response_budget(max_results: usize, max_line_bytes: usize) -> R
     Ok(())
 }
 
+fn validate_glob_response_budget(
+    max_results: usize,
+    max_line_bytes: usize,
+    max_glob_bytes: Option<usize>,
+) -> Result<()> {
+    let effective_budget = match max_glob_bytes {
+        Some(bytes) => bytes,
+        None => max_results.checked_mul(max_line_bytes).ok_or_else(|| {
+            Error::InvalidPolicy(
+                "limits.max_results * limits.max_line_bytes overflowed usize".to_string(),
+            )
+        })?,
+    };
+    if effective_budget > MAX_GLOB_RESPONSE_BYTES_HARD_CAP {
+        return Err(Error::InvalidPolicy(format!(
+            "effective glob response budget (limits.max_glob_bytes or limits.max_results * limits.max_line_bytes) must be <= {} bytes",
+            MAX_GLOB_RESPONSE_BYTES_HARD_CAP
+        )));
+    }
+    Ok(())
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self {
@@ -366,6 +388,11 @@ impl SandboxPolicy {
                 MAX_GLOB_RESPONSE_BYTES_HARD_CAP,
             )?;
         }
+        validate_glob_response_budget(
+            self.limits.max_results,
+            self.limits.max_line_bytes,
+            self.limits.max_glob_bytes,
+        )?;
         validate_grep_response_budget(self.limits.max_results, self.limits.max_line_bytes)?;
         let mut seen_ids = std::collections::HashSet::<&str>::new();
         for root in &self.roots {
