@@ -144,7 +144,7 @@ impl SecretRedactor {
     }
 
     pub fn redact_text_outcome<'a>(&self, input: &'a str) -> RedactionOutcome<'a> {
-        if self.redact.is_empty() {
+        if self.redact.is_empty() || input.is_empty() {
             return RedactionOutcome::Text(Cow::Borrowed(input));
         }
 
@@ -425,6 +425,20 @@ mod tests {
         let redacted = redactor.redact_text_cow(input);
         assert!(matches!(&redacted, Cow::Borrowed(_)));
         assert_eq!(redacted.as_ref(), input);
+    }
+
+    #[test]
+    fn redact_text_cow_returns_borrowed_for_empty_input_with_regexes() {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: vec!["token".to_string(), "secret".to_string()],
+            replacement: "***".to_string(),
+        })
+        .expect("redactor");
+
+        let redacted = redactor.redact_text_cow("");
+        assert!(matches!(&redacted, Cow::Borrowed(_)));
+        assert_eq!(redacted.as_ref(), "");
     }
 
     #[test]
