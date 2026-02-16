@@ -215,10 +215,27 @@ pub(crate) fn normalized_for_boundary(path: &Path) -> Cow<'_, Path> {
     if path.as_os_str().is_empty() {
         return Cow::Borrowed(Path::new("."));
     }
-    if !path
-        .components()
-        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
-    {
+    let mut needs_normalization = false;
+    let mut only_curdir = true;
+    for component in path.components() {
+        match component {
+            Component::CurDir => {
+                needs_normalization = true;
+            }
+            Component::ParentDir => {
+                needs_normalization = true;
+                only_curdir = false;
+            }
+            _ => {
+                only_curdir = false;
+            }
+        }
+    }
+
+    if only_curdir {
+        return Cow::Borrowed(Path::new("."));
+    }
+    if !needs_normalization {
         Cow::Borrowed(path)
     } else {
         Cow::Owned(normalize_path_lexical(path))
@@ -348,6 +365,17 @@ mod tests {
         let normalized = normalized_for_boundary(Path::new(""));
         assert!(matches!(normalized, Cow::Borrowed(_)));
         assert_eq!(normalized.as_ref(), Path::new("."));
+    }
+
+    #[test]
+    fn normalized_for_boundary_curdir_only_paths_use_borrowed_dot() {
+        let dot = normalized_for_boundary(Path::new("."));
+        assert!(matches!(dot, Cow::Borrowed(_)));
+        assert_eq!(dot.as_ref(), Path::new("."));
+
+        let dotted = normalized_for_boundary(Path::new("././"));
+        assert!(matches!(dotted, Cow::Borrowed(_)));
+        assert_eq!(dotted.as_ref(), Path::new("."));
     }
 
     #[test]
