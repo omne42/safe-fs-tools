@@ -1,6 +1,9 @@
+use std::path::Path;
+
 use safe_fs_tools::ops::{
-    Context, CopyFileRequest, DeleteRequest, EditRequest, GlobRequest, GrepRequest, ListDirRequest,
-    MkdirRequest, MovePathRequest, PatchRequest, ReadRequest, StatRequest, WriteFileRequest,
+    Context, CopyFileRequest, DeleteRequest, EditRequest, GlobRequest, GlobResponse, GrepRequest,
+    GrepResponse, ListDirRequest, ListDirResponse, MkdirRequest, MovePathRequest, PatchRequest,
+    ReadRequest, ScanLimitReason, StatRequest, WriteFileRequest,
 };
 
 use crate::error::CliError;
@@ -34,6 +37,164 @@ fn effective_max_patch_bytes(cli: &Cli, policy: &safe_fs_tools::SandboxPolicy) -
         .unwrap_or(policy_patch_limit)
 }
 
+fn path_to_lossy_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn list_dir_response_to_json_value(
+    response: ListDirResponse,
+) -> Result<serde_json::Value, CliError> {
+    let mut map = serde_json::Map::with_capacity(5);
+    map.insert(
+        "path".to_string(),
+        serde_json::Value::String(path_to_lossy_string(response.path.as_path())),
+    );
+    if let Some(requested_path) = response.requested_path {
+        map.insert(
+            "requested_path".to_string(),
+            serde_json::Value::String(path_to_lossy_string(requested_path.as_path())),
+        );
+    }
+    let entries = response
+        .entries
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "path": path_to_lossy_string(entry.path.as_path()),
+                "name": entry.name,
+                "type": entry.kind,
+                "size_bytes": entry.size_bytes,
+            })
+        })
+        .collect();
+    map.insert("entries".to_string(), serde_json::Value::Array(entries));
+    map.insert(
+        "truncated".to_string(),
+        serde_json::Value::Bool(response.truncated),
+    );
+    map.insert(
+        "skipped_io_errors".to_string(),
+        serde_json::Value::from(response.skipped_io_errors),
+    );
+    Ok(serde_json::Value::Object(map))
+}
+
+fn glob_response_to_json_value(response: GlobResponse) -> Result<serde_json::Value, CliError> {
+    let mut map = serde_json::Map::with_capacity(10);
+    let matches = response
+        .matches
+        .into_iter()
+        .map(|path| serde_json::Value::String(path_to_lossy_string(path.as_path())))
+        .collect();
+    map.insert("matches".to_string(), serde_json::Value::Array(matches));
+    map.insert(
+        "truncated".to_string(),
+        serde_json::Value::Bool(response.truncated),
+    );
+    map.insert(
+        "scanned_files".to_string(),
+        serde_json::Value::from(response.scanned_files),
+    );
+    map.insert(
+        "scan_limit_reached".to_string(),
+        serde_json::Value::Bool(response.scan_limit_reached),
+    );
+    insert_scan_limit_reason(&mut map, response.scan_limit_reason)?;
+    map.insert(
+        "elapsed_ms".to_string(),
+        serde_json::Value::from(response.elapsed_ms),
+    );
+    map.insert(
+        "scanned_entries".to_string(),
+        serde_json::Value::from(response.scanned_entries),
+    );
+    map.insert(
+        "skipped_walk_errors".to_string(),
+        serde_json::Value::from(response.skipped_walk_errors),
+    );
+    map.insert(
+        "skipped_io_errors".to_string(),
+        serde_json::Value::from(response.skipped_io_errors),
+    );
+    map.insert(
+        "skipped_dangling_symlink_targets".to_string(),
+        serde_json::Value::from(response.skipped_dangling_symlink_targets),
+    );
+    Ok(serde_json::Value::Object(map))
+}
+
+fn insert_scan_limit_reason(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    scan_limit_reason: Option<ScanLimitReason>,
+) -> Result<(), CliError> {
+    if let Some(reason) = scan_limit_reason {
+        map.insert(
+            "scan_limit_reason".to_string(),
+            serde_json::to_value(reason).map_err(CliError::from)?,
+        );
+    }
+    Ok(())
+}
+
+fn grep_response_to_json_value(response: GrepResponse) -> Result<serde_json::Value, CliError> {
+    let mut map = serde_json::Map::with_capacity(12);
+    let matches = response
+        .matches
+        .into_iter()
+        .map(|item| {
+            serde_json::json!({
+                "path": path_to_lossy_string(item.path.as_path()),
+                "line": item.line,
+                "text": item.text,
+                "line_truncated": item.line_truncated,
+            })
+        })
+        .collect();
+    map.insert("matches".to_string(), serde_json::Value::Array(matches));
+    map.insert(
+        "truncated".to_string(),
+        serde_json::Value::Bool(response.truncated),
+    );
+    map.insert(
+        "skipped_too_large_files".to_string(),
+        serde_json::Value::from(response.skipped_too_large_files),
+    );
+    map.insert(
+        "skipped_non_utf8_files".to_string(),
+        serde_json::Value::from(response.skipped_non_utf8_files),
+    );
+    map.insert(
+        "scanned_files".to_string(),
+        serde_json::Value::from(response.scanned_files),
+    );
+    map.insert(
+        "scan_limit_reached".to_string(),
+        serde_json::Value::Bool(response.scan_limit_reached),
+    );
+    insert_scan_limit_reason(&mut map, response.scan_limit_reason)?;
+    map.insert(
+        "elapsed_ms".to_string(),
+        serde_json::Value::from(response.elapsed_ms),
+    );
+    map.insert(
+        "scanned_entries".to_string(),
+        serde_json::Value::from(response.scanned_entries),
+    );
+    map.insert(
+        "skipped_walk_errors".to_string(),
+        serde_json::Value::from(response.skipped_walk_errors),
+    );
+    map.insert(
+        "skipped_io_errors".to_string(),
+        serde_json::Value::from(response.skipped_io_errors),
+    );
+    map.insert(
+        "skipped_dangling_symlink_targets".to_string(),
+        serde_json::Value::from(response.skipped_dangling_symlink_targets),
+    );
+    Ok(serde_json::Value::Object(map))
+}
+
 fn execute_command(
     ctx: &Context,
     command: Command,
@@ -60,29 +221,29 @@ fn execute_command(
             root,
             max_entries,
             path,
-        } => serde_json::to_value(safe_fs_tools::ops::list_dir(
+        } => list_dir_response_to_json_value(safe_fs_tools::ops::list_dir(
             ctx,
             ListDirRequest {
                 root_id: root,
                 path,
                 max_entries,
             },
-        )?)
-        .map_err(CliError::from),
-        Command::Glob { root, pattern } => serde_json::to_value(safe_fs_tools::ops::glob_paths(
-            ctx,
-            GlobRequest {
-                root_id: root,
-                pattern,
-            },
-        )?)
-        .map_err(CliError::from),
+        )?),
+        Command::Glob { root, pattern } => {
+            glob_response_to_json_value(safe_fs_tools::ops::glob_paths(
+                ctx,
+                GlobRequest {
+                    root_id: root,
+                    pattern,
+                },
+            )?)
+        }
         Command::Grep {
             root,
             query,
             regex,
             glob,
-        } => serde_json::to_value(safe_fs_tools::ops::grep(
+        } => grep_response_to_json_value(safe_fs_tools::ops::grep(
             ctx,
             GrepRequest {
                 root_id: root,
@@ -90,8 +251,7 @@ fn execute_command(
                 regex,
                 glob,
             },
-        )?)
-        .map_err(CliError::from),
+        )?),
         Command::Stat { root, path } => serde_json::to_value(safe_fs_tools::ops::stat(
             ctx,
             StatRequest {
@@ -252,4 +412,100 @@ fn preflight_mutating_target(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+
+    use super::{
+        glob_response_to_json_value, grep_response_to_json_value, list_dir_response_to_json_value,
+    };
+
+    #[cfg(unix)]
+    fn non_utf8_path() -> PathBuf {
+        PathBuf::from(std::ffi::OsString::from_vec(vec![b'f', b'o', 0x80]))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_dir_json_uses_lossy_paths_for_non_utf8_entries() {
+        let path = non_utf8_path();
+        let value = list_dir_response_to_json_value(safe_fs_tools::ops::ListDirResponse {
+            path: PathBuf::from("."),
+            requested_path: Some(PathBuf::from(".")),
+            entries: vec![safe_fs_tools::ops::ListDirEntry {
+                path: path.clone(),
+                name: "x".to_string(),
+                kind: "file".to_string(),
+                size_bytes: 1,
+            }],
+            truncated: false,
+            skipped_io_errors: 0,
+        })
+        .expect("list_dir response should serialize");
+
+        assert_eq!(
+            value["entries"][0]["path"].as_str(),
+            Some(path.to_string_lossy().as_ref())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn glob_json_uses_lossy_paths_for_non_utf8_matches() {
+        let path = non_utf8_path();
+        let value = glob_response_to_json_value(safe_fs_tools::ops::GlobResponse {
+            matches: vec![path.clone()],
+            truncated: false,
+            scanned_files: 1,
+            scan_limit_reached: false,
+            scan_limit_reason: None,
+            elapsed_ms: 0,
+            scanned_entries: 1,
+            skipped_walk_errors: 0,
+            skipped_io_errors: 0,
+            skipped_dangling_symlink_targets: 0,
+        })
+        .expect("glob response should serialize");
+
+        assert_eq!(
+            value["matches"][0].as_str(),
+            Some(path.to_string_lossy().as_ref())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn grep_json_uses_lossy_paths_for_non_utf8_matches() {
+        let path = non_utf8_path();
+        let value = grep_response_to_json_value(safe_fs_tools::ops::GrepResponse {
+            matches: vec![safe_fs_tools::ops::GrepMatch {
+                path: path.clone(),
+                line: 1,
+                text: "hit".to_string(),
+                line_truncated: false,
+            }],
+            truncated: false,
+            skipped_too_large_files: 0,
+            skipped_non_utf8_files: 0,
+            scanned_files: 1,
+            scan_limit_reached: false,
+            scan_limit_reason: None,
+            elapsed_ms: 0,
+            scanned_entries: 1,
+            skipped_walk_errors: 0,
+            skipped_io_errors: 0,
+            skipped_dangling_symlink_targets: 0,
+        })
+        .expect("grep response should serialize");
+
+        assert_eq!(
+            value["matches"][0]["path"].as_str(),
+            Some(path.to_string_lossy().as_ref())
+        );
+    }
 }
