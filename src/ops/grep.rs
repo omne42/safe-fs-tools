@@ -829,6 +829,14 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     diag.mark_limit_reached(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
+                let path_bytes = first_match_path_bytes
+                    .unwrap_or_else(|| owned_relative_path.as_os_str().as_encoded_bytes().len());
+                // If even an empty text payload would exceed budget, stop before expensive
+                // redaction/truncation work.
+                if response_bytes.saturating_add(path_bytes) > max_response_bytes {
+                    diag.mark_limit_reached(ScanLimitReason::Results);
+                    return Ok(std::ops::ControlFlow::Break(()));
+                }
                 let (text, line_truncated) = if has_redact_regexes {
                     match ctx.redactor.redact_text_outcome(line) {
                         crate::redaction::RedactionOutcome::Text(redacted) => {
@@ -869,8 +877,6 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
                 // Check response budget before cloning path buffers to avoid wasted allocations
                 // when this match would be truncated.
-                let path_bytes = first_match_path_bytes
-                    .unwrap_or_else(|| owned_relative_path.as_os_str().as_encoded_bytes().len());
                 let entry_bytes = path_bytes.saturating_add(text.len());
                 if response_bytes.saturating_add(entry_bytes) > max_response_bytes {
                     diag.mark_limit_reached(ScanLimitReason::Results);
