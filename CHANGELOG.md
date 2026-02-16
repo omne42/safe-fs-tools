@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows root-overlap validation now skips per-group overlap checks for single-item groups after drive partitioning, reducing unnecessary calls on mixed-drive root sets.
 - Windows root-overlap partitioning now uses fixed disk-letter buckets (`A-Z`) instead of a map, reducing grouping overhead while preserving overlap-check semantics.
 - `list_dir` entry materialization now uses `OsString::into_string()` fast path for UTF-8 names and only falls back to lossy conversion for non-UTF8 names, trimming avoidable string conversion overhead on large directories.
+- `list_dir` top-k maintenance now uses `BinaryHeap::peek_mut()` replacement when the heap is full, avoiding an extra `pop + push` pair on candidate upgrades.
 - Canonical-path boundary checks in `copy_file`/`move_path`/`mkdir`/`write`/`delete`/`resolve` now use internal normalized-path fast helpers, reducing repeated lexical-normalization overhead on hot validation paths without changing boundary semantics.
 - Traversal walk hot path now uses normalized prefix helpers for `walk_root`/entry relative derivation, reducing repeated lexical-normalization overhead during large directory walks.
 - `glob` response-byte budgeting now supports a dedicated optional `limits.max_glob_bytes` override, decoupling glob truncation behavior from `limits.max_line_bytes` while preserving backward-compatible defaults.

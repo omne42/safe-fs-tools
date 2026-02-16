@@ -351,22 +351,12 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
             EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
 
-                let should_insert = if heap.len() < max_entries {
-                    true
-                } else {
-                    heap.peek()
-                        .is_some_and(|top| entry.sorts_before(&top.entry))
-                };
-                if !should_insert {
-                    continue;
-                }
-
-                let candidate = Candidate::from_entry(entry);
                 if heap.len() < max_entries {
-                    heap.push(candidate);
-                } else {
-                    let _ = heap.pop();
-                    heap.push(candidate);
+                    heap.push(Candidate::from_entry(entry));
+                } else if let Some(mut top) = heap.peek_mut()
+                    && entry.sorts_before(&top.entry)
+                {
+                    *top = Candidate::from_entry(entry);
                 }
             }
             EntryOutcome::Denied => {}
