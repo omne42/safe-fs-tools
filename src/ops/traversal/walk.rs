@@ -195,11 +195,28 @@ fn relative_from_walk_entry(
     root_path: &Path,
     diag: &mut TraversalDiagnostics,
 ) -> Option<PathBuf> {
-    let relative = crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path);
-    if relative.is_none() {
-        diag.inc_skipped_walk_errors();
+    if let Ok(relative) = entry.path().strip_prefix(root_path) {
+        return Some(relative.to_path_buf());
     }
-    relative
+
+    #[cfg(windows)]
+    {
+        let relative = crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path);
+        if relative.is_none() {
+            diag.inc_skipped_walk_errors();
+        }
+        return relative;
+    }
+
+    #[cfg(not(windows))]
+    {
+        debug_assert!(
+            crate::path_utils::strip_prefix_case_insensitive(entry.path(), root_path).is_some(),
+            "walkdir yielded a path outside the selected root"
+        );
+        diag.inc_skipped_walk_errors();
+        None
+    }
 }
 
 fn resolve_entry_traversal_file(

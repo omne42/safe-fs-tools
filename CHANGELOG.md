@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Traversal root setup trim: `resolve_walk_root_for_traversal` now reuses case-insensitive prefix helpers directly and removes an extra pair of per-call lexical-normalization `PathBuf` allocations.
 - Traversal root fallback trim: when canonicalization reports `NotFound`, traversal now reuses the already-built requested walk root instead of rebuilding the same `PathBuf`.
 - Traversal alias-check fast path: skip `symlink_metadata` probing when canonical and requested walk roots are already path-equal, avoiding an extra filesystem stat on the common non-alias path.
+- Traversal relative-path extraction now uses `Path::strip_prefix` fast path first and only falls back to case-insensitive helpers on Windows edge cases, reducing per-entry boundary-check overhead in large walks.
 - Windows regression coverage: add `delete` identity helper tests that lock in "all identity fields must be present" semantics.
 - Small allocation tuning: pre-size `Context` root runtime map and redaction regex vector during initialization to avoid avoidable growth reallocations.
 - `ensure_dir_under_root` allocation trim: reuse borrowed canonical-root reference and avoid one extra `PathBuf` clone per directory resolution.
