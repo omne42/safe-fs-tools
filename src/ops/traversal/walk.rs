@@ -31,6 +31,9 @@ fn resolve_walk_root_for_traversal(
 
     match ctx.canonical_path_in_root(root_id, &relative_walk_root) {
         Ok((canonical, _, _)) => {
+            if crate::path_utils::paths_equal_case_insensitive(&canonical, &requested_walk_root) {
+                return Ok(canonical);
+            }
             // Preserve alias paths for file/symlink roots so pattern matching sees the
             // requested path (e.g. "link.txt"), not only the canonical target path.
             match std::fs::symlink_metadata(&requested_walk_root) {
