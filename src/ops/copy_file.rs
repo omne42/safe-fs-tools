@@ -325,7 +325,7 @@ fn prepare_destination(
         let to_parent_rel = paths.requested_to.parent().unwrap_or_else(|| Path::new(""));
         paths.to_parent = Some(ctx.ensure_dir_under_root(&request.root_id, to_parent_rel, true)?);
     }
-    let to_parent = paths.to_parent.clone().ok_or_else(|| {
+    let to_parent = paths.to_parent.take().ok_or_else(|| {
         Error::InvalidPath("failed to prepare destination parent directory".to_string())
     })?;
 
