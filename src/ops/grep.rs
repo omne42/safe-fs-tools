@@ -722,6 +722,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             let file_match_start = matches.len();
             let mut owned_relative_path = relative_path;
             let mut first_match_index = None::<usize>;
+            let mut first_match_path_bytes = None::<usize>;
             loop {
                 let (n, line_was_capped, contains_query) = match read_line_capped(
                     &mut reader,
@@ -868,10 +869,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
                 // Check response budget before cloning path buffers to avoid wasted allocations
                 // when this match would be truncated.
-                let path_bytes = first_match_index.map_or_else(
-                    || owned_relative_path.as_os_str().as_encoded_bytes().len(),
-                    |first_idx| matches[first_idx].path.as_os_str().as_encoded_bytes().len(),
-                );
+                let path_bytes = first_match_path_bytes
+                    .unwrap_or_else(|| owned_relative_path.as_os_str().as_encoded_bytes().len());
                 let entry_bytes = path_bytes.saturating_add(text.len());
                 if response_bytes.saturating_add(entry_bytes) > max_response_bytes {
                     diag.mark_limit_reached(ScanLimitReason::Results);
@@ -893,6 +892,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 });
                 if is_first_match_for_file {
                     first_match_index = Some(matches.len().saturating_sub(1));
+                    first_match_path_bytes = Some(path_bytes);
                 }
             }
 
