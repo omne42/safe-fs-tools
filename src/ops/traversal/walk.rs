@@ -333,9 +333,7 @@ fn traversal_file_from_entry(
     let Some(relative) = relative_from_walk_entry(entry, root_path, diag) else {
         return Ok(None);
     };
-    if ctx.redactor.is_path_denied(&relative) {
-        return Ok(None);
-    }
+    // Deny/skip filtering is already applied in `walkdir_traversal_iter.filter_entry`.
 
     resolve_entry_traversal_file(
         ctx,
