@@ -266,11 +266,12 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     };
 
     let from_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&from_parent, &canonical_root)
-            .ok_or_else(|| Error::OutsideRoot {
+        crate::path_utils::strip_prefix_case_insensitive(&from_parent, canonical_root).ok_or_else(
+            || Error::OutsideRoot {
                 root_id: request.root_id.clone(),
                 path: requested_from.clone(),
-            })?;
+            },
+        )?;
 
     let mut from_relative = from_relative_parent.join(from_name);
     let mut to_relative = requested_to.clone();
@@ -304,7 +305,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
     })?;
     let to_parent_meta = capture_parent_identity(&to_parent, to_parent_rel, "destination")?;
     let to_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &canonical_root).ok_or_else(
+        crate::path_utils::strip_prefix_case_insensitive(&to_parent, canonical_root).ok_or_else(
             || Error::OutsideRoot {
                 root_id: request.root_id.clone(),
                 path: requested_to.clone(),
@@ -317,13 +318,13 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
 
     let destination = to_parent.join(to_name);
 
-    if !crate::path_utils::starts_with_case_insensitive(&source, &canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive(&source, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_from,
         });
     }
-    if !crate::path_utils::starts_with_case_insensitive(&destination, &canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive(&destination, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_to,
@@ -380,14 +381,14 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         "destination",
     )?;
     let rechecked_from_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&rechecked_from_parent, &canonical_root)
+        crate::path_utils::strip_prefix_case_insensitive(&rechecked_from_parent, canonical_root)
             .ok_or_else(|| Error::OutsideRoot {
-            root_id: request.root_id.clone(),
-            path: requested_from.clone(),
-        })?;
+                root_id: request.root_id.clone(),
+                path: requested_from.clone(),
+            })?;
     from_relative = rechecked_from_relative_parent.join(from_name);
     let rechecked_to_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&rechecked_to_parent, &canonical_root)
+        crate::path_utils::strip_prefix_case_insensitive(&rechecked_to_parent, canonical_root)
             .ok_or_else(|| Error::OutsideRoot {
                 root_id: request.root_id.clone(),
                 path: requested_to.clone(),

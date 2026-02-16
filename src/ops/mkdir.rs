@@ -199,7 +199,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
     let canonical_parent =
         ctx.ensure_dir_under_root(&request.root_id, requested_parent, request.create_parents)?;
 
-    if !crate::path_utils::starts_with_case_insensitive(&canonical_parent, &canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive(&canonical_parent, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_path,
@@ -207,7 +207,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
     }
 
     let relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, &canonical_root)
+        crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, canonical_root)
             .ok_or_else(|| Error::OutsideRoot {
                 root_id: request.root_id.clone(),
                 path: requested_path.clone(),
@@ -227,7 +227,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
     }
 
     let target = canonical_parent.join(dir_name);
-    if !crate::path_utils::starts_with_case_insensitive(&target, &canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive(&target, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_path,
@@ -240,7 +240,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
         relative_parent: &relative_parent,
         expected_parent_meta: &canonical_parent_meta,
         root_id: &request.root_id,
-        canonical_root: &canonical_root,
+        canonical_root,
         target: &target,
         relative: &relative,
         requested_path: &requested_path,
@@ -287,7 +287,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
             }
             if let Err(validation_err) = ensure_target_dir_within_root(
                 &request.root_id,
-                &canonical_root,
+                canonical_root,
                 &target,
                 &relative,
                 &requested_path,

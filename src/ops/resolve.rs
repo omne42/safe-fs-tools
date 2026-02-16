@@ -36,10 +36,10 @@ pub(super) fn derive_requested_path(
     }
 }
 
-pub(super) struct ResolvedPath {
+pub(super) struct ResolvedPath<'ctx> {
     pub(super) resolved: PathBuf,
     pub(super) requested_path: PathBuf,
-    pub(super) canonical_root: PathBuf,
+    pub(super) canonical_root: &'ctx Path,
 }
 
 fn outside_root_error(root_id: &str, requested_path: &Path) -> Error {
@@ -127,11 +127,11 @@ fn classify_notfound_escape(
 // - treat these checks as best-effort root-bounded validation,
 // - do not interpret them as OS-sandbox-equivalent confinement,
 // - use OS sandboxing/containerization for adversarial local-process threat models.
-pub(super) fn resolve_path_in_root_lexically(
-    ctx: &super::Context,
+pub(super) fn resolve_path_in_root_lexically<'ctx>(
+    ctx: &'ctx super::Context,
     root_id: &str,
     path: &Path,
-) -> Result<ResolvedPath> {
+) -> Result<ResolvedPath<'ctx>> {
     let resolved = ctx.policy.resolve_path_checked(root_id, path)?;
     let root = ctx.policy.root(root_id)?;
     let canonical_root = ctx.canonical_root(root_id)?;
@@ -148,7 +148,7 @@ pub(super) fn resolve_path_in_root_lexically(
     Ok(ResolvedPath {
         resolved,
         requested_path,
-        canonical_root: canonical_root.to_path_buf(),
+        canonical_root,
     })
 }
 
@@ -160,10 +160,11 @@ impl super::Context {
         root_id: &str,
         path: &Path,
     ) -> Result<(PathBuf, PathBuf, PathBuf)> {
-        let resolved = resolve_path_in_root_lexically(self, root_id, path)?;
-        let requested_path = resolved.requested_path;
-        let canonical_root = resolved.canonical_root;
-        let resolved = resolved.resolved;
+        let ResolvedPath {
+            resolved,
+            requested_path,
+            canonical_root,
+        } = resolve_path_in_root_lexically(self, root_id, path)?;
 
         // `resolve_path_checked` is lexical-only. We still must canonicalize here to resolve
         // symlinks against filesystem state before enforcing canonical root boundaries.
@@ -171,10 +172,10 @@ impl super::Context {
             Ok(canonical) => canonical,
             Err(err) => {
                 if err.kind() == std::io::ErrorKind::NotFound {
-                    classify_notfound_escape(root_id, &canonical_root, &requested_path)?;
+                    classify_notfound_escape(root_id, canonical_root, &requested_path)?;
                 } else {
                     // Keep OutsideRoot highest-priority, but preserve non-escape diagnostics.
-                    match classify_notfound_escape(root_id, &canonical_root, &requested_path) {
+                    match classify_notfound_escape(root_id, canonical_root, &requested_path) {
                         Err(classified @ Error::OutsideRoot { .. }) => return Err(classified),
                         Err(_) => {}
                         Ok(()) => {}
@@ -183,23 +184,20 @@ impl super::Context {
                 return Err(Error::io_path("canonicalize", requested_path, err));
             }
         };
-        if !crate::path_utils::starts_with_case_insensitive_normalized(&canonical, &canonical_root)
-        {
+        if !crate::path_utils::starts_with_case_insensitive_normalized(&canonical, canonical_root) {
             return Err(Error::OutsideRoot {
                 root_id: root_id.to_string(),
                 path: requested_path,
             });
         }
-        let relative = crate::path_utils::strip_prefix_case_insensitive_normalized(
-            &canonical,
-            &canonical_root,
-        )
-        .ok_or_else(|| {
-            Error::InvalidPath(format!(
-                "failed to derive root-relative path from canonical target {}",
-                canonical.display()
-            ))
-        })?;
+        let relative =
+            crate::path_utils::strip_prefix_case_insensitive_normalized(&canonical, canonical_root)
+                .ok_or_else(|| {
+                    Error::InvalidPath(format!(
+                        "failed to derive root-relative path from canonical target {}",
+                        canonical.display()
+                    ))
+                })?;
         let relative = if relative.as_os_str().is_empty() {
             PathBuf::from(".")
         } else {

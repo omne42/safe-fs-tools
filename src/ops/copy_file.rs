@@ -106,8 +106,8 @@ pub struct CopyFileResponse {
     pub bytes: u64,
 }
 
-struct ResolvedCopyPaths {
-    canonical_root: PathBuf,
+struct ResolvedCopyPaths<'ctx> {
+    canonical_root: &'ctx Path,
     requested_from: PathBuf,
     requested_to: PathBuf,
     from_relative: PathBuf,
@@ -224,10 +224,10 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
     })
 }
 
-fn resolve_and_validate_paths(
-    ctx: &Context,
+fn resolve_and_validate_paths<'ctx>(
+    ctx: &'ctx Context,
     request: &CopyFileRequest,
-) -> Result<ResolvedCopyPaths> {
+) -> Result<ResolvedCopyPaths<'ctx>> {
     let from_resolved =
         super::resolve::resolve_path_in_root_lexically(ctx, &request.root_id, &request.from)?;
     let to_resolved =
@@ -284,11 +284,12 @@ fn resolve_and_validate_paths(
     };
 
     let from_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&from_parent, &canonical_root)
-            .ok_or_else(|| Error::OutsideRoot {
+        crate::path_utils::strip_prefix_case_insensitive(&from_parent, canonical_root).ok_or_else(
+            || Error::OutsideRoot {
                 root_id: request.root_id.clone(),
                 path: requested_from.clone(),
-            })?;
+            },
+        )?;
     let from_relative = from_relative_parent.join(from_name);
     if ctx.redactor.is_path_denied(&from_relative) {
         return Err(Error::SecretPathDenied(from_relative));
@@ -298,7 +299,7 @@ fn resolve_and_validate_paths(
     }
 
     let source = from_parent.join(from_name);
-    if !crate::path_utils::starts_with_case_insensitive(&source, &canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive(&source, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_from.clone(),
@@ -319,7 +320,7 @@ fn resolve_and_validate_paths(
 fn prepare_destination(
     ctx: &Context,
     request: &CopyFileRequest,
-    paths: &mut ResolvedCopyPaths,
+    paths: &mut ResolvedCopyPaths<'_>,
 ) -> Result<PreparedDestination> {
     if paths.to_parent.is_none() {
         let to_parent_rel = paths.requested_to.parent().unwrap_or_else(|| Path::new(""));
@@ -330,7 +331,7 @@ fn prepare_destination(
     })?;
 
     let to_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&to_parent, &paths.canonical_root)
+        crate::path_utils::strip_prefix_case_insensitive(&to_parent, paths.canonical_root)
             .ok_or_else(|| Error::OutsideRoot {
                 root_id: request.root_id.clone(),
                 path: paths.requested_to.clone(),
@@ -341,7 +342,7 @@ fn prepare_destination(
     }
 
     let destination = to_parent.join(&paths.to_name);
-    if !crate::path_utils::starts_with_case_insensitive(&destination, &paths.canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive(&destination, paths.canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: paths.requested_to.clone(),

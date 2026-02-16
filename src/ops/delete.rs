@@ -258,7 +258,7 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
     }
 
     let relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, &canonical_root)
+        crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, canonical_root)
             .ok_or_else(|| Error::OutsideRoot {
                 root_id: request.root_id.clone(),
                 path: requested_path.clone(),
@@ -271,7 +271,7 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
     }
 
     let target = canonical_parent.join(file_name);
-    if !crate::path_utils::starts_with_case_insensitive(&target, &canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive(&target, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_path,
