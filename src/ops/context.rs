@@ -296,11 +296,10 @@ impl ContextBuilder {
 }
 
 fn canonical_paths_equal(a: &Path, b: &Path) -> bool {
-    crate::path_utils::starts_with_case_insensitive(a, b)
-        && crate::path_utils::starts_with_case_insensitive(b, a)
+    crate::path_utils::paths_equal_case_insensitive(a, b)
 }
 
 fn canonical_paths_overlap(a: &Path, b: &Path) -> bool {
-    crate::path_utils::starts_with_case_insensitive(a, b)
-        || crate::path_utils::starts_with_case_insensitive(b, a)
+    crate::path_utils::starts_with_case_insensitive_normalized(a, b)
+        || crate::path_utils::starts_with_case_insensitive_normalized(b, a)
 }

@@ -232,8 +232,7 @@ fn patch_header_matches_path(
 
 #[cfg(feature = "patch")]
 fn normalized_paths_match(a: &Path, b: &Path) -> bool {
-    crate::path_utils::starts_with_case_insensitive(a, b)
-        && crate::path_utils::starts_with_case_insensitive(b, a)
+    crate::path_utils::paths_equal_case_insensitive(a, b)
 }
 
 #[cfg(feature = "patch")]

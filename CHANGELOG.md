@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CLI JSON path-output hardening: `list-dir`/`glob`/`grep` now emit lossy UTF-8 path strings for non-UTF8 filesystem paths instead of failing response serialization with `path contains invalid UTF-8 characters`.
 - `list_dir` entry materialization now uses `OsString::into_string()` fast path for UTF-8 names and only falls back to lossy conversion for non-UTF8 names, trimming avoidable string conversion overhead on large directories.
+- Canonical-path boundary checks in `copy_file`/`move_path`/`mkdir`/`write`/`delete`/`resolve` now use internal normalized-path fast helpers, reducing repeated lexical-normalization overhead on hot validation paths without changing boundary semantics.
 - Boundary-check allocation trim: `resolve_path_checked`/`derive_requested_path` now reuse borrowed normalized-path fast paths and avoid extra normalization allocations when inputs are already lexical-clean.
 - `derive_requested_path` now returns the already-normalized stripped relative path directly, removing a redundant second lexical-normalization pass on successful resolves.
 - `resolve/dir_ops` micro-optimization: avoid one first-segment `PathBuf` clone in `ensure_dir_under_root` traversal when building relative paths.

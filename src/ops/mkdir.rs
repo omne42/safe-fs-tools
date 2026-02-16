@@ -199,19 +199,24 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
     let canonical_parent =
         ctx.ensure_dir_under_root(&request.root_id, requested_parent, request.create_parents)?;
 
-    if !crate::path_utils::starts_with_case_insensitive(&canonical_parent, canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive_normalized(
+        &canonical_parent,
+        canonical_root,
+    ) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_path,
         });
     }
 
-    let relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, canonical_root)
-            .ok_or_else(|| Error::OutsideRoot {
-                root_id: request.root_id.clone(),
-                path: requested_path.clone(),
-            })?;
+    let relative_parent = crate::path_utils::strip_prefix_case_insensitive_normalized(
+        &canonical_parent,
+        canonical_root,
+    )
+    .ok_or_else(|| Error::OutsideRoot {
+        root_id: request.root_id.clone(),
+        path: requested_path.clone(),
+    })?;
     let canonical_parent_meta = fs::symlink_metadata(&canonical_parent)
         .map_err(|err| Error::io_path("symlink_metadata", &relative_parent, err))?;
     if canonical_parent_meta.file_type().is_symlink() || !canonical_parent_meta.is_dir() {
@@ -227,7 +232,7 @@ pub fn mkdir(ctx: &Context, request: MkdirRequest) -> Result<MkdirResponse> {
     }
 
     let target = canonical_parent.join(dir_name);
-    if !crate::path_utils::starts_with_case_insensitive(&target, canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive_normalized(&target, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_path,

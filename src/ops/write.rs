@@ -290,12 +290,14 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
     let canonical_parent =
         ctx.ensure_dir_under_root(&request.root_id, requested_parent, request.create_parents)?;
 
-    let relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&canonical_parent, canonical_root)
-            .ok_or_else(|| Error::OutsideRoot {
-                root_id: request.root_id.clone(),
-                path: requested_path.clone(),
-            })?;
+    let relative_parent = crate::path_utils::strip_prefix_case_insensitive_normalized(
+        &canonical_parent,
+        canonical_root,
+    )
+    .ok_or_else(|| Error::OutsideRoot {
+        root_id: request.root_id.clone(),
+        path: requested_path.clone(),
+    })?;
     let parent_identity = capture_parent_identity(&canonical_parent, &relative_parent)?;
     let relative = relative_parent.join(file_name);
 
@@ -304,7 +306,7 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
     }
 
     let target = canonical_parent.join(file_name);
-    if !crate::path_utils::starts_with_case_insensitive(&target, canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive_normalized(&target, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_path,

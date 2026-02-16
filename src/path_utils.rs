@@ -285,8 +285,16 @@ pub fn strip_prefix_case_insensitive(path: &Path, prefix: &Path) -> Option<PathB
 pub(crate) fn paths_equal_case_insensitive(path: &Path, other: &Path) -> bool {
     let path = normalized_for_boundary(path);
     let other = normalized_for_boundary(other);
-    starts_with_case_insensitive_normalized(path.as_ref(), other.as_ref())
-        && starts_with_case_insensitive_normalized(other.as_ref(), path.as_ref())
+    paths_equal_case_insensitive_normalized(path.as_ref(), other.as_ref())
+}
+
+/// Internal fast path for callers that already hold lexically-normalized paths.
+///
+/// This is intentionally `pub(crate)` to avoid exposing a footgun in the public API.
+#[inline]
+pub(crate) fn paths_equal_case_insensitive_normalized(path: &Path, other: &Path) -> bool {
+    starts_with_case_insensitive_normalized(path, other)
+        && starts_with_case_insensitive_normalized(other, path)
 }
 
 /// Internal fast path for callers that already hold lexically-normalized paths.

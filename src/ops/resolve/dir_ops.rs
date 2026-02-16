@@ -56,7 +56,7 @@ fn ensure_canonical_under_root(
     root_id: &str,
     relative: &Path,
 ) -> Result<()> {
-    if crate::path_utils::starts_with_case_insensitive(canonical, canonical_root) {
+    if crate::path_utils::starts_with_case_insensitive_normalized(canonical, canonical_root) {
         return Ok(());
     }
     Err(outside_root_error(root_id, relative))
@@ -82,12 +82,13 @@ fn canonical_relative_checked(
     relative: &Path,
 ) -> Result<PathBuf> {
     ensure_canonical_under_root(canonical, canonical_root, root_id, relative)?;
-    crate::path_utils::strip_prefix_case_insensitive(canonical, canonical_root).ok_or_else(|| {
-        Error::InvalidPath(format!(
-            "failed to derive root-relative path from canonical path {}",
-            canonical.display()
-        ))
-    })
+    crate::path_utils::strip_prefix_case_insensitive_normalized(canonical, canonical_root)
+        .ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "failed to derive root-relative path from canonical path {}",
+                canonical.display()
+            ))
+        })
 }
 
 fn reject_secret_canonical_path(

@@ -143,7 +143,8 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
 
     ensure_destination_parent_identity_verification_supported()?;
     let destination = prepare_destination(ctx, &request, &mut paths)?;
-    if crate::path_utils::paths_equal_case_insensitive(&paths.source, &destination.path) {
+    if crate::path_utils::paths_equal_case_insensitive_normalized(&paths.source, &destination.path)
+    {
         return Ok(noop_response(
             paths.from_relative.clone(),
             destination.to_effective_relative.clone(),
@@ -284,12 +285,11 @@ fn resolve_and_validate_paths<'ctx>(
     };
 
     let from_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&from_parent, canonical_root).ok_or_else(
-            || Error::OutsideRoot {
-                root_id: request.root_id.clone(),
-                path: requested_from.clone(),
-            },
-        )?;
+        crate::path_utils::strip_prefix_case_insensitive_normalized(&from_parent, canonical_root)
+            .ok_or_else(|| Error::OutsideRoot {
+            root_id: request.root_id.clone(),
+            path: requested_from.clone(),
+        })?;
     let from_relative = from_relative_parent.join(from_name);
     if ctx.redactor.is_path_denied(&from_relative) {
         return Err(Error::SecretPathDenied(from_relative));
@@ -299,7 +299,7 @@ fn resolve_and_validate_paths<'ctx>(
     }
 
     let source = from_parent.join(from_name);
-    if !crate::path_utils::starts_with_case_insensitive(&source, canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive_normalized(&source, canonical_root) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: requested_from.clone(),
@@ -330,19 +330,24 @@ fn prepare_destination(
         Error::InvalidPath("failed to prepare destination parent directory".to_string())
     })?;
 
-    let to_relative_parent =
-        crate::path_utils::strip_prefix_case_insensitive(&to_parent, paths.canonical_root)
-            .ok_or_else(|| Error::OutsideRoot {
-                root_id: request.root_id.clone(),
-                path: paths.requested_to.clone(),
-            })?;
+    let to_relative_parent = crate::path_utils::strip_prefix_case_insensitive_normalized(
+        &to_parent,
+        paths.canonical_root,
+    )
+    .ok_or_else(|| Error::OutsideRoot {
+        root_id: request.root_id.clone(),
+        path: paths.requested_to.clone(),
+    })?;
     let to_effective_relative = to_relative_parent.join(&paths.to_name);
     if ctx.redactor.is_path_denied(&to_effective_relative) {
         return Err(Error::SecretPathDenied(to_effective_relative));
     }
 
     let destination = to_parent.join(&paths.to_name);
-    if !crate::path_utils::starts_with_case_insensitive(&destination, paths.canonical_root) {
+    if !crate::path_utils::starts_with_case_insensitive_normalized(
+        &destination,
+        paths.canonical_root,
+    ) {
         return Err(Error::OutsideRoot {
             root_id: request.root_id.clone(),
             path: paths.requested_to.clone(),
