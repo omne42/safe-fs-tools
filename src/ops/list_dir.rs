@@ -134,10 +134,13 @@ impl EntryCandidate {
     }
 
     fn into_list_entry(self, kind: &'static str, size_bytes: u64) -> ListDirEntry {
-        let name = self
-            .cached_lossy_name
-            .into_inner()
-            .unwrap_or_else(|| self.name.to_string_lossy().into_owned());
+        let name = match self.cached_lossy_name.into_inner() {
+            Some(name) => name,
+            None => self
+                .name
+                .into_string()
+                .unwrap_or_else(|name| name.to_string_lossy().into_owned()),
+        };
         ListDirEntry {
             path: self.path,
             name,
