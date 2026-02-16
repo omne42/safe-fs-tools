@@ -866,22 +866,24 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     (line[..end].to_string(), line_truncated)
                 };
 
+                // Check response budget before cloning path buffers to avoid wasted allocations
+                // when this match would be truncated.
+                let path_bytes = first_match_index.map_or_else(
+                    || owned_relative_path.as_os_str().as_encoded_bytes().len(),
+                    |first_idx| matches[first_idx].path.as_os_str().as_encoded_bytes().len(),
+                );
+                let entry_bytes = path_bytes.saturating_add(text.len());
+                if response_bytes.saturating_add(entry_bytes) > max_response_bytes {
+                    diag.mark_limit_reached(ScanLimitReason::Results);
+                    return Ok(std::ops::ControlFlow::Break(()));
+                }
+                response_bytes = response_bytes.saturating_add(entry_bytes);
                 // Response schema owns `PathBuf` per match. Avoid cloning in the common
                 // single-match case by cloning only after the first match already exists.
                 let path = match first_match_index {
                     Some(first_idx) => matches[first_idx].path.clone(),
                     None => std::mem::take(&mut owned_relative_path),
                 };
-                let entry_bytes = path
-                    .as_os_str()
-                    .as_encoded_bytes()
-                    .len()
-                    .saturating_add(text.len());
-                if response_bytes.saturating_add(entry_bytes) > max_response_bytes {
-                    diag.mark_limit_reached(ScanLimitReason::Results);
-                    return Ok(std::ops::ControlFlow::Break(()));
-                }
-                response_bytes = response_bytes.saturating_add(entry_bytes);
                 let is_first_match_for_file = first_match_index.is_none();
                 matches.push(GrepMatch {
                     path,
