@@ -60,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - IO read-path allocation trim: preallocate read buffer from known file size when bounded by `max_read_bytes`.
 - `grep` match assembly: remove per-file intermediate match vector and append directly to output matches.
 - `read` line-range scanning: use a dedicated scratch buffer for pre-range skipped lines to avoid growing output capacity on skipped long lines.
+- `read` line-range allocation tuning: bound initial output capacity by `min(file_size, max_read_bytes)` before capping, reducing small-file over-allocation when policy limits are large.
 - `glob`/`grep` hot paths: preallocate output match vectors to `limits.max_results`.
 - `glob` response budget hardening: cap cumulative matched-path bytes using the existing policy budget (`limits.max_results * limits.max_line_bytes`) and stop with deterministic truncation when exceeded.
 - `glob` response-budget accounting now uses `OsStr::as_encoded_bytes().len()` per match, avoiding per-hit lossy UTF-8 allocation in large/non-UTF8 path sets.
