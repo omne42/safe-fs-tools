@@ -150,6 +150,9 @@ impl SecretRedactor {
 
         let mut current: Cow<'_, str> = Cow::Borrowed(input);
         for regex in &self.redact {
+            if current.is_empty() {
+                break;
+            }
             match replace_regex_with_limit(current.as_ref(), regex, self.replacement.as_str()) {
                 RegexReplaceResult::NoMatch => continue,
                 RegexReplaceResult::Replaced(text) => current = Cow::Owned(text),
@@ -438,6 +441,19 @@ mod tests {
 
         let redacted = redactor.redact_text_cow("");
         assert!(matches!(&redacted, Cow::Borrowed(_)));
+        assert_eq!(redacted.as_ref(), "");
+    }
+
+    #[test]
+    fn redact_text_short_circuits_after_becoming_empty() {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: vec![".git/**".to_string()],
+            redact_regexes: vec!["foo".to_string(), ".".to_string()],
+            replacement: "".to_string(),
+        })
+        .expect("redactor");
+
+        let redacted = redactor.redact_text_cow("foo");
         assert_eq!(redacted.as_ref(), "");
     }
 

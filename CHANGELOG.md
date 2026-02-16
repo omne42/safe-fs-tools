@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Redaction marker fast path: `redact_text_cow` now returns a borrowed static marker on output-limit overflow instead of allocating a new `String`.
 - Redaction no-op fast path: `redact_text_outcome` now returns immediately when no redaction regexes are configured, avoiding per-call loop overhead on common allow-list policies.
 - Redaction empty-input fast path: `redact_text_outcome` now returns immediately for empty text even when regexes are configured, avoiding needless per-regex scans.
+- Redaction chain short-circuit: when text becomes empty after a regex replacement, `redact_text_outcome` now stops scanning later regexes.
 - Windows root-overlap validation now skips per-group overlap checks for single-item groups after drive partitioning, reducing unnecessary calls on mixed-drive root sets.
 - Windows root-overlap partitioning now uses fixed disk-letter buckets (`A-Z`) instead of a map, reducing grouping overhead while preserving overlap-check semantics.
 - `list_dir` entry materialization now uses `OsString::into_string()` fast path for UTF-8 names and only falls back to lossy conversion for non-UTF8 names, trimming avoidable string conversion overhead on large directories.
