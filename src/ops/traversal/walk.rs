@@ -43,9 +43,7 @@ fn resolve_walk_root_for_traversal(
             op: "canonicalize",
             source,
             ..
-        }) if source.kind() == std::io::ErrorKind::NotFound => {
-            Ok(canonical_root.join(relative_walk_root))
-        }
+        }) if source.kind() == std::io::ErrorKind::NotFound => Ok(requested_walk_root),
         Err(Error::OutsideRoot { .. }) | Err(Error::SecretPathDenied(_)) => Err(
             Error::InvalidPath("derived traversal root escapes selected root".to_string()),
         ),
