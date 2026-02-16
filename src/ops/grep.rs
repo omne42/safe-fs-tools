@@ -607,8 +607,12 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     ctx.ensure_policy_permission(ctx.policy.permissions.grep, "grep")?;
     validate_query(&request.query)?;
+    let is_regex = request.regex;
+    let query_bytes = request.query.as_bytes();
     let started = Instant::now();
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
+    let read_line_options =
+        ReadLineCappedOptions::new(Some(&started), max_walk).with_stop_after_cap(is_regex);
     let max_line_bytes = ctx.policy.limits.max_line_bytes;
     let max_response_bytes = max_grep_response_bytes(ctx.policy.limits.max_results, max_line_bytes);
     let root_path = ctx.canonical_root(&request.root_id)?;
@@ -618,12 +622,13 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut counters = GrepSkipCounters::default();
     let mut diag = TraversalDiagnostics::default();
     let mut line_buf = Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes));
-    let query_window_capacity = if request.regex {
+    let query_window_capacity = if is_regex {
         0
     } else {
-        request.query.len().saturating_sub(1).min(8 * 1024)
+        query_bytes.len().saturating_sub(1).min(8 * 1024)
     };
     let mut query_window = Vec::<u8>::with_capacity(query_window_capacity);
+    let plain_query = (!is_regex).then_some(query_bytes);
     let has_redact_regexes = ctx.redactor.has_redact_regexes();
     let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
     let traversal_open_mode = if file_glob.is_some() {
@@ -660,7 +665,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     };
     let walk_root = walk_root_storage.as_deref().unwrap_or(root_path);
 
-    let regex = if request.regex {
+    let regex = if is_regex {
         Some(
             regex::Regex::new(&request.query)
                 .map_err(|err| Error::invalid_regex(request.query.clone(), err))?,
@@ -671,7 +676,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let max_capped_line_bytes = max_capped_line_bytes_for_request(
         max_line_bytes,
         ctx.policy.limits.max_read_bytes,
-        request.regex,
+        is_regex,
     );
 
     diag = match walk_traversal_files(
@@ -716,7 +721,6 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
             let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
             let mut reader = std::io::BufReader::new(file.take(limit));
-            let plain_query = (!request.regex).then_some(request.query.as_bytes());
             let mut scanned_bytes = 0_u64;
             let mut line_no = 0_u64;
             let file_match_start = matches.len();
@@ -730,8 +734,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     max_capped_line_bytes,
                     plain_query,
                     &mut query_window,
-                    ReadLineCappedOptions::new(Some(&started), max_walk)
-                        .with_stop_after_cap(request.regex),
+                    read_line_options,
                 ) {
                     Ok(ReadLineCapped::Eof) => break,
                     Ok(ReadLineCapped::TimeLimit) => {
@@ -770,7 +773,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
 
                 line_no = line_no.saturating_add(1);
-                if request.regex && line_was_capped {
+                if is_regex && line_was_capped {
                     matches.truncate(file_match_start);
                     maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                     counters.skipped_too_large_files =
