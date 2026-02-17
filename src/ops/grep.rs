@@ -731,16 +731,16 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 if line_buf.last() == Some(&b'\r') {
                     let _ = line_buf.pop();
                 }
+                // For plain-text grep, treat any invalid UTF-8 in the fully consumed line as a
+                // non-UTF8 file skip, even when the query already matched in the retained prefix.
+                if regex.is_none() && !line_utf8_valid {
+                    matches.truncate(file_match_start);
+                    maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
+                    counters.skipped_non_utf8_files =
+                        counters.skipped_non_utf8_files.saturating_add(1);
+                    return Ok(std::ops::ControlFlow::Continue(()));
+                }
                 if regex.is_none() && !contains_query {
-                    // `read_line_capped` validates UTF-8 across the full consumed line, including
-                    // bytes beyond the retained capped prefix.
-                    if !line_utf8_valid {
-                        matches.truncate(file_match_start);
-                        maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
-                        counters.skipped_non_utf8_files =
-                            counters.skipped_non_utf8_files.saturating_add(1);
-                        return Ok(std::ops::ControlFlow::Continue(()));
-                    }
                     maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                     continue;
                 }
