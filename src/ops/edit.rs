@@ -35,7 +35,7 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         )));
     }
 
-    let (content, identity) = super::io::read_string_limited_with_identity(
+    let (mut content, identity) = super::io::read_string_limited_with_identity(
         &path,
         &relative,
         ctx.policy.limits.max_read_bytes,
@@ -77,15 +77,11 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
 
     let replaced = &content[offsets.start_offset..offsets.end_offset];
     if replacement != replaced {
-        let out_capacity = usize::try_from(output_bytes)
-            .unwrap_or_else(|_| content.len().saturating_add(replacement.len()));
-        let mut out = String::with_capacity(out_capacity);
-        out.push_str(&content[..offsets.start_offset]);
-        out.push_str(&replacement);
-        out.push_str(&content[offsets.end_offset..]);
-        super::io::write_bytes_atomic_checked(&path, &relative, out.as_bytes(), identity)?;
+        // Apply edits in-place to avoid rebuilding the full output string.
+        content.replace_range(offsets.start_offset..offsets.end_offset, &replacement);
+        super::io::write_bytes_atomic_checked(&path, &relative, content.as_bytes(), identity)?;
 
-        let output_len = usize_to_u64(out.len(), &relative, "output size")?;
+        let output_len = usize_to_u64(content.len(), &relative, "output size")?;
         return Ok(EditResponse {
             path: relative,
             requested_path: Some(requested_path),
