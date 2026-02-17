@@ -517,4 +517,46 @@ mod tests {
             Some(b"dst-only".to_vec())
         );
     }
+
+    #[test]
+    fn preserve_unix_security_metadata_removes_dst_xattrs_when_src_has_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_path = dir.path().join("src.txt");
+        let dst_path = dir.path().join("dst.txt");
+        fs::write(&src_path, "src").expect("write src");
+        fs::write(&dst_path, "dst").expect("write dst");
+
+        let src_file = OpenOptions::new()
+            .read(true)
+            .open(&src_path)
+            .expect("open src");
+        let dst_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&dst_path)
+            .expect("open dst");
+        if !supports_user_xattrs(&src_file) || !supports_user_xattrs(&dst_file) {
+            return;
+        }
+
+        set_xattr(&dst_file, "user.safe_fs_tools_dst_remove_a", b"a").expect("set dst xattr a");
+        set_xattr(&dst_file, "user.safe_fs_tools_dst_remove_b", b"b").expect("set dst xattr b");
+
+        super::preserve_unix_security_metadata(
+            &src_file,
+            &src_file.metadata().expect("src metadata"),
+            &dst_file,
+            true,
+        )
+        .expect("preserve metadata");
+
+        assert_eq!(
+            get_xattr(&dst_file, "user.safe_fs_tools_dst_remove_a").expect("get dst xattr a"),
+            None
+        );
+        assert_eq!(
+            get_xattr(&dst_file, "user.safe_fs_tools_dst_remove_b").expect("get dst xattr b"),
+            None
+        );
+    }
 }
