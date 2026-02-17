@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `glob`/`grep` safe-prefix setup now skips deny/skip prechecks (and related probe metadata checks) when no traversal path filters are configured, reducing per-call overhead in common permissive policies.
 - `list_dir` now skips per-entry deny-glob matcher calls when `secrets.deny_globs` is empty, reducing hot-loop overhead on common permissive policies.
 - `glob`/`grep` stable-order post-sort now uses `sort_unstable`/`sort_unstable_by`, preserving key order semantics while reducing sort overhead on large match sets.
+- `grep` stable-sort post-processing now skips the final sort pass when matches are already in `path+line` order, avoiding redundant `O(n log n)` work on preordered result sets.
 - `grep` hot loop now only runs line-buffer shrink checks on capped-line paths (instead of every no-match line), reducing per-line overhead on large plain-text scans while preserving oversized-buffer memory recovery.
 - `list_dir` `max_entries=0` count-only mode now restores classification of `DirEntry::file_type()` failures as skipped I/O errors instead of visible entries, preserving truncation/skipped-error diagnostics parity with non-zero entry mode.
 - `glob`/`grep` stable-sort post-processing now sorts directly when `traversal.stable_sort=true` (removing the separate sortedness pre-scan), and aligned test-helper `cfg` gates with feature-gated test modules so `--no-default-features` clippy/gate runs stay green.
