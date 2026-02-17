@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `create_parents` 目录解析在已有非-symlink 目录组件上不再逐层 `canonicalize`，改为轻量 root 边界校验，降低深路径创建流程的 syscall 开销，同时保留 symlink 分支的严格校验语义。
 - Traversal fast path now avoids materializing absolute entry paths when `open_mode=None`; `grep` now derives the absolute path lazily only when a glob-filtered candidate must be opened, reducing per-entry `PathBuf` allocation churn in large scans.
 - `glob`/`grep` now report response-byte budget truncation as `scan_limit_reason=response_bytes` (instead of `results`), improving limit observability when byte budgets trigger early stops.
 - `list_dir` now applies a conservative runtime cap to retained top-k entries, reducing worst-case heap growth under extreme `max_entries` policy/request combinations.

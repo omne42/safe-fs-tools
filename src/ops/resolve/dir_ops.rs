@@ -220,6 +220,7 @@ fn handle_existing_component(
     relative: &Path,
     canonical_root: &Path,
     root_id: &str,
+    canonicalize_existing_dirs: bool,
 ) -> Result<PathBuf> {
     if meta.file_type().is_symlink() {
         let canonical = canonicalize_checked(next, relative, canonical_root, root_id)?;
@@ -235,7 +236,11 @@ fn handle_existing_component(
     }
 
     if meta.is_dir() {
-        return canonicalize_checked(next, relative, canonical_root, root_id);
+        if canonicalize_existing_dirs {
+            return canonicalize_checked(next, relative, canonical_root, root_id);
+        }
+        ensure_canonical_under_root(next, canonical_root, root_id, relative)?;
+        return Ok(next.to_path_buf());
     }
 
     Err(Error::InvalidPath(format!(
@@ -294,9 +299,14 @@ pub(super) fn ensure_dir_under_root(
         let mut created_meta: Option<fs::Metadata> = None;
 
         let resolved_current = match fs::symlink_metadata(&next) {
-            Ok(meta) => {
-                handle_existing_component(&next, &meta, &next_relative, canonical_root, root_id)?
-            }
+            Ok(meta) => handle_existing_component(
+                &next,
+                &meta,
+                &next_relative,
+                canonical_root,
+                root_id,
+                !create_missing,
+            )?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 if !create_missing {
                     return Err(Error::io_path("symlink_metadata", &next_relative, err));
@@ -358,6 +368,7 @@ pub(super) fn ensure_dir_under_root(
                     &next_relative,
                     canonical_root,
                     root_id,
+                    !create_missing,
                 ) {
                     Ok(canonical) => canonical,
                     Err(err) => {
