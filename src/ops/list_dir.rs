@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::BinaryHeap;
 use std::ffi::OsStr;
@@ -230,9 +231,9 @@ fn process_dir_entry(
     relative_dir: &Path,
 ) -> Result<EntryOutcome> {
     let name = entry.file_name();
-    let relative = relative_entry_path(relative_dir, &name);
+    let relative = relative_entry_path_for_deny(relative_dir, &name);
 
-    if ctx.redactor.is_path_denied(&relative) {
+    if ctx.redactor.is_path_denied(relative.as_ref()) {
         return Ok(EntryOutcome::Denied);
     }
     Ok(EntryOutcome::Accepted(EntryCandidate {
@@ -246,9 +247,10 @@ fn process_dir_entry_count_only(
     entry: fs::DirEntry,
     relative_dir: &Path,
 ) -> Result<CountOnlyOutcome> {
-    let relative = relative_entry_path(relative_dir, &entry.file_name());
+    let name = entry.file_name();
+    let relative = relative_entry_path_for_deny(relative_dir, &name);
 
-    if ctx.redactor.is_path_denied(&relative) {
+    if ctx.redactor.is_path_denied(relative.as_ref()) {
         return Ok(CountOnlyOutcome::Denied);
     }
 
@@ -268,6 +270,15 @@ fn relative_entry_path(relative_dir: &Path, name: &OsStr) -> PathBuf {
         PathBuf::from(name)
     } else {
         relative_dir.join(name)
+    }
+}
+
+#[inline]
+fn relative_entry_path_for_deny<'a>(relative_dir: &Path, name: &'a OsStr) -> Cow<'a, Path> {
+    if relative_dir == Path::new(".") {
+        Cow::Borrowed(Path::new(name))
+    } else {
+        Cow::Owned(relative_dir.join(name))
     }
 }
 
@@ -402,6 +413,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::collections::BinaryHeap;
     use std::ffi::OsStr;
     use std::ffi::OsString;
@@ -409,7 +421,7 @@ mod tests {
 
     use super::{
         Candidate, entry_kind_and_size_no_follow, initial_heap_capacity, is_list_dir_truncated,
-        relative_entry_path,
+        relative_entry_path, relative_entry_path_for_deny,
     };
 
     #[test]
@@ -462,6 +474,20 @@ mod tests {
     fn relative_entry_path_joins_non_root_parent() {
         let path = relative_entry_path(std::path::Path::new("nested"), OsStr::new("a.txt"));
         assert_eq!(path, PathBuf::from("nested").join("a.txt"));
+    }
+
+    #[test]
+    fn relative_entry_path_for_deny_borrows_root_dot() {
+        let path = relative_entry_path_for_deny(std::path::Path::new("."), OsStr::new("a.txt"));
+        assert!(matches!(path, Cow::Borrowed(_)));
+        assert_eq!(path.as_ref(), std::path::Path::new("a.txt"));
+    }
+
+    #[test]
+    fn relative_entry_path_for_deny_joins_non_root_parent() {
+        let path =
+            relative_entry_path_for_deny(std::path::Path::new("nested"), OsStr::new("a.txt"));
+        assert_eq!(path.as_ref(), std::path::Path::new("nested").join("a.txt"));
     }
 
     #[test]

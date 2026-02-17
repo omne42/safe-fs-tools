@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Traversal entry resolution now keeps walk-relative paths borrow-first (`Cow<Path>`) and only materializes `PathBuf` at result emission, reducing per-entry temporary allocations in large scans.
 - `delete --recursive` deny pre-scan now computes child-relative deny-check paths without always materializing a child-suffix `PathBuf`, reducing per-entry allocations for non-directory children.
 - `list_dir` top-k candidate heap now stores file-name-only state and derives absolute/relative paths on demand during final materialization, reducing per-entry retained memory in large-directory scans.
+- `list_dir` deny-path filtering now uses borrow-first relative paths for root (`.`) listings, avoiding per-entry temporary `PathBuf` allocations on the common root-directory path.
 - `copy_file` temp commit hardening: keep a single temp-file handle through permission/sync/commit and reject commits when the temp path no longer points to that same file, closing a TOCTOU window in path-reopen staging.
 - Windows `glob` path-normalization hot path now reuses a thread-local UTF-16 buffer in traversal matching (with retention cap), reducing per-entry temporary vector allocations when converting `\` to `/` without keeping unbounded peak capacity.
 - Windows `create_parents` directory-identity checks now distinguish “identity changed” from “identity unavailable”, avoiding false “parent changed” failures on filesystems that do not expose file ID fields.
