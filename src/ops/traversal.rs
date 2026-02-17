@@ -23,6 +23,19 @@ thread_local! {
     static GLOB_NORMALIZED_WIDE_BUF: RefCell<Vec<u16>> = const { RefCell::new(Vec::new()) };
 }
 
+#[cfg(any(
+    all(windows, any(feature = "glob", feature = "grep")),
+    all(test, any(feature = "glob", feature = "grep"))
+))]
+fn shrink_reusable_vec<T>(buf: &mut Vec<T>, max_capacity: usize) -> bool {
+    if buf.capacity() > max_capacity {
+        buf.shrink_to(max_capacity);
+        true
+    } else {
+        false
+    }
+}
+
 #[cfg(any(feature = "glob", feature = "grep"))]
 mod compile;
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -82,6 +95,7 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
 
         const BACKSLASH: u16 = b'\\' as u16;
         const SLASH: u16 = b'/' as u16;
+        const MAX_RETAINED_WIDE_UNITS: usize = 16 * 1024;
 
         // Fast path: no backslash means the path is already in glob-compatible separator form.
         if !path.as_os_str().as_encoded_bytes().contains(&b'\\') {
@@ -98,7 +112,9 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
                 ),
             );
             let normalized = OsString::from_wide(&normalized_wide);
-            glob.is_match(Path::new(&normalized))
+            let matched = glob.is_match(Path::new(&normalized));
+            let _ = shrink_reusable_vec(&mut normalized_wide, MAX_RETAINED_WIDE_UNITS);
+            matched
         });
     }
     #[cfg(not(windows))]
@@ -217,5 +233,12 @@ mod tests {
         assert!(diag.scan_limit_reached());
         assert!(diag.truncated());
         assert_eq!(diag.scan_limit_reason(), Some(ScanLimitReason::Entries));
+    }
+
+    #[test]
+    fn shrink_reusable_vec_caps_capacity() {
+        let mut buf: Vec<u8> = Vec::with_capacity(128);
+        assert!(shrink_reusable_vec(&mut buf, 32));
+        assert!(!shrink_reusable_vec(&mut buf, 256));
     }
 }
