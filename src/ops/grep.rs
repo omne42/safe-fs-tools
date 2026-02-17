@@ -648,14 +648,17 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
             let (file, meta) = match opened_file {
                 Some(opened) => opened,
-                None => match super::io::open_regular_file_for_read(&path, &relative_path) {
-                    Ok(opened) => opened,
-                    Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
-                        diag.inc_skipped_io_errors();
-                        return Ok(std::ops::ControlFlow::Continue(()));
+                None => {
+                    let path = path.unwrap_or_else(|| root_path.join(&relative_path));
+                    match super::io::open_regular_file_for_read(&path, &relative_path) {
+                        Ok(opened) => opened,
+                        Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+                            diag.inc_skipped_io_errors();
+                            return Ok(std::ops::ControlFlow::Continue(()));
+                        }
+                        Err(err) => return Err(err),
                     }
-                    Err(err) => return Err(err),
-                },
+                }
             };
             if meta.len() > ctx.policy.limits.max_read_bytes {
                 counters.skipped_too_large_files =

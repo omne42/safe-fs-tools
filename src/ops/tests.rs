@@ -300,6 +300,10 @@ fn traversal_skip_globs_apply_to_directories_via_probe_matrix_does_not_recurse_s
             },
             &Instant::now(),
             |file, _diag| {
+                assert!(
+                    file.path.is_none(),
+                    "open_mode=None traversal should not materialize absolute entry paths"
+                );
                 seen.push(file.relative_path);
                 Ok(std::ops::ControlFlow::Continue(()))
             },

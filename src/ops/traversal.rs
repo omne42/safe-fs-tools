@@ -224,7 +224,9 @@ impl TraversalDiagnostics {
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 pub(super) struct TraversalFile {
-    pub(super) path: PathBuf,
+    // Absolute canonical path is only needed when the caller must open/revalidate the entry.
+    // `None` avoids per-entry `root_path.join(...)` allocations on pure traversal paths.
+    pub(super) path: Option<PathBuf>,
     pub(super) relative_path: PathBuf,
     pub(super) opened_file: Option<(fs::File, fs::Metadata)>,
 }

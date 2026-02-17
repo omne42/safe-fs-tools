@@ -254,7 +254,6 @@ fn relative_from_walk_entry<'a>(
 fn resolve_entry_traversal_file(
     ctx: &Context,
     root_id: &str,
-    root_path: &Path,
     relative: Cow<'_, Path>,
     is_symlink: bool,
     open_mode: TraversalOpenMode,
@@ -322,7 +321,7 @@ fn resolve_entry_traversal_file(
     if matches!(open_mode, TraversalOpenMode::None) && !is_symlink {
         let relative = relative.into_owned();
         return Ok(Some(TraversalFile {
-            path: root_path.join(&relative),
+            path: None,
             relative_path: relative,
             opened_file: None,
         }));
@@ -350,7 +349,7 @@ fn resolve_entry_traversal_file(
     };
 
     Ok(Some(TraversalFile {
-        path: canonical,
+        path: Some(canonical),
         relative_path: relative.into_owned(),
         opened_file,
     }))
@@ -372,7 +371,6 @@ fn traversal_file_from_entry(
     resolve_entry_traversal_file(
         ctx,
         root_id,
-        root_path,
         relative,
         entry.file_type().is_symlink(),
         open_mode,

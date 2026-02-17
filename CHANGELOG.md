@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Traversal fast path now avoids materializing absolute entry paths when `open_mode=None`; `grep` now derives the absolute path lazily only when a glob-filtered candidate must be opened, reducing per-entry `PathBuf` allocation churn in large scans.
 - `glob`/`grep` now report response-byte budget truncation as `scan_limit_reason=response_bytes` (instead of `results`), improving limit observability when byte budgets trigger early stops.
 - `list_dir` now applies a conservative runtime cap to retained top-k entries, reducing worst-case heap growth under extreme `max_entries` policy/request combinations.
 - `perf_ops` now includes dedicated redaction-path benchmarks (`read/full_large_file_with_redaction_regex` and `grep/plain_query_stable_sort_with_redaction_regex`), so `read`/`grep` regressions can be compared explicitly across no-redaction vs regex-redaction paths.
