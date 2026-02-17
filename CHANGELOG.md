@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a `criterion` benchmark target (`perf_ops`) covering representative `read`/`list_dir`/`glob`/`grep` workloads, so performance regressions can be tracked with repeatable metrics.
 - `glob`/`grep` response post-sort now honors `traversal.stable_sort`: when disabled, large result sets skip the final O(n log n) ordering pass to reduce CPU cost.
 - `list_dir` `max_entries=0` count-only mode now skips per-entry `file_type` probing and exits on the first visible non-denied entry, reducing syscall overhead on large directories.
+- `list_dir` deny checks and traversal directory-probe checks now reuse mutable path buffers in hot loops, reducing per-entry temporary `PathBuf` allocations on large directory scans.
 - Added `limits.preserve_unix_xattrs` (default `true`) to make Linux/Android overwrite xattr-copy behavior configurable for performance-sensitive environments while keeping secure/default metadata fidelity.
 - Clarified `glob`/`grep`/`list_dir` response-budget accounting as estimated payload-byte guardrails (not strict process-memory caps), and aligned internal naming accordingly.
 - `grep` plain-query streaming matcher now checks chunk-local hits first and limits cross-chunk checks to a bounded tail/prefix window, reducing per-chunk memory movement on long no-match lines.

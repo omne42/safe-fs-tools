@@ -85,6 +85,32 @@ fn walkdir_root_error(root_path: &Path, walk_root: &Path, err: walkdir::Error) -
     }
 }
 
+#[inline]
+fn is_entry_denied_or_skipped(
+    ctx: &Context,
+    relative: &Path,
+    is_dir: bool,
+    probe_path_scratch: &mut PathBuf,
+) -> bool {
+    if ctx.redactor.is_path_denied(relative) || ctx.is_traversal_path_skipped(relative) {
+        return true;
+    }
+    if !is_dir {
+        return false;
+    }
+
+    if relative == Path::new(".") {
+        let probe = Path::new(TRAVERSAL_GLOB_PROBE_NAME);
+        return ctx.redactor.is_path_denied(probe) || ctx.is_traversal_path_skipped(probe);
+    }
+
+    probe_path_scratch.clear();
+    probe_path_scratch.push(relative);
+    probe_path_scratch.push(TRAVERSAL_GLOB_PROBE_NAME);
+    ctx.redactor.is_path_denied(probe_path_scratch.as_path())
+        || ctx.is_traversal_path_skipped(probe_path_scratch.as_path())
+}
+
 pub(super) fn walkdir_traversal_iter<'a>(
     ctx: &'a Context,
     root_path: &'a Path,
@@ -99,6 +125,7 @@ pub(super) fn walkdir_traversal_iter<'a>(
     } else {
         walkdir
     };
+    let mut probe_path_scratch = PathBuf::new();
     walkdir.into_iter().filter_entry(move |entry| {
         if entry.depth() == 0 {
             return true;
@@ -146,18 +173,7 @@ pub(super) fn walkdir_traversal_iter<'a>(
             }
         };
 
-        if ctx.redactor.is_path_denied(relative.as_ref())
-            || ctx.is_traversal_path_skipped(relative.as_ref())
-        {
-            return false;
-        }
-        if is_dir {
-            let probe = relative.as_ref().join(TRAVERSAL_GLOB_PROBE_NAME);
-            if ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe) {
-                return false;
-            }
-        }
-        true
+        !is_entry_denied_or_skipped(ctx, relative.as_ref(), is_dir, &mut probe_path_scratch)
     })
 }
 

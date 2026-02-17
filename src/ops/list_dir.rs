@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::BinaryHeap;
@@ -275,11 +276,10 @@ fn process_dir_entry(
     ctx: &Context,
     entry: fs::DirEntry,
     relative_dir: &Path,
+    deny_path_scratch: Option<&mut PathBuf>,
 ) -> Result<EntryOutcome> {
     let name = entry.file_name();
-    let relative = relative_entry_path_for_deny(relative_dir, &name);
-
-    if ctx.redactor.is_path_denied(relative.as_ref()) {
+    if is_entry_path_denied(ctx, relative_dir, &name, deny_path_scratch) {
         return Ok(EntryOutcome::Denied);
     }
     Ok(EntryOutcome::Accepted(EntryCandidate {
@@ -292,15 +292,38 @@ fn process_dir_entry_count_only(
     ctx: &Context,
     entry: fs::DirEntry,
     relative_dir: &Path,
+    deny_path_scratch: Option<&mut PathBuf>,
 ) -> Result<CountOnlyOutcome> {
     let name = entry.file_name();
-    let relative = relative_entry_path_for_deny(relative_dir, &name);
-
-    if ctx.redactor.is_path_denied(relative.as_ref()) {
+    if is_entry_path_denied(ctx, relative_dir, &name, deny_path_scratch) {
         return Ok(CountOnlyOutcome::Denied);
     }
 
     Ok(CountOnlyOutcome::Counted)
+}
+
+#[inline]
+fn is_entry_path_denied(
+    ctx: &Context,
+    relative_dir: &Path,
+    name: &OsStr,
+    deny_path_scratch: Option<&mut PathBuf>,
+) -> bool {
+    if relative_dir == Path::new(".") {
+        return ctx.redactor.is_path_denied(Path::new(name));
+    }
+
+    let Some(deny_path) = deny_path_scratch else {
+        // Fallback for internal call-site misuse; should not happen.
+        return ctx
+            .redactor
+            .is_path_denied(relative_dir.join(name).as_path());
+    };
+
+    deny_path.push(name);
+    let denied = ctx.redactor.is_path_denied(deny_path.as_path());
+    let _ = deny_path.pop();
+    denied
 }
 
 #[inline]
@@ -313,6 +336,7 @@ fn relative_entry_path(relative_dir: &Path, name: &OsStr) -> PathBuf {
 }
 
 #[inline]
+#[cfg(test)]
 fn relative_entry_path_for_deny<'a>(relative_dir: &Path, name: &'a OsStr) -> Cow<'a, Path> {
     if relative_dir == Path::new(".") {
         Cow::Borrowed(Path::new(name))
@@ -369,6 +393,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let mut skipped_io_errors: u64 = 0;
     let mut zero_limit_truncated = false;
     let mut response_budget_truncated = false;
+    let mut deny_path_scratch = (relative_dir != Path::new(".")).then(|| relative_dir.clone());
     let max_response_bytes =
         max_estimated_list_dir_response_bytes(max_entries, ctx.policy.limits.max_line_bytes);
 
@@ -387,7 +412,12 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
             }
         };
         if max_entries == 0 {
-            match process_dir_entry_count_only(ctx, entry, &relative_dir)? {
+            match process_dir_entry_count_only(
+                ctx,
+                entry,
+                &relative_dir,
+                deny_path_scratch.as_mut(),
+            )? {
                 CountOnlyOutcome::Counted => {
                     // With `max_entries=0`, callers only need to know whether any entry exists.
                     // Stop after the first visible match to avoid scanning huge directories.
@@ -399,7 +429,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
             continue;
         }
 
-        match process_dir_entry(ctx, entry, &relative_dir)? {
+        match process_dir_entry(ctx, entry, &relative_dir, deny_path_scratch.as_mut())? {
             EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
 
