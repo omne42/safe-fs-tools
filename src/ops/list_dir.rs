@@ -17,6 +17,10 @@ fn initial_heap_capacity(max_entries: usize) -> usize {
     max_entries.min(MAX_INITIAL_HEAP_CAPACITY)
 }
 
+fn max_list_dir_response_bytes(max_entries: usize, max_line_bytes: usize) -> usize {
+    max_entries.saturating_mul(max_line_bytes)
+}
+
 #[cfg(unix)]
 fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
@@ -283,10 +287,14 @@ fn relative_entry_path_for_deny<'a>(relative_dir: &Path, name: &'a OsStr) -> Cow
 fn is_list_dir_truncated(
     max_entries: usize,
     zero_limit_truncated: bool,
+    response_budget_truncated: bool,
     matched_entries: usize,
     skipped_io_errors: u64,
     materialized_entries: usize,
 ) -> bool {
+    if response_budget_truncated {
+        return true;
+    }
     if max_entries == 0 {
         return zero_limit_truncated || skipped_io_errors > 0;
     }
@@ -322,6 +330,9 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let mut matched_entries: usize = 0;
     let mut skipped_io_errors: u64 = 0;
     let mut zero_limit_truncated = false;
+    let mut response_budget_truncated = false;
+    let max_response_bytes =
+        max_list_dir_response_bytes(max_entries, ctx.policy.limits.max_line_bytes);
 
     ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
     let read_dir =
@@ -373,6 +384,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         Vec::new()
     } else {
         let mut entries = Vec::with_capacity(heap.len());
+        let mut response_bytes = 0usize;
         for candidate in heap.into_sorted_vec() {
             // Resolve final type/size only for retained top-k entries, avoiding
             // repeated metadata probes for candidates that were later evicted.
@@ -387,6 +399,12 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                     continue;
                 }
             };
+            let entry_response_bytes = list_entry_response_bytes(&relative_dir, &candidate, kind);
+            if response_bytes.saturating_add(entry_response_bytes) > max_response_bytes {
+                response_budget_truncated = true;
+                break;
+            }
+            response_bytes = response_bytes.saturating_add(entry_response_bytes);
             entries.push(candidate.into_list_entry(&relative_dir, kind, size_bytes));
         }
         entries
@@ -394,6 +412,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let truncated = is_list_dir_truncated(
         max_entries,
         zero_limit_truncated,
+        response_budget_truncated,
         matched_entries,
         skipped_io_errors,
         entries.len(),
@@ -408,6 +427,23 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     })
 }
 
+fn list_entry_response_bytes(relative_dir: &Path, candidate: &Candidate, kind: &str) -> usize {
+    let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
+    let path_bytes = if relative_dir == Path::new(".") {
+        file_name_bytes
+    } else {
+        relative_dir
+            .as_os_str()
+            .as_encoded_bytes()
+            .len()
+            .saturating_add(1)
+            .saturating_add(file_name_bytes)
+    };
+    path_bytes
+        .saturating_add(candidate.name.len())
+        .saturating_add(kind.len())
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
@@ -418,7 +454,8 @@ mod tests {
 
     use super::{
         Candidate, entry_kind_and_size_no_follow, initial_heap_capacity, is_list_dir_truncated,
-        relative_entry_path, relative_entry_path_for_deny,
+        list_entry_response_bytes, max_list_dir_response_bytes, relative_entry_path,
+        relative_entry_path_for_deny,
     };
 
     #[test]
@@ -489,29 +526,50 @@ mod tests {
 
     #[test]
     fn truncated_when_visible_entries_exceed_limit() {
-        assert!(is_list_dir_truncated(2, false, 3, 0, 2));
+        assert!(is_list_dir_truncated(2, false, false, 3, 0, 2));
     }
 
     #[test]
     fn not_truncated_when_within_limit_and_no_io_losses() {
-        assert!(!is_list_dir_truncated(3, false, 2, 0, 2));
+        assert!(!is_list_dir_truncated(3, false, false, 2, 0, 2));
     }
 
     #[test]
     fn truncated_when_metadata_losses_drop_entries_under_limit() {
-        assert!(is_list_dir_truncated(4, false, 2, 1, 1));
+        assert!(is_list_dir_truncated(4, false, false, 2, 1, 1));
     }
 
     #[test]
     fn truncated_when_read_dir_losses_occur_within_limit() {
-        assert!(is_list_dir_truncated(4, false, 2, 1, 2));
+        assert!(is_list_dir_truncated(4, false, false, 2, 1, 2));
+    }
+
+    #[test]
+    fn truncated_when_response_budget_is_hit() {
+        assert!(is_list_dir_truncated(4, false, true, 2, 0, 2));
     }
 
     #[test]
     fn zero_max_entries_uses_zero_limit_flag() {
-        assert!(!is_list_dir_truncated(0, false, 0, 0, 0));
-        assert!(is_list_dir_truncated(0, true, 0, 0, 0));
-        assert!(is_list_dir_truncated(0, false, 0, 1, 0));
+        assert!(!is_list_dir_truncated(0, false, false, 0, 0, 0));
+        assert!(is_list_dir_truncated(0, true, false, 0, 0, 0));
+        assert!(is_list_dir_truncated(0, false, false, 0, 1, 0));
+    }
+
+    #[test]
+    fn max_response_bytes_scales_with_requested_entries() {
+        assert_eq!(max_list_dir_response_bytes(0, 4096), 0);
+        assert_eq!(max_list_dir_response_bytes(3, 4096), 12_288);
+    }
+
+    #[test]
+    fn entry_response_bytes_include_path_name_and_kind() {
+        let candidate = Candidate {
+            file_name: OsString::from("file.txt"),
+            name: "file.txt".to_string(),
+        };
+        let bytes = list_entry_response_bytes(std::path::Path::new("nested"), &candidate, "file");
+        assert!(bytes >= "nested/file.txt".len() + "file.txt".len() + "file".len());
     }
 
     #[cfg(unix)]

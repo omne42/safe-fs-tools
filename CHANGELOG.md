@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` now enforces a per-call response byte budget (`max_entries * limits.max_line_bytes`) during entry materialization and marks `truncated=true` when the budget is hit, reducing large-response memory spikes.
 - Windows path normalization micro-optimization: avoid temporary `String` allocation when appending the root separator after a prefix in lexical path reconstruction.
 - `grep` per-file streaming reader now uses a bounded preallocated `BufReader` capacity (up to 64KiB) instead of the default 8KiB buffer, reducing syscall overhead on large-file scans.
 - CLI JSON path-output hardening: `list-dir`/`glob`/`grep` now emit lossy UTF-8 path strings for non-UTF8 filesystem paths instead of failing response serialization with `path contains invalid UTF-8 characters`.
