@@ -354,9 +354,10 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let max_response_bytes =
         max_list_dir_response_bytes(max_entries, ctx.policy.limits.max_line_bytes);
 
-    ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
     let read_dir =
         fs::read_dir(&dir).map_err(|err| Error::io_path("read_dir", &relative_dir, err))?;
+    // Revalidate once after opening the iterator to catch swaps between preflight
+    // metadata capture and iteration setup without paying an extra metadata probe.
     ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
 
     for entry in read_dir {

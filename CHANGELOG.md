@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Policy/CLI large-input reads now cap initial `Vec` preallocation for policy files and text input files (while keeping existing hard byte limits), reducing one-shot allocation spikes under large inputs.
+- `list_dir` now drops one redundant pre-`read_dir` directory-identity recheck and keeps post-open + post-scan verification, reducing one `symlink_metadata` syscall per call without changing TOCTOU guard semantics.
 - `list_dir` response assembly now uses a bounded initial `Vec` capacity for retained entries (instead of preallocating to full candidate count), reducing peak allocation spikes under very large `max_entries` settings.
 - `list_dir` now enforces a per-call response byte budget (`max_entries * limits.max_line_bytes`) during entry materialization and marks `truncated=true` when the budget is hit, reducing large-response memory spikes.
 - Windows path normalization micro-optimization: avoid temporary `String` allocation when appending the root separator after a prefix in lexical path reconstruction.
