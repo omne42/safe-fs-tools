@@ -52,14 +52,29 @@ fn missing_response(requested_path: &Path) -> DeleteResponse {
 fn pattern_has_glob_meta(pattern: &str) -> bool {
     pattern
         .bytes()
-        .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}' | b'!'))
+        .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}'))
 }
 
 fn component_has_glob_meta(component: &std::ffi::OsStr) -> bool {
     component
         .as_encoded_bytes()
         .iter()
-        .any(|byte| matches!(*byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}' | b'!'))
+        .any(|byte| matches!(*byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}'))
+}
+
+#[inline]
+fn starts_with_boundary_semantics(path: &Path, prefix: &Path) -> bool {
+    let normalized_path = crate::path_utils::normalized_for_boundary(path);
+    let normalized_prefix = crate::path_utils::normalized_for_boundary(prefix);
+    crate::path_utils::starts_with_case_insensitive_normalized(
+        normalized_path.as_ref(),
+        normalized_prefix.as_ref(),
+    )
+}
+
+#[inline]
+fn overlaps_by_boundary_prefix(a: &Path, b: &Path) -> bool {
+    starts_with_boundary_semantics(a, b) || starts_with_boundary_semantics(b, a)
 }
 
 fn leading_literal_glob_prefix(pattern: &str) -> Option<PathBuf> {
@@ -87,7 +102,7 @@ fn deny_globs_require_descendant_scan(deny_globs: &[String], target_relative: &P
     for pattern in deny_globs {
         let normalized = crate::path_utils_internal::normalize_glob_pattern_for_matching(pattern);
         if !pattern_has_glob_meta(&normalized) {
-            if Path::new(normalized.as_str()).starts_with(target_relative) {
+            if starts_with_boundary_semantics(Path::new(normalized.as_str()), target_relative) {
                 return true;
             }
             continue;
@@ -95,7 +110,7 @@ fn deny_globs_require_descendant_scan(deny_globs: &[String], target_relative: &P
         let Some(prefix) = leading_literal_glob_prefix(&normalized) else {
             return true;
         };
-        if prefix.starts_with(target_relative) || target_relative.starts_with(&prefix) {
+        if overlaps_by_boundary_prefix(&prefix, target_relative) {
             return true;
         }
     }
@@ -538,6 +553,10 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
         if let Some(response) = ensure_target_stable_or_missing()? {
             return Ok(response);
         }
+        // Best-effort check only: deny pre-scan and `remove_dir_all` are separate filesystem
+        // phases, so concurrent writers can still race between them. For adversarial concurrent
+        // mutation threat models, rely on OS-level sandboxing/isolation in addition to this policy
+        // layer.
         ensure_recursive_delete_allows_descendants(ctx, &target, &relative)?;
 
         if let Err(err) = fs::remove_dir_all(&target) {
@@ -618,6 +637,25 @@ mod recursive_scan_tests {
         assert!(deny_globs_require_descendant_scan(
             &deny_globs,
             Path::new("public")
+        ));
+    }
+
+    #[test]
+    fn scan_skipped_when_literal_pattern_contains_bang() {
+        let deny_globs = vec!["!private/token.txt".to_string()];
+        assert!(!deny_globs_require_descendant_scan(
+            &deny_globs,
+            Path::new("public")
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn scan_required_when_literal_pattern_differs_only_by_case_on_windows() {
+        let deny_globs = vec!["Private/blocked.txt".to_string()];
+        assert!(deny_globs_require_descendant_scan(
+            &deny_globs,
+            Path::new("private")
         ));
     }
 
