@@ -90,6 +90,13 @@ fn initial_line_buffer_capacity(max_line_bytes: usize) -> usize {
 }
 
 #[cfg(feature = "grep")]
+fn initial_reader_capacity(max_capped_line_bytes: usize) -> usize {
+    const DEFAULT_CAPACITY: usize = 8 * 1024;
+    const MAX_INITIAL_CAPACITY: usize = 64 * 1024;
+    max_capped_line_bytes.clamp(DEFAULT_CAPACITY, MAX_INITIAL_CAPACITY)
+}
+
+#[cfg(feature = "grep")]
 fn max_grep_response_bytes(max_results: usize, max_line_bytes: usize) -> usize {
     max_results.saturating_mul(max_line_bytes)
 }
@@ -788,7 +795,10 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             }
 
             let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
-            let mut reader = std::io::BufReader::new(file.take(limit));
+            let mut reader = std::io::BufReader::with_capacity(
+                initial_reader_capacity(max_capped_line_bytes),
+                file.take(limit),
+            );
             let mut scanned_bytes = 0_u64;
             let mut line_no = 0_u64;
             let file_match_start = matches.len();
