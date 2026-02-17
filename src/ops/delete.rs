@@ -150,6 +150,9 @@ fn ensure_recursive_delete_allows_descendants(
         )?;
         let entries = fs::read_dir(&dir_abs)
             .map_err(|err| Error::io_path("read_dir", dir_relative.as_ref(), err))?;
+        // Reuse one relative-path buffer per directory instead of allocating a new PathBuf per
+        // child entry during deny checks.
+        let mut child_relative_prefix = child_relative_prefix(target_relative, &dir_suffix);
 
         for entry in entries {
             scanned_entries = scanned_entries.saturating_add(1);
@@ -163,15 +166,15 @@ fn ensure_recursive_delete_allows_descendants(
             let entry =
                 entry.map_err(|err| Error::io_path("read_dir", dir_relative.as_ref(), err))?;
             let child_name = entry.file_name();
-            let child_relative = target_relative_child(target_relative, &dir_suffix, &child_name);
+            child_relative_prefix.push(&child_name);
 
-            if ctx.redactor.is_path_denied(child_relative.as_ref()) {
-                return Err(Error::SecretPathDenied(child_relative.into_owned()));
+            if ctx.redactor.is_path_denied(&child_relative_prefix) {
+                return Err(Error::SecretPathDenied(child_relative_prefix.clone()));
             }
 
             let child_type = entry
                 .file_type()
-                .map_err(|err| Error::io_path("file_type", child_relative.as_ref(), err))?;
+                .map_err(|err| Error::io_path("file_type", &child_relative_prefix, err))?;
             if child_type.is_dir() {
                 let child_suffix = if dir_suffix.as_os_str().is_empty() {
                     PathBuf::from(&child_name)
@@ -180,6 +183,7 @@ fn ensure_recursive_delete_allows_descendants(
                 };
                 stack.push(child_suffix);
             }
+            let _ = child_relative_prefix.pop();
         }
     }
 
@@ -187,9 +191,9 @@ fn ensure_recursive_delete_allows_descendants(
 }
 
 #[inline]
-fn target_relative_with_suffix<'a>(target_relative: &Path, suffix: &'a Path) -> Cow<'a, Path> {
+fn target_relative_with_suffix<'a>(target_relative: &'a Path, suffix: &'a Path) -> Cow<'a, Path> {
     if suffix.as_os_str().is_empty() {
-        return Cow::Owned(target_relative.to_path_buf());
+        return Cow::Borrowed(target_relative);
     }
     if target_relative == Path::new(".") {
         return Cow::Borrowed(suffix);
@@ -197,6 +201,20 @@ fn target_relative_with_suffix<'a>(target_relative: &Path, suffix: &'a Path) -> 
     Cow::Owned(target_relative.join(suffix))
 }
 
+#[inline]
+fn child_relative_prefix(target_relative: &Path, dir_suffix: &Path) -> PathBuf {
+    if target_relative == Path::new(".") {
+        return dir_suffix.to_path_buf();
+    }
+
+    let mut joined = target_relative.to_path_buf();
+    if !dir_suffix.as_os_str().is_empty() {
+        joined.push(dir_suffix);
+    }
+    joined
+}
+
+#[cfg(test)]
 #[inline]
 fn target_relative_child<'a>(
     target_relative: &Path,
@@ -360,7 +378,8 @@ fn revalidate_parent_before_delete(
 ) -> Result<Option<DeleteResponse>> {
     match ctx.ensure_dir_under_root(&request.root_id, requested_parent, false) {
         Ok(rechecked_parent) => {
-            if rechecked_parent != canonical_parent {
+            if !crate::path_utils::paths_equal_case_insensitive(&rechecked_parent, canonical_parent)
+            {
                 Err(Error::InvalidPath(format!(
                     "path {} changed during delete; refusing to continue",
                     requested_path.display()
@@ -605,8 +624,9 @@ mod recursive_scan_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        deny_globs_require_descendant_scan, ensure_recursive_delete_scan_within_budget,
-        target_relative_child, target_relative_with_suffix,
+        child_relative_prefix, deny_globs_require_descendant_scan,
+        ensure_recursive_delete_scan_within_budget, target_relative_child,
+        target_relative_with_suffix,
     };
     use crate::error::Error;
 
@@ -746,5 +766,17 @@ mod recursive_scan_tests {
             std::ffi::OsStr::new("x.txt"),
         );
         assert_eq!(joined, Path::new("root/subtree/a/b/x.txt"));
+    }
+
+    #[test]
+    fn child_relative_prefix_avoids_dot_prefix_for_root_target() {
+        let prefix = child_relative_prefix(Path::new("."), Path::new("a/b"));
+        assert_eq!(prefix, Path::new("a/b"));
+    }
+
+    #[test]
+    fn child_relative_prefix_joins_nested_suffix_for_non_root_target() {
+        let prefix = child_relative_prefix(Path::new("root/subtree"), Path::new("a/b"));
+        assert_eq!(prefix, Path::new("root/subtree/a/b"));
     }
 }

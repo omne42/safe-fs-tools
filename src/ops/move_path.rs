@@ -17,7 +17,7 @@ fn revalidate_parent_before_move(
     side: &str,
 ) -> Result<PathBuf> {
     let rechecked_parent = ctx.ensure_dir_under_root(root_id, requested_parent, false)?;
-    if rechecked_parent != expected_parent {
+    if !crate::path_utils::paths_equal_case_insensitive(&rechecked_parent, expected_parent) {
         return Err(Error::InvalidPath(format!(
             "{side} path {} changed during move; refusing to continue",
             requested_path.display()
