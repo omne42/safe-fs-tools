@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -200,13 +201,13 @@ fn classify_walkdir_entry(
     }
 }
 
-fn relative_from_walk_entry(
-    entry: &walkdir::DirEntry,
-    root_path: &Path,
+fn relative_from_walk_entry<'a>(
+    entry: &'a walkdir::DirEntry,
+    root_path: &'a Path,
     diag: &mut TraversalDiagnostics,
-) -> Option<PathBuf> {
+) -> Option<Cow<'a, Path>> {
     if let Ok(relative) = entry.path().strip_prefix(root_path) {
-        return Some(relative.to_path_buf());
+        return Some(Cow::Borrowed(relative));
     }
 
     #[cfg(windows)]
@@ -216,7 +217,7 @@ fn relative_from_walk_entry(
         if relative.is_none() {
             diag.inc_skipped_walk_errors();
         }
-        return relative;
+        return relative.map(Cow::Owned);
     }
 
     #[cfg(not(windows))]
@@ -235,7 +236,7 @@ fn resolve_entry_traversal_file(
     ctx: &Context,
     root_id: &str,
     root_path: &Path,
-    relative: PathBuf,
+    relative: Cow<'_, Path>,
     is_symlink: bool,
     open_mode: TraversalOpenMode,
     diag: &mut TraversalDiagnostics,
@@ -300,6 +301,7 @@ fn resolve_entry_traversal_file(
     // - Non-symlink entries are already root-relative from walkdir + strip_prefix.
     // - Keep canonical revalidation for symlinks and read modes to preserve boundary checks.
     if matches!(open_mode, TraversalOpenMode::None) && !is_symlink {
+        let relative = relative.into_owned();
         return Ok(Some(TraversalFile {
             path: root_path.join(&relative),
             relative_path: relative,
@@ -308,7 +310,7 @@ fn resolve_entry_traversal_file(
     }
 
     let (canonical, _canonical_relative, _requested_path) =
-        match ctx.canonical_path_in_root(root_id, &relative) {
+        match ctx.canonical_path_in_root(root_id, relative.as_ref()) {
             Ok(ok) => ok,
             Err(err) => {
                 classify_resolve_error(err, ResolvePhase::Canonicalize, is_symlink, diag)?;
@@ -317,7 +319,7 @@ fn resolve_entry_traversal_file(
         };
 
     let opened_file = if matches!(open_mode, TraversalOpenMode::ReadFile) {
-        match super::super::io::open_regular_file_for_read(&canonical, &relative) {
+        match super::super::io::open_regular_file_for_read(&canonical, relative.as_ref()) {
             Ok(opened_file) => Some(opened_file),
             Err(err) => {
                 classify_resolve_error(err, ResolvePhase::Open, is_symlink, diag)?;
@@ -330,7 +332,7 @@ fn resolve_entry_traversal_file(
 
     Ok(Some(TraversalFile {
         path: canonical,
-        relative_path: relative,
+        relative_path: relative.into_owned(),
         opened_file,
     }))
 }
