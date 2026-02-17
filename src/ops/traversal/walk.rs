@@ -234,6 +234,7 @@ fn relative_from_walk_entry(
 fn resolve_entry_traversal_file(
     ctx: &Context,
     root_id: &str,
+    root_path: &Path,
     relative: PathBuf,
     is_symlink: bool,
     open_mode: TraversalOpenMode,
@@ -294,6 +295,18 @@ fn resolve_entry_traversal_file(
         }
     }
 
+    // Fast path for glob-style traversal:
+    // - `open_mode == None` means we only return relative paths (no file open/read).
+    // - Non-symlink entries are already root-relative from walkdir + strip_prefix.
+    // - Keep canonical revalidation for symlinks and read modes to preserve boundary checks.
+    if matches!(open_mode, TraversalOpenMode::None) && !is_symlink {
+        return Ok(Some(TraversalFile {
+            path: root_path.join(&relative),
+            relative_path: relative,
+            opened_file: None,
+        }));
+    }
+
     let (canonical, _canonical_relative, _requested_path) =
         match ctx.canonical_path_in_root(root_id, &relative) {
             Ok(ok) => ok,
@@ -338,6 +351,7 @@ fn traversal_file_from_entry(
     resolve_entry_traversal_file(
         ctx,
         root_id,
+        root_path,
         relative,
         entry.file_type().is_symlink(),
         open_mode,
