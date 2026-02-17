@@ -122,6 +122,7 @@ const MAX_WALK_FILES_HARD_CAP: usize = 5_000_000;
 const MAX_LINE_BYTES_HARD_CAP: usize = 1024 * 1024;
 const MAX_GREP_RESPONSE_BYTES_HARD_CAP: usize = 64 * 1024 * 1024;
 const MAX_GLOB_RESPONSE_BYTES_HARD_CAP: usize = 64 * 1024 * 1024;
+const MAX_LIST_DIR_RESPONSE_BYTES_HARD_CAP: usize = 64 * 1024 * 1024;
 
 fn is_valid_root_id(id: &str) -> bool {
     id.as_bytes().iter().all(|byte| {
@@ -166,6 +167,21 @@ fn validate_grep_response_budget(max_results: usize, max_line_bytes: usize) -> R
         return Err(Error::InvalidPolicy(format!(
             "limits.max_results * limits.max_line_bytes must be <= {} bytes",
             MAX_GREP_RESPONSE_BYTES_HARD_CAP
+        )));
+    }
+    Ok(())
+}
+
+fn validate_list_dir_response_budget(max_results: usize, max_line_bytes: usize) -> Result<()> {
+    let worst_case_bytes = max_results.checked_mul(max_line_bytes).ok_or_else(|| {
+        Error::InvalidPolicy(
+            "limits.max_results * limits.max_line_bytes overflowed usize".to_string(),
+        )
+    })?;
+    if worst_case_bytes > MAX_LIST_DIR_RESPONSE_BYTES_HARD_CAP {
+        return Err(Error::InvalidPolicy(format!(
+            "list_dir response budget (limits.max_results * limits.max_line_bytes) must be <= {} bytes",
+            MAX_LIST_DIR_RESPONSE_BYTES_HARD_CAP
         )));
     }
     Ok(())
@@ -393,6 +409,7 @@ impl SandboxPolicy {
             self.limits.max_line_bytes,
             self.limits.max_glob_bytes,
         )?;
+        validate_list_dir_response_budget(self.limits.max_results, self.limits.max_line_bytes)?;
         validate_grep_response_budget(self.limits.max_results, self.limits.max_line_bytes)?;
         let mut seen_ids = std::collections::HashSet::<&str>::new();
         for root in &self.roots {

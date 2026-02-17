@@ -245,6 +245,18 @@ fn policy_rejects_excessive_default_glob_response_budget() {
 }
 
 #[test]
+fn policy_rejects_excessive_list_dir_response_budget() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut policy = test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_glob_bytes = Some(64 * 1024 * 1024);
+    policy.limits.max_results = 100_000;
+    policy.limits.max_line_bytes = 8 * 1024;
+
+    let err = policy.validate().expect_err("should reject");
+    assert_invalid_policy_contains_all(err, &["list_dir response budget", "must be <="]);
+}
+
+#[test]
 fn policy_rejects_empty_roots() {
     let policy = SandboxPolicy {
         roots: Vec::new(),
