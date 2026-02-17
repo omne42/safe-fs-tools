@@ -82,7 +82,7 @@ fn build_glob_response(
 #[cfg(feature = "glob")]
 fn maybe_sort_glob_matches(matches: &mut [PathBuf], stable_sort: bool) {
     if stable_sort && matches.len() > 1 {
-        matches.sort();
+        matches.sort_unstable();
     }
 }
 
@@ -156,34 +156,37 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         Vec::<PathBuf>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
     let mut response_bytes = 0usize;
     let mut diag = TraversalDiagnostics::default();
+    let has_path_filters = ctx.has_traversal_path_filters();
     let walk_root_storage = match derive_safe_traversal_prefix(&request.pattern) {
         Some(prefix) => {
             let walk_root = root_path.join(&prefix);
-            let prefix_denied_or_skipped =
-                ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
-            if prefix_denied_or_skipped {
-                return Ok(build_glob_response(
-                    matches,
-                    diag,
-                    &started,
-                    ctx.policy.traversal.stable_sort,
-                ));
-            }
+            if has_path_filters {
+                let prefix_denied_or_skipped =
+                    ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
+                if prefix_denied_or_skipped {
+                    return Ok(build_glob_response(
+                        matches,
+                        diag,
+                        &started,
+                        ctx.policy.traversal.stable_sort,
+                    ));
+                }
 
-            // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
-            let probe_denied_or_skipped = if walk_root.is_dir() {
-                let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
-                ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
-            } else {
-                false
-            };
-            if probe_denied_or_skipped {
-                return Ok(build_glob_response(
-                    matches,
-                    diag,
-                    &started,
-                    ctx.policy.traversal.stable_sort,
-                ));
+                // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
+                let probe_denied_or_skipped = if walk_root.is_dir() {
+                    let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
+                    ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
+                } else {
+                    false
+                };
+                if probe_denied_or_skipped {
+                    return Ok(build_glob_response(
+                        matches,
+                        diag,
+                        &started,
+                        ctx.policy.traversal.stable_sort,
+                    ));
+                }
             }
             Some(walk_root)
         }

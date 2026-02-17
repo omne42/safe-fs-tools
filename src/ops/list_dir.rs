@@ -192,6 +192,7 @@ enum EntryOutcome {
 enum CountOnlyOutcome {
     Counted,
     Denied,
+    SkippedIoError,
 }
 
 struct EntryCandidate {
@@ -275,11 +276,20 @@ fn entry_kind_and_size_no_follow(path: &Path) -> std::io::Result<(ListDirEntryKi
 fn process_dir_entry(
     ctx: &Context,
     entry: fs::DirEntry,
+    has_deny_globs: bool,
+    relative_is_root: bool,
     relative_dir: &Path,
     deny_path_scratch: Option<&mut PathBuf>,
 ) -> Result<EntryOutcome> {
     let name = entry.file_name();
-    if is_entry_path_denied(ctx, relative_dir, &name, deny_path_scratch) {
+    if is_entry_path_denied(
+        ctx,
+        has_deny_globs,
+        relative_is_root,
+        relative_dir,
+        &name,
+        deny_path_scratch,
+    ) {
         return Ok(EntryOutcome::Denied);
     }
     Ok(EntryOutcome::Accepted(EntryCandidate {
@@ -291,25 +301,49 @@ fn process_dir_entry(
 fn process_dir_entry_count_only(
     ctx: &Context,
     entry: fs::DirEntry,
+    has_deny_globs: bool,
+    relative_is_root: bool,
     relative_dir: &Path,
     deny_path_scratch: Option<&mut PathBuf>,
 ) -> Result<CountOnlyOutcome> {
     let name = entry.file_name();
-    if is_entry_path_denied(ctx, relative_dir, &name, deny_path_scratch) {
+    if is_entry_path_denied(
+        ctx,
+        has_deny_globs,
+        relative_is_root,
+        relative_dir,
+        &name,
+        deny_path_scratch,
+    ) {
         return Ok(CountOnlyOutcome::Denied);
     }
 
-    Ok(CountOnlyOutcome::Counted)
+    Ok(classify_count_only_outcome(entry.file_type().is_ok()))
+}
+
+#[inline]
+fn classify_count_only_outcome(file_type_ok: bool) -> CountOnlyOutcome {
+    if file_type_ok {
+        CountOnlyOutcome::Counted
+    } else {
+        CountOnlyOutcome::SkippedIoError
+    }
 }
 
 #[inline]
 fn is_entry_path_denied(
     ctx: &Context,
+    has_deny_globs: bool,
+    relative_is_root: bool,
     relative_dir: &Path,
     name: &OsStr,
     deny_path_scratch: Option<&mut PathBuf>,
 ) -> bool {
-    if relative_dir == Path::new(".") {
+    if !has_deny_globs {
+        return false;
+    }
+
+    if relative_is_root {
         return ctx.redactor.is_path_denied(Path::new(name));
     }
 
@@ -393,7 +427,9 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let mut skipped_io_errors: u64 = 0;
     let mut zero_limit_truncated = false;
     let mut response_budget_truncated = false;
-    let mut deny_path_scratch = (relative_dir != Path::new(".")).then(|| relative_dir.clone());
+    let relative_is_root = relative_dir == Path::new(".");
+    let has_deny_globs = !ctx.policy.secrets.deny_globs.is_empty();
+    let mut deny_path_scratch = (!relative_is_root).then(|| relative_dir.clone());
     let max_response_bytes =
         max_estimated_list_dir_response_bytes(max_entries, ctx.policy.limits.max_line_bytes);
 
@@ -415,6 +451,8 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
             match process_dir_entry_count_only(
                 ctx,
                 entry,
+                has_deny_globs,
+                relative_is_root,
                 &relative_dir,
                 deny_path_scratch.as_mut(),
             )? {
@@ -425,11 +463,21 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                     break;
                 }
                 CountOnlyOutcome::Denied => {}
+                CountOnlyOutcome::SkippedIoError => {
+                    skipped_io_errors = skipped_io_errors.saturating_add(1);
+                }
             }
             continue;
         }
 
-        match process_dir_entry(ctx, entry, &relative_dir, deny_path_scratch.as_mut())? {
+        match process_dir_entry(
+            ctx,
+            entry,
+            has_deny_globs,
+            relative_is_root,
+            &relative_dir,
+            deny_path_scratch.as_mut(),
+        )? {
             EntryOutcome::Accepted(entry) => {
                 matched_entries = matched_entries.saturating_add(1);
 
@@ -454,6 +502,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         let mut entries = Vec::with_capacity(initial_entries_capacity(heap.len()));
         // Estimated payload-byte guardrail; not a strict process-memory cap.
         let mut estimated_response_bytes = 0usize;
+        let path_prefix_bytes = relative_dir_path_prefix_bytes(&relative_dir);
         // Reuse a single absolute-path buffer while materializing retained entries.
         // This avoids one `PathBuf` allocation per candidate in large directories.
         let mut abs_entry_path = dir.clone();
@@ -461,7 +510,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
             // Fast precheck: if even the minimum possible serialized entry size no longer fits the
             // response budget, avoid extra metadata syscalls and stop immediately.
             let min_entry_response_bytes =
-                list_entry_min_estimated_response_bytes(&relative_dir, &candidate);
+                list_entry_min_estimated_response_bytes_from_prefix(path_prefix_bytes, &candidate);
             if estimated_response_bytes.saturating_add(min_entry_response_bytes)
                 > max_response_bytes
             {
@@ -484,8 +533,11 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                     continue;
                 }
             };
-            let entry_response_bytes =
-                list_entry_estimated_response_bytes(&relative_dir, &candidate, kind);
+            let entry_response_bytes = list_entry_estimated_response_bytes_from_prefix(
+                path_prefix_bytes,
+                &candidate,
+                kind,
+            );
             if estimated_response_bytes.saturating_add(entry_response_bytes) > max_response_bytes {
                 response_budget_truncated = true;
                 break;
@@ -514,43 +566,64 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     })
 }
 
+#[cfg(test)]
 fn list_entry_estimated_response_bytes(
     relative_dir: &Path,
     candidate: &Candidate,
     kind: ListDirEntryKind,
 ) -> usize {
+    list_entry_estimated_response_bytes_from_prefix(
+        relative_dir_path_prefix_bytes(relative_dir),
+        candidate,
+        kind,
+    )
+}
+
+#[inline]
+fn list_entry_estimated_response_bytes_from_prefix(
+    path_prefix_bytes: usize,
+    candidate: &Candidate,
+    kind: ListDirEntryKind,
+) -> usize {
     let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
-    let path_bytes = if relative_dir == Path::new(".") {
-        file_name_bytes
-    } else {
-        relative_dir
-            .as_os_str()
-            .as_encoded_bytes()
-            .len()
-            .saturating_add(1)
-            .saturating_add(file_name_bytes)
-    };
+    let path_bytes = path_prefix_bytes.saturating_add(file_name_bytes);
     path_bytes
         .saturating_add(candidate.name().len())
         .saturating_add(kind.serialized_len())
 }
 
+#[cfg(test)]
 fn list_entry_min_estimated_response_bytes(relative_dir: &Path, candidate: &Candidate) -> usize {
+    list_entry_min_estimated_response_bytes_from_prefix(
+        relative_dir_path_prefix_bytes(relative_dir),
+        candidate,
+    )
+}
+
+#[inline]
+fn list_entry_min_estimated_response_bytes_from_prefix(
+    path_prefix_bytes: usize,
+    candidate: &Candidate,
+) -> usize {
     const MIN_KIND_BYTES: usize = ListDirEntryKind::Dir.serialized_len();
     let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
-    let path_bytes = if relative_dir == Path::new(".") {
-        file_name_bytes
+    let path_bytes = path_prefix_bytes.saturating_add(file_name_bytes);
+    path_bytes
+        .saturating_add(candidate.name().len())
+        .saturating_add(MIN_KIND_BYTES)
+}
+
+#[inline]
+fn relative_dir_path_prefix_bytes(relative_dir: &Path) -> usize {
+    if relative_dir == Path::new(".") {
+        0
     } else {
         relative_dir
             .as_os_str()
             .as_encoded_bytes()
             .len()
             .saturating_add(1)
-            .saturating_add(file_name_bytes)
-    };
-    path_bytes
-        .saturating_add(candidate.name().len())
-        .saturating_add(MIN_KIND_BYTES)
+    }
 }
 
 #[cfg(test)]
@@ -563,8 +636,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Candidate, ListDirEntryKind, entry_kind_and_size_no_follow, initial_entries_capacity,
-        initial_heap_capacity, is_list_dir_truncated, list_entry_estimated_response_bytes,
+        Candidate, CountOnlyOutcome, ListDirEntryKind, classify_count_only_outcome,
+        entry_kind_and_size_no_follow, initial_entries_capacity, initial_heap_capacity,
+        is_list_dir_truncated, list_entry_estimated_response_bytes,
         list_entry_min_estimated_response_bytes, max_estimated_list_dir_response_bytes,
         relative_entry_path, relative_entry_path_for_deny,
     };
@@ -678,6 +752,22 @@ mod tests {
         assert!(!is_list_dir_truncated(0, false, false, 0, 0, 0));
         assert!(is_list_dir_truncated(0, true, false, 0, 0, 0));
         assert!(is_list_dir_truncated(0, false, false, 0, 1, 0));
+    }
+
+    #[test]
+    fn classify_count_only_outcome_counts_when_file_type_available() {
+        assert!(matches!(
+            classify_count_only_outcome(true),
+            CountOnlyOutcome::Counted
+        ));
+    }
+
+    #[test]
+    fn classify_count_only_outcome_marks_skipped_io_error_on_file_type_failure() {
+        assert!(matches!(
+            classify_count_only_outcome(false),
+            CountOnlyOutcome::SkippedIoError
+        ));
     }
 
     #[test]

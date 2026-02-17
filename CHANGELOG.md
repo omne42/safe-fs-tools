@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` now precomputes root-path flags and response path-prefix byte counts once per call, reducing repeated per-entry/path-candidate checks in large directory listings.
+- `glob`/`grep` safe-prefix setup now skips deny/skip prechecks (and related probe metadata checks) when no traversal path filters are configured, reducing per-call overhead in common permissive policies.
+- `list_dir` now skips per-entry deny-glob matcher calls when `secrets.deny_globs` is empty, reducing hot-loop overhead on common permissive policies.
+- `glob`/`grep` stable-order post-sort now uses `sort_unstable`/`sort_unstable_by`, preserving key order semantics while reducing sort overhead on large match sets.
+- `grep` hot loop now only runs line-buffer shrink checks on capped-line paths (instead of every no-match line), reducing per-line overhead on large plain-text scans while preserving oversized-buffer memory recovery.
+- `list_dir` `max_entries=0` count-only mode now restores classification of `DirEntry::file_type()` failures as skipped I/O errors instead of visible entries, preserving truncation/skipped-error diagnostics parity with non-zero entry mode.
 - `glob`/`grep` stable-sort post-processing now sorts directly when `traversal.stable_sort=true` (removing the separate sortedness pre-scan), and aligned test-helper `cfg` gates with feature-gated test modules so `--no-default-features` clippy/gate runs stay green.
 - `grep` now validates UTF-8 across the full streamed line (including bytes beyond retained capped prefixes) on both no-match and matched-line paths, fixing false negatives where invalid UTF-8 after a long capped ASCII prefix could be incorrectly treated as searchable text.
 - `read` line-range path now uses a bounded `BufReader` preallocation (8 KiB to 64 KiB) based on `max_read_bytes` instead of always using the default 8 KiB, reducing syscall churn on large-file line scans.

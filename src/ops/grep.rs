@@ -490,7 +490,7 @@ fn build_grep_response(
 #[cfg(feature = "grep")]
 fn maybe_sort_grep_matches(matches: &mut [GrepMatch], stable_sort: bool) {
     if stable_sort && matches.len() > 1 {
-        matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
+        matches.sort_unstable_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
     }
 }
 
@@ -560,6 +560,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let plain_query = (!is_regex).then_some(query_bytes);
     let has_redact_regexes = ctx.redactor.has_redact_regexes();
     let file_glob = request.glob.as_deref().map(compile_glob).transpose()?;
+    let has_path_filters = ctx.has_traversal_path_filters();
     let traversal_open_mode = if file_glob.is_some() {
         TraversalOpenMode::None
     } else {
@@ -572,33 +573,35 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     {
         Some(prefix) => {
             let walk_root = root_path.join(&prefix);
-            let prefix_denied_or_skipped =
-                ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
-            if prefix_denied_or_skipped {
-                return Ok(build_grep_response(
-                    matches,
-                    diag,
-                    counters,
-                    &started,
-                    ctx.policy.traversal.stable_sort,
-                ));
-            }
+            if has_path_filters {
+                let prefix_denied_or_skipped =
+                    ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
+                if prefix_denied_or_skipped {
+                    return Ok(build_grep_response(
+                        matches,
+                        diag,
+                        counters,
+                        &started,
+                        ctx.policy.traversal.stable_sort,
+                    ));
+                }
 
-            // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
-            let probe_denied_or_skipped = if walk_root.is_dir() {
-                let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
-                ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
-            } else {
-                false
-            };
-            if probe_denied_or_skipped {
-                return Ok(build_grep_response(
-                    matches,
-                    diag,
-                    counters,
-                    &started,
-                    ctx.policy.traversal.stable_sort,
-                ));
+                // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
+                let probe_denied_or_skipped = if walk_root.is_dir() {
+                    let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
+                    ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
+                } else {
+                    false
+                };
+                if probe_denied_or_skipped {
+                    return Ok(build_grep_response(
+                        matches,
+                        diag,
+                        counters,
+                        &started,
+                        ctx.policy.traversal.stable_sort,
+                    ));
+                }
             }
             Some(walk_root)
         }
@@ -741,7 +744,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
                 if regex.is_none() && !contains_query {
-                    maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
+                    if line_was_capped {
+                        maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
+                    }
                     continue;
                 }
                 let line = match std::str::from_utf8(&line_buf) {
@@ -761,7 +766,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     .as_ref()
                     .map_or_else(|| contains_query, |regex| regex.is_match(line));
                 if !ok {
-                    maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
+                    if line_was_capped {
+                        maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
+                    }
                     continue;
                 }
                 if matches.len() >= ctx.policy.limits.max_results {
@@ -836,6 +843,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 });
                 if is_first_match_for_file {
                     first_match_index = Some(matches.len().saturating_sub(1));
+                }
+                if line_was_capped {
+                    maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                 }
             }
 
