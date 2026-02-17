@@ -32,7 +32,9 @@ fn permissive_policy(root: &Path) -> SandboxPolicy {
 
 struct BenchFixture {
     _tempdir: tempfile::TempDir,
-    ctx: Context,
+    ctx_stable: Context,
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    ctx_unstable: Context,
     read_req: ReadRequest,
     list_req: ListDirRequest,
     #[cfg(feature = "glob")]
@@ -66,11 +68,20 @@ fn setup_fixture() -> BenchFixture {
         fs::write(docs_dir.join(format!("file-{i}.log")), "log content\n").expect("write log");
     }
 
-    let ctx = Context::new(permissive_policy(tempdir.path())).expect("ctx");
+    let stable_policy = permissive_policy(tempdir.path());
+    let ctx_stable = Context::new(stable_policy).expect("ctx stable");
+    #[cfg(any(feature = "glob", feature = "grep"))]
+    let ctx_unstable = {
+        let mut unstable_policy = permissive_policy(tempdir.path());
+        unstable_policy.traversal.stable_sort = false;
+        Context::new(unstable_policy).expect("ctx unstable")
+    };
 
     BenchFixture {
         _tempdir: tempdir,
-        ctx,
+        ctx_stable,
+        #[cfg(any(feature = "glob", feature = "grep"))]
+        ctx_unstable,
         read_req: ReadRequest {
             root_id: "root".to_string(),
             path: "large.txt".into(),
@@ -103,30 +114,46 @@ fn bench_ops(c: &mut Criterion) {
     c.bench_function("read/full_large_file", |b| {
         b.iter(|| {
             let req = fixture.read_req.clone();
-            read_file(&fixture.ctx, req).expect("read");
+            read_file(&fixture.ctx_stable, req).expect("read");
         });
     });
 
     c.bench_function("list_dir/top_k_entries", |b| {
         b.iter(|| {
             let req = fixture.list_req.clone();
-            list_dir(&fixture.ctx, req).expect("list_dir");
+            list_dir(&fixture.ctx_stable, req).expect("list_dir");
         });
     });
 
     #[cfg(feature = "glob")]
-    c.bench_function("glob/txt_files", |b| {
+    c.bench_function("glob/txt_files_stable_sort", |b| {
         b.iter(|| {
             let req = fixture.glob_req.clone();
-            glob_paths(&fixture.ctx, req).expect("glob");
+            glob_paths(&fixture.ctx_stable, req).expect("glob");
+        });
+    });
+
+    #[cfg(feature = "glob")]
+    c.bench_function("glob/txt_files_unstable_order", |b| {
+        b.iter(|| {
+            let req = fixture.glob_req.clone();
+            glob_paths(&fixture.ctx_unstable, req).expect("glob");
         });
     });
 
     #[cfg(feature = "grep")]
-    c.bench_function("grep/plain_query", |b| {
+    c.bench_function("grep/plain_query_stable_sort", |b| {
         b.iter(|| {
             let req = fixture.grep_req.clone();
-            grep(&fixture.ctx, req).expect("grep");
+            grep(&fixture.ctx_stable, req).expect("grep");
+        });
+    });
+
+    #[cfg(feature = "grep")]
+    c.bench_function("grep/plain_query_unstable_order", |b| {
+        b.iter(|| {
+            let req = fixture.grep_req.clone();
+            grep(&fixture.ctx_unstable, req).expect("grep");
         });
     });
 }
