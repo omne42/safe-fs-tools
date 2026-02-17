@@ -284,13 +284,14 @@ fn is_list_dir_truncated(
     materialized_entries: usize,
 ) -> bool {
     if max_entries == 0 {
-        return zero_limit_truncated;
+        return zero_limit_truncated || skipped_io_errors > 0;
     }
 
     let hit_entry_limit = matched_entries > max_entries;
-    let incomplete_due_to_io =
-        !hit_entry_limit && skipped_io_errors > 0 && materialized_entries < matched_entries;
-    hit_entry_limit || incomplete_due_to_io
+    let incomplete_due_to_io = skipped_io_errors > 0;
+    let incomplete_due_to_materialization =
+        !hit_entry_limit && materialized_entries < matched_entries;
+    hit_entry_limit || incomplete_due_to_io || incomplete_due_to_materialization
 }
 
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
@@ -496,9 +497,15 @@ mod tests {
     }
 
     #[test]
+    fn truncated_when_read_dir_losses_occur_within_limit() {
+        assert!(is_list_dir_truncated(4, false, 2, 1, 2));
+    }
+
+    #[test]
     fn zero_max_entries_uses_zero_limit_flag() {
         assert!(!is_list_dir_truncated(0, false, 0, 0, 0));
         assert!(is_list_dir_truncated(0, true, 0, 0, 0));
+        assert!(is_list_dir_truncated(0, false, 0, 1, 0));
     }
 
     #[cfg(unix)]

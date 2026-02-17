@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CLI JSON path-output hardening: `list-dir`/`glob`/`grep` now emit lossy UTF-8 path strings for non-UTF8 filesystem paths instead of failing response serialization with `path contains invalid UTF-8 characters`.
+- `list_dir` truncation correctness: responses now set `truncated=true` when directory enumeration loses entries due to I/O errors (including `max_entries=0` count-only mode), so partial results are never reported as complete.
+- `delete --recursive` deny pre-scan now enforces `limits.max_walk_entries` and `limits.max_walk_ms`, preventing unbounded pre-delete subtree scans when secret-glob checks require descendant traversal.
 - Windows `glob` path-normalization hot path now reuses a thread-local UTF-16 buffer in traversal matching (with retention cap), reducing per-entry temporary vector allocations when converting `\` to `/` without keeping unbounded peak capacity.
 - Windows `create_parents` directory-identity checks now distinguish “identity changed” from “identity unavailable”, avoiding false “parent changed” failures on filesystems that do not expose file ID fields.
 - Recursive delete deny-glob pre-scan now derives a stable literal prefix for glob patterns and skips full descendant scans when the target subtree is provably disjoint, reducing unnecessary pre-delete tree walks on large directories.

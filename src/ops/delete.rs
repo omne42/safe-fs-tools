@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -113,13 +114,32 @@ fn ensure_recursive_delete_allows_descendants(
         return Ok(());
     }
 
+    let max_walk_entries = u64::try_from(ctx.policy.limits.max_walk_entries).unwrap_or(u64::MAX);
+    let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
+    let started = Instant::now();
+    let mut scanned_entries: u64 = 0;
     let mut stack = vec![(target_abs.to_path_buf(), target_relative.to_path_buf())];
 
     while let Some((dir_abs, dir_relative)) = stack.pop() {
+        ensure_recursive_delete_scan_within_budget(
+            &dir_relative,
+            scanned_entries,
+            max_walk_entries,
+            &started,
+            max_walk,
+        )?;
         let entries =
             fs::read_dir(&dir_abs).map_err(|err| Error::io_path("read_dir", &dir_relative, err))?;
 
         for entry in entries {
+            scanned_entries = scanned_entries.saturating_add(1);
+            ensure_recursive_delete_scan_within_budget(
+                &dir_relative,
+                scanned_entries,
+                max_walk_entries,
+                &started,
+                max_walk,
+            )?;
             let entry = entry.map_err(|err| Error::io_path("read_dir", &dir_relative, err))?;
             let child_name = entry.file_name();
             let child_relative = dir_relative.join(&child_name);
@@ -138,6 +158,31 @@ fn ensure_recursive_delete_allows_descendants(
         }
     }
 
+    Ok(())
+}
+
+fn ensure_recursive_delete_scan_within_budget(
+    current_relative_dir: &Path,
+    scanned_entries: u64,
+    max_walk_entries: u64,
+    started: &Instant,
+    max_walk: Option<Duration>,
+) -> Result<()> {
+    if scanned_entries > max_walk_entries {
+        return Err(Error::NotPermitted(format!(
+            "recursive delete pre-scan exceeded limits.max_walk_entries while scanning {} ({scanned_entries} > {max_walk_entries})",
+            current_relative_dir.display()
+        )));
+    }
+    if let Some(limit) = max_walk
+        && started.elapsed() >= limit
+    {
+        return Err(Error::NotPermitted(format!(
+            "recursive delete pre-scan exceeded limits.max_walk_ms while scanning {} (>= {} ms)",
+            current_relative_dir.display(),
+            limit.as_millis()
+        )));
+    }
     Ok(())
 }
 
@@ -495,8 +540,10 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
 #[cfg(test)]
 mod recursive_scan_tests {
     use std::path::Path;
+    use std::time::{Duration, Instant};
 
-    use super::deny_globs_require_descendant_scan;
+    use super::{deny_globs_require_descendant_scan, ensure_recursive_delete_scan_within_budget};
+    use crate::error::Error;
 
     #[test]
     fn scan_skipped_when_literal_patterns_cannot_match_descendants() {
@@ -553,5 +600,38 @@ mod recursive_scan_tests {
             &deny_globs,
             Path::new("public")
         ));
+    }
+
+    #[test]
+    fn recursive_scan_budget_rejects_entry_limit_overflow() {
+        let err = ensure_recursive_delete_scan_within_budget(
+            Path::new("public"),
+            11,
+            10,
+            &Instant::now(),
+            None,
+        )
+        .expect_err("must reject scans over max_walk_entries");
+        match err {
+            Error::NotPermitted(msg) => assert!(msg.contains("limits.max_walk_entries")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recursive_scan_budget_rejects_elapsed_time_limit() {
+        let started = Instant::now();
+        let err = ensure_recursive_delete_scan_within_budget(
+            Path::new("public"),
+            0,
+            10,
+            &started,
+            Some(Duration::from_millis(0)),
+        )
+        .expect_err("must reject scans over max_walk_ms");
+        match err {
+            Error::NotPermitted(msg) => assert!(msg.contains("limits.max_walk_ms")),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
