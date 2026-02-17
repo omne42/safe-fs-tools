@@ -1,5 +1,6 @@
 use std::cell::OnceCell;
 use std::collections::BinaryHeap;
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -71,48 +72,40 @@ pub struct ListDirResponse {
 
 #[derive(Debug)]
 struct Candidate {
-    entry: ListDirEntry,
-    absolute_path: PathBuf,
+    file_name: OsString,
+    name: String,
 }
 
 impl Candidate {
     #[inline]
     fn from_entry(entry: EntryCandidate) -> Self {
-        let EntryCandidate {
-            absolute_path,
-            path,
-            name,
-            cached_lossy_name,
-        } = entry;
-        let name = match cached_lossy_name.into_inner() {
-            Some(name) => name,
-            None => name
-                .into_string()
-                .unwrap_or_else(|name| name.to_string_lossy().into_owned()),
-        };
+        let name = entry.name_for_output();
         Self {
-            absolute_path,
-            entry: ListDirEntry {
-                path,
-                name,
-                kind: String::new(),
-                size_bytes: 0,
-            },
+            file_name: entry.file_name,
+            name,
         }
     }
 
     #[inline]
-    fn into_list_entry(self, kind: &'static str, size_bytes: u64) -> ListDirEntry {
-        let mut entry = self.entry;
-        entry.kind = kind.to_string();
-        entry.size_bytes = size_bytes;
-        entry
+    fn into_list_entry(
+        self,
+        relative_dir: &Path,
+        kind: &'static str,
+        size_bytes: u64,
+    ) -> ListDirEntry {
+        ListDirEntry {
+            path: relative_entry_path(relative_dir, &self.file_name),
+            name: self.name,
+            kind: kind.to_string(),
+            size_bytes,
+        }
     }
 }
 
 impl PartialEq for Candidate {
     fn eq(&self, other: &Self) -> bool {
-        self.entry.name == other.entry.name && self.entry.path == other.entry.path
+        self.name == other.name
+            && Path::new(self.file_name.as_os_str()) == Path::new(other.file_name.as_os_str())
     }
 }
 
@@ -126,10 +119,9 @@ impl PartialOrd for Candidate {
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.entry
-            .name
-            .cmp(&other.entry.name)
-            .then_with(|| self.entry.path.cmp(&other.entry.path))
+        self.name.cmp(&other.name).then_with(|| {
+            Path::new(self.file_name.as_os_str()).cmp(Path::new(other.file_name.as_os_str()))
+        })
     }
 }
 
@@ -145,30 +137,38 @@ enum CountOnlyOutcome {
 }
 
 struct EntryCandidate {
-    absolute_path: PathBuf,
-    path: PathBuf,
-    name: OsString,
+    file_name: OsString,
     cached_lossy_name: OnceCell<String>,
 }
 
 impl EntryCandidate {
     #[inline]
     fn compare_name(&self, other: &str) -> std::cmp::Ordering {
-        if let Some(valid_utf8) = self.name.to_str() {
+        if let Some(valid_utf8) = self.file_name.to_str() {
             valid_utf8.cmp(other)
         } else {
             self.cached_lossy_name
-                .get_or_init(|| self.name.to_string_lossy().into_owned())
+                .get_or_init(|| self.file_name.to_string_lossy().into_owned())
                 .as_str()
                 .cmp(other)
         }
     }
 
     #[inline]
-    fn sorts_before(&self, other: &ListDirEntry) -> bool {
-        self.compare_name(other.name.as_str())
-            .then_with(|| self.path.cmp(&other.path))
-            == std::cmp::Ordering::Less
+    fn sorts_before(&self, other: &Candidate) -> bool {
+        self.compare_name(other.name.as_str()).then_with(|| {
+            Path::new(self.file_name.as_os_str()).cmp(Path::new(other.file_name.as_os_str()))
+        }) == std::cmp::Ordering::Less
+    }
+
+    #[inline]
+    fn name_for_output(&self) -> String {
+        if let Some(valid_utf8) = self.file_name.to_str() {
+            return valid_utf8.to_string();
+        }
+        self.cached_lossy_name
+            .get_or_init(|| self.file_name.to_string_lossy().into_owned())
+            .clone()
     }
 }
 
@@ -235,12 +235,8 @@ fn process_dir_entry(
     if ctx.redactor.is_path_denied(&relative) {
         return Ok(EntryOutcome::Denied);
     }
-    let path = entry.path();
-
     Ok(EntryOutcome::Accepted(EntryCandidate {
-        absolute_path: path,
-        path: relative,
-        name,
+        file_name: name,
         cached_lossy_name: OnceCell::new(),
     }))
 }
@@ -267,7 +263,7 @@ fn process_dir_entry_count_only(
 }
 
 #[inline]
-fn relative_entry_path(relative_dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+fn relative_entry_path(relative_dir: &Path, name: &OsStr) -> PathBuf {
     if relative_dir == Path::new(".") {
         PathBuf::from(name)
     } else {
@@ -355,7 +351,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 if heap.len() < max_entries {
                     heap.push(Candidate::from_entry(entry));
                 } else if let Some(mut top) = heap.peek_mut()
-                    && entry.sorts_before(&top.entry)
+                    && entry.sorts_before(&top)
                 {
                     *top = Candidate::from_entry(entry);
                 }
@@ -372,7 +368,8 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         for candidate in heap.into_sorted_vec() {
             // Resolve final type/size only for retained top-k entries, avoiding
             // repeated metadata probes for candidates that were later evicted.
-            let (kind, size_bytes) = match entry_kind_and_size_no_follow(&candidate.absolute_path) {
+            let abs_entry_path = dir.join(candidate.file_name.as_os_str());
+            let (kind, size_bytes) = match entry_kind_and_size_no_follow(&abs_entry_path) {
                 Ok(value) => value,
                 Err(_) => {
                     skipped_io_errors = skipped_io_errors.saturating_add(1);
@@ -382,7 +379,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                     continue;
                 }
             };
-            entries.push(candidate.into_list_entry(kind, size_bytes));
+            entries.push(candidate.into_list_entry(&relative_dir, kind, size_bytes));
         }
         entries
     };
@@ -407,11 +404,12 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
 mod tests {
     use std::collections::BinaryHeap;
     use std::ffi::OsStr;
+    use std::ffi::OsString;
     use std::path::PathBuf;
 
     use super::{
-        Candidate, ListDirEntry, entry_kind_and_size_no_follow, initial_heap_capacity,
-        is_list_dir_truncated, relative_entry_path,
+        Candidate, entry_kind_and_size_no_follow, initial_heap_capacity, is_list_dir_truncated,
+        relative_entry_path,
     };
 
     #[test]
@@ -426,45 +424,30 @@ mod tests {
     fn candidate_heap_into_sorted_vec_preserves_name_then_path_order() {
         let mut heap = BinaryHeap::new();
         heap.push(Candidate {
-            entry: ListDirEntry {
-                path: PathBuf::from("b/alpha"),
-                name: "alpha".to_string(),
-                kind: "file".to_string(),
-                size_bytes: 1,
-            },
-            absolute_path: PathBuf::from("abs/b/alpha"),
+            file_name: OsString::from("b-alpha"),
+            name: "alpha".to_string(),
         });
         heap.push(Candidate {
-            entry: ListDirEntry {
-                path: PathBuf::from("a/beta"),
-                name: "beta".to_string(),
-                kind: "file".to_string(),
-                size_bytes: 1,
-            },
-            absolute_path: PathBuf::from("abs/a/beta"),
+            file_name: OsString::from("a-beta"),
+            name: "beta".to_string(),
         });
         heap.push(Candidate {
-            entry: ListDirEntry {
-                path: PathBuf::from("a/alpha"),
-                name: "alpha".to_string(),
-                kind: "file".to_string(),
-                size_bytes: 1,
-            },
-            absolute_path: PathBuf::from("abs/a/alpha"),
+            file_name: OsString::from("a-alpha"),
+            name: "alpha".to_string(),
         });
 
         let ordered = heap
             .into_sorted_vec()
             .into_iter()
-            .map(|candidate| (candidate.entry.name, candidate.entry.path))
+            .map(|candidate| (candidate.name, PathBuf::from(candidate.file_name)))
             .collect::<Vec<_>>();
 
         assert_eq!(
             ordered,
             vec![
-                ("alpha".to_string(), PathBuf::from("a/alpha")),
-                ("alpha".to_string(), PathBuf::from("b/alpha")),
-                ("beta".to_string(), PathBuf::from("a/beta")),
+                ("alpha".to_string(), PathBuf::from("a-alpha")),
+                ("alpha".to_string(), PathBuf::from("b-alpha")),
+                ("beta".to_string(), PathBuf::from("a-beta")),
             ]
         );
     }
@@ -511,20 +494,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn sorts_before_caches_lossy_name_for_non_utf8_entries() {
-        use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
 
         let candidate = super::EntryCandidate {
-            absolute_path: PathBuf::from("x"),
-            path: PathBuf::from("x"),
-            name: OsString::from_vec(vec![0xff]),
+            file_name: OsString::from_vec(vec![0xff]),
             cached_lossy_name: std::cell::OnceCell::new(),
         };
-        let other = ListDirEntry {
-            path: PathBuf::from("y"),
+        let other = Candidate {
+            file_name: OsString::from("y"),
             name: "z".to_string(),
-            kind: "file".to_string(),
-            size_bytes: 0,
         };
 
         let _ = candidate.sorts_before(&other);
