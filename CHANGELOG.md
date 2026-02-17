@@ -165,6 +165,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Traversal no longer re-checks secret deny globs for files after `walkdir` entry filtering, removing duplicate hot-path glob matches while preserving filtering behavior.
 - `list_dir` now defers `DirEntry::path()` materialization until after deny-glob filtering, avoiding unnecessary absolute-path allocations for denied entries during large-directory scans.
 - Traversal glob fast path: in `open_mode=None`, non-symlink entries now skip per-file canonical-path revalidation and reuse already-validated root-relative walk paths, reducing `canonicalize` syscall pressure on large glob scans while preserving symlink/read-mode safety checks.
+- Windows path-compare fix: `ascii_case_insensitive_cmp_fast` now continues scanning after case-only-equal ASCII units instead of returning early, preventing false-equal results on strings that differ at later characters.
 
 ## [0.2.0] - 2026-02-14
 

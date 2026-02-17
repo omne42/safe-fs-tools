@@ -107,6 +107,9 @@ fn ascii_case_insensitive_cmp_fast(a: &OsStr, b: &OsStr) -> Option<Ordering> {
                 if a_unit <= 0x7f && b_unit <= 0x7f {
                     let a_lower = lower_ascii_u16(a_unit);
                     let b_lower = lower_ascii_u16(b_unit);
+                    if a_lower == b_lower {
+                        continue;
+                    }
                     return Some(a_lower.cmp(&b_lower));
                 }
                 return None;
@@ -142,6 +145,22 @@ mod tests {
         assert_eq!(
             ascii_case_insensitive_cmp_fast(OsStr::new("Ä"), OsStr::new("ä")),
             None
+        );
+    }
+
+    #[test]
+    fn ascii_fast_cmp_checks_later_chars_after_case_only_difference() {
+        assert_eq!(
+            ascii_case_insensitive_cmp_fast(OsStr::new("Ab"), OsStr::new("aC")),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            ascii_case_insensitive_cmp_fast(OsStr::new("safe"), OsStr::new("Saevil")),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            ascii_case_insensitive_cmp_fast(OsStr::new("A"), OsStr::new("aB")),
+            Some(std::cmp::Ordering::Less)
         );
     }
 }
