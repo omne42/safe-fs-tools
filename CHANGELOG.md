@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CLI JSON path-output hardening: `list-dir`/`glob`/`grep` now emit lossy UTF-8 path strings for non-UTF8 filesystem paths instead of failing response serialization with `path contains invalid UTF-8 characters`.
+- Windows `glob` path-normalization hot path now reuses a thread-local UTF-16 buffer in traversal matching, reducing per-entry temporary vector allocations when converting `\` to `/`.
 - Context root-overlap checks now return immediately for 0/1 roots (all platforms) and pre-size Windows non-disk root buckets, trimming avoidable setup work in small policies.
 - Redaction marker fast path: `redact_text_cow` now returns a borrowed static marker on output-limit overflow instead of allocating a new `String`.
 - Redaction no-op fast path: `redact_text_outcome` now returns immediately when no redaction regexes are configured, avoiding per-call loop overhead on common allow-list policies.

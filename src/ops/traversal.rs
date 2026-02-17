@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::fs;
 #[cfg(any(feature = "glob", feature = "grep"))]
 use std::time::Instant;
+#[cfg(all(windows, any(feature = "glob", feature = "grep")))]
+use std::{cell::RefCell, ffi::OsString};
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 use globset::GlobSet;
@@ -15,6 +17,11 @@ use crate::error::Result;
 use super::super::Context;
 #[cfg(any(feature = "glob", feature = "grep"))]
 use super::ScanLimitReason;
+
+#[cfg(all(windows, any(feature = "glob", feature = "grep")))]
+thread_local! {
+    static GLOB_NORMALIZED_WIDE_BUF: RefCell<Vec<u16>> = const { RefCell::new(Vec::new()) };
+}
 
 #[cfg(any(feature = "glob", feature = "grep"))]
 mod compile;
@@ -71,7 +78,6 @@ pub(super) fn elapsed_ms(started: &Instant) -> u64 {
 pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
     #[cfg(windows)]
     {
-        use std::ffi::OsString;
         use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
         const BACKSLASH: u16 = b'\\' as u16;
@@ -81,13 +87,19 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
         if !path.as_os_str().as_encoded_bytes().contains(&b'\\') {
             return glob.is_match(path);
         }
-        let normalized_wide: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .map(|unit| if unit == BACKSLASH { SLASH } else { unit })
-            .collect();
-        let normalized = OsString::from_wide(&normalized_wide);
-        return glob.is_match(Path::new(&normalized));
+        return GLOB_NORMALIZED_WIDE_BUF.with(|normalized_wide| {
+            let mut normalized_wide = normalized_wide.borrow_mut();
+            normalized_wide.clear();
+            normalized_wide.extend(
+                path.as_os_str().encode_wide().map(
+                    |unit| {
+                        if unit == BACKSLASH { SLASH } else { unit }
+                    },
+                ),
+            );
+            let normalized = OsString::from_wide(&normalized_wide);
+            glob.is_match(Path::new(&normalized))
+        });
     }
     #[cfg(not(windows))]
     {
