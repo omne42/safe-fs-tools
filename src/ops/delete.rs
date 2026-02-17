@@ -118,9 +118,12 @@ fn ensure_recursive_delete_allows_descendants(
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let started = Instant::now();
     let mut scanned_entries: u64 = 0;
-    let mut stack = vec![(target_abs.to_path_buf(), target_relative.to_path_buf())];
+    // Keep only target-relative suffixes in the traversal stack to avoid
+    // repeating the same long target-relative prefix across every queued node.
+    let mut stack = vec![(target_abs.to_path_buf(), PathBuf::new())];
 
-    while let Some((dir_abs, dir_relative)) = stack.pop() {
+    while let Some((dir_abs, dir_suffix)) = stack.pop() {
+        let dir_relative = target_relative_with_suffix(target_relative, &dir_suffix);
         ensure_recursive_delete_scan_within_budget(
             &dir_relative,
             scanned_entries,
@@ -142,7 +145,12 @@ fn ensure_recursive_delete_allows_descendants(
             )?;
             let entry = entry.map_err(|err| Error::io_path("read_dir", &dir_relative, err))?;
             let child_name = entry.file_name();
-            let child_relative = dir_relative.join(&child_name);
+            let child_suffix = if dir_suffix.as_os_str().is_empty() {
+                PathBuf::from(&child_name)
+            } else {
+                dir_suffix.join(&child_name)
+            };
+            let child_relative = target_relative_with_suffix(target_relative, &child_suffix);
 
             if ctx.redactor.is_path_denied(&child_relative) {
                 return Err(Error::SecretPathDenied(child_relative));
@@ -153,12 +161,23 @@ fn ensure_recursive_delete_allows_descendants(
                 .map_err(|err| Error::io_path("file_type", &child_relative, err))?;
             if child_type.is_dir() {
                 let child_abs = entry.path();
-                stack.push((child_abs, child_relative));
+                stack.push((child_abs, child_suffix));
             }
         }
     }
 
     Ok(())
+}
+
+#[inline]
+fn target_relative_with_suffix(target_relative: &Path, suffix: &Path) -> PathBuf {
+    if suffix.as_os_str().is_empty() {
+        return target_relative.to_path_buf();
+    }
+    if target_relative == Path::new(".") {
+        return suffix.to_path_buf();
+    }
+    target_relative.join(suffix)
 }
 
 fn ensure_recursive_delete_scan_within_budget(
@@ -542,7 +561,10 @@ mod recursive_scan_tests {
     use std::path::Path;
     use std::time::{Duration, Instant};
 
-    use super::{deny_globs_require_descendant_scan, ensure_recursive_delete_scan_within_budget};
+    use super::{
+        deny_globs_require_descendant_scan, ensure_recursive_delete_scan_within_budget,
+        target_relative_with_suffix,
+    };
     use crate::error::Error;
 
     #[test]
@@ -633,5 +655,17 @@ mod recursive_scan_tests {
             Error::NotPermitted(msg) => assert!(msg.contains("limits.max_walk_ms")),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn target_relative_suffix_joins_for_non_root_target() {
+        let joined = target_relative_with_suffix(Path::new("root/subtree"), Path::new("a/b"));
+        assert_eq!(joined, Path::new("root/subtree/a/b"));
+    }
+
+    #[test]
+    fn target_relative_suffix_avoids_dot_prefix() {
+        let joined = target_relative_with_suffix(Path::new("."), Path::new("a/b"));
+        assert_eq!(joined, Path::new("a/b"));
     }
 }
