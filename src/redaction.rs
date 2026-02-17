@@ -185,7 +185,7 @@ impl SecretRedactor {
 
         // Reuse two owned buffers across regex passes to avoid per-regex reallocation churn.
         let mut buffers = [String::new(), String::new()];
-        let mut active_buffer: Option<usize> = None;
+        let mut active_buffer: Option<ActiveBuffer> = None;
         for regex in &self.redact {
             let result = match active_buffer {
                 None => {
@@ -198,9 +198,9 @@ impl SecretRedactor {
                         self.replacement.as_str(),
                         &mut buffers[0],
                     )
-                    .map_replaced_to(0)
+                    .map_replaced_to(ActiveBuffer::First)
                 }
-                Some(0) => {
+                Some(ActiveBuffer::First) => {
                     let (left, right) = buffers.split_at_mut(1);
                     let source = left[0].as_str();
                     if source.is_empty() {
@@ -212,18 +212,17 @@ impl SecretRedactor {
                         self.replacement.as_str(),
                         &mut right[0],
                     )
-                    .map_replaced_to(1)
+                    .map_replaced_to(ActiveBuffer::Second)
                 }
-                Some(1) => {
+                Some(ActiveBuffer::Second) => {
                     let (left, right) = buffers.split_at_mut(1);
                     let source = right[0].as_str();
                     if source.is_empty() {
                         break;
                     }
                     replace_regex_with_limit(source, regex, self.replacement.as_str(), &mut left[0])
-                        .map_replaced_to(0)
+                        .map_replaced_to(ActiveBuffer::First)
                 }
-                Some(_) => unreachable!("active buffer index must be 0 or 1"),
             };
             match result {
                 RegexReplaceOutcome::NoMatch => {}
@@ -234,7 +233,12 @@ impl SecretRedactor {
             }
         }
         match active_buffer {
-            Some(idx) => RedactionOutcome::Text(Cow::Owned(std::mem::take(&mut buffers[idx]))),
+            Some(ActiveBuffer::First) => {
+                RedactionOutcome::Text(Cow::Owned(std::mem::take(&mut buffers[0])))
+            }
+            Some(ActiveBuffer::Second) => {
+                RedactionOutcome::Text(Cow::Owned(std::mem::take(&mut buffers[1])))
+            }
             None => RedactionOutcome::Text(Cow::Borrowed(input)),
         }
     }
@@ -334,17 +338,23 @@ enum RegexReplaceResult {
     OutputLimitExceeded,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveBuffer {
+    First,
+    Second,
+}
+
 enum RegexReplaceOutcome {
     NoMatch,
-    Replaced(usize),
+    Replaced(ActiveBuffer),
     OutputLimitExceeded,
 }
 
 impl RegexReplaceResult {
-    fn map_replaced_to(self, buffer_idx: usize) -> RegexReplaceOutcome {
+    fn map_replaced_to(self, buffer: ActiveBuffer) -> RegexReplaceOutcome {
         match self {
             Self::NoMatch => RegexReplaceOutcome::NoMatch,
-            Self::Replaced => RegexReplaceOutcome::Replaced(buffer_idx),
+            Self::Replaced => RegexReplaceOutcome::Replaced(buffer),
             Self::OutputLimitExceeded => RegexReplaceOutcome::OutputLimitExceeded,
         }
     }
