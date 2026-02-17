@@ -377,10 +377,9 @@ fn build_grep_response(
     diag: TraversalDiagnostics,
     counters: GrepSkipCounters,
     started: &Instant,
+    stable_sort: bool,
 ) -> GrepResponse {
-    if matches.len() > 1 && !matches_sorted_by_path_line(&matches) {
-        matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
-    }
+    maybe_sort_grep_matches(&mut matches, stable_sort);
     GrepResponse {
         matches,
         truncated: diag.truncated(),
@@ -394,6 +393,13 @@ fn build_grep_response(
         skipped_walk_errors: diag.skipped_walk_errors(),
         skipped_io_errors: diag.skipped_io_errors(),
         skipped_dangling_symlink_targets: diag.skipped_dangling_symlink_targets(),
+    }
+}
+
+#[cfg(feature = "grep")]
+fn maybe_sort_grep_matches(matches: &mut [GrepMatch], stable_sort: bool) {
+    if stable_sort && matches.len() > 1 && !matches_sorted_by_path_line(matches) {
+        matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
     }
 }
 
@@ -478,7 +484,13 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             let prefix_denied_or_skipped =
                 ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
             if prefix_denied_or_skipped {
-                return Ok(build_grep_response(matches, diag, counters, &started));
+                return Ok(build_grep_response(
+                    matches,
+                    diag,
+                    counters,
+                    &started,
+                    ctx.policy.traversal.stable_sort,
+                ));
             }
 
             // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
@@ -489,7 +501,13 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 false
             };
             if probe_denied_or_skipped {
-                return Ok(build_grep_response(matches, diag, counters, &started));
+                return Ok(build_grep_response(
+                    matches,
+                    diag,
+                    counters,
+                    &started,
+                    ctx.policy.traversal.stable_sort,
+                ));
             }
             Some(walk_root)
         }
@@ -747,10 +765,22 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             if source.kind() == std::io::ErrorKind::NotFound
                 && path.as_path() != std::path::Path::new(".") =>
         {
-            return Ok(build_grep_response(matches, diag, counters, &started));
+            return Ok(build_grep_response(
+                matches,
+                diag,
+                counters,
+                &started,
+                ctx.policy.traversal.stable_sort,
+            ));
         }
         Err(err) => return Err(err),
     };
 
-    Ok(build_grep_response(matches, diag, counters, &started))
+    Ok(build_grep_response(
+        matches,
+        diag,
+        counters,
+        &started,
+        ctx.policy.traversal.stable_sort,
+    ))
 }

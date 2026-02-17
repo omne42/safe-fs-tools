@@ -62,10 +62,9 @@ fn build_glob_response(
     mut matches: Vec<PathBuf>,
     diag: TraversalDiagnostics,
     started: &Instant,
+    stable_sort: bool,
 ) -> GlobResponse {
-    if matches.len() > 1 && !matches_sorted_by_path(&matches) {
-        matches.sort();
-    }
+    maybe_sort_glob_matches(&mut matches, stable_sort);
     GlobResponse {
         matches,
         truncated: diag.truncated(),
@@ -81,6 +80,13 @@ fn build_glob_response(
 }
 
 #[cfg(feature = "glob")]
+fn maybe_sort_glob_matches(matches: &mut [PathBuf], stable_sort: bool) {
+    if stable_sort && matches.len() > 1 && !matches_sorted_by_path(matches) {
+        matches.sort();
+    }
+}
+
+#[cfg(feature = "glob")]
 fn matches_sorted_by_path(matches: &[PathBuf]) -> bool {
     matches.windows(2).all(|pair| pair[0] <= pair[1])
 }
@@ -89,7 +95,7 @@ fn matches_sorted_by_path(matches: &[PathBuf]) -> bool {
 mod tests {
     use std::path::PathBuf;
 
-    use super::matches_sorted_by_path;
+    use super::{matches_sorted_by_path, maybe_sort_glob_matches};
 
     #[test]
     fn match_order_detects_sorted_input() {
@@ -105,6 +111,26 @@ mod tests {
     fn match_order_detects_unsorted_input() {
         let matches = vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")];
         assert!(!matches_sorted_by_path(&matches));
+    }
+
+    #[test]
+    fn maybe_sort_glob_matches_respects_stable_sort_enabled() {
+        let mut matches = vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")];
+        maybe_sort_glob_matches(&mut matches, true);
+        assert_eq!(
+            matches,
+            vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")]
+        );
+    }
+
+    #[test]
+    fn maybe_sort_glob_matches_skips_sort_when_stable_sort_disabled() {
+        let mut matches = vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")];
+        maybe_sort_glob_matches(&mut matches, false);
+        assert_eq!(
+            matches,
+            vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")]
+        );
     }
 }
 
@@ -136,7 +162,12 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             let prefix_denied_or_skipped =
                 ctx.redactor.is_path_denied(&prefix) || ctx.is_traversal_path_skipped(&prefix);
             if prefix_denied_or_skipped {
-                return Ok(build_glob_response(matches, diag, &started));
+                return Ok(build_glob_response(
+                    matches,
+                    diag,
+                    &started,
+                    ctx.policy.traversal.stable_sort,
+                ));
             }
 
             // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
@@ -147,7 +178,12 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                 false
             };
             if probe_denied_or_skipped {
-                return Ok(build_glob_response(matches, diag, &started));
+                return Ok(build_glob_response(
+                    matches,
+                    diag,
+                    &started,
+                    ctx.policy.traversal.stable_sort,
+                ));
             }
             Some(walk_root)
         }
@@ -186,10 +222,20 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
             if source.kind() == std::io::ErrorKind::NotFound
                 && path.as_path() != std::path::Path::new(".") =>
         {
-            return Ok(build_glob_response(matches, diag, &started));
+            return Ok(build_glob_response(
+                matches,
+                diag,
+                &started,
+                ctx.policy.traversal.stable_sort,
+            ));
         }
         Err(err) => return Err(err),
     };
 
-    Ok(build_glob_response(matches, diag, &started))
+    Ok(build_glob_response(
+        matches,
+        diag,
+        &started,
+        ctx.policy.traversal.stable_sort,
+    ))
 }

@@ -191,7 +191,6 @@ enum EntryOutcome {
 enum CountOnlyOutcome {
     Counted,
     Denied,
-    SkippedIoError,
 }
 
 struct EntryCandidate {
@@ -301,13 +300,6 @@ fn process_dir_entry_count_only(
         return Ok(CountOnlyOutcome::Denied);
     }
 
-    // Keep parity with normal flow for best-effort IO error accounting.
-    // For `max_entries=0`, callers only need truncation presence, but entries that
-    // fail basic type probing should still count toward `skipped_io_errors`.
-    if entry.file_type().is_err() {
-        return Ok(CountOnlyOutcome::SkippedIoError);
-    }
-
     Ok(CountOnlyOutcome::Counted)
 }
 
@@ -403,9 +395,6 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                     break;
                 }
                 CountOnlyOutcome::Denied => {}
-                CountOnlyOutcome::SkippedIoError => {
-                    skipped_io_errors = skipped_io_errors.saturating_add(1);
-                }
             }
             continue;
         }

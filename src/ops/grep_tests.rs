@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use super::{
     GrepMatch, MAX_REGEX_LINE_BYTES, ReadLineCapped, ReadLineCappedOptions,
     matches_sorted_by_path_line, max_capped_line_bytes_for_request, maybe_shrink_line_buffer,
+    maybe_sort_grep_matches,
 };
 
 fn m(path: &str, line: u64) -> GrepMatch {
@@ -25,6 +26,22 @@ fn match_order_detects_sorted_input() {
 fn match_order_detects_unsorted_input() {
     let matches = vec![m("b.txt", 1), m("a.txt", 2)];
     assert!(!matches_sorted_by_path_line(&matches));
+}
+
+#[test]
+fn maybe_sort_grep_matches_respects_stable_sort_enabled() {
+    let mut matches = vec![m("b.txt", 1), m("a.txt", 2)];
+    maybe_sort_grep_matches(&mut matches, true);
+    assert_eq!(matches[0].path, PathBuf::from("a.txt"));
+    assert_eq!(matches[1].path, PathBuf::from("b.txt"));
+}
+
+#[test]
+fn maybe_sort_grep_matches_skips_sort_when_stable_sort_disabled() {
+    let mut matches = vec![m("b.txt", 1), m("a.txt", 2)];
+    maybe_sort_grep_matches(&mut matches, false);
+    assert_eq!(matches[0].path, PathBuf::from("b.txt"));
+    assert_eq!(matches[1].path, PathBuf::from("a.txt"));
 }
 
 #[test]
