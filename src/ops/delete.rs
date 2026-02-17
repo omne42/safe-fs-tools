@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -53,13 +53,47 @@ fn pattern_has_glob_meta(pattern: &str) -> bool {
         .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}' | b'!'))
 }
 
+fn component_has_glob_meta(component: &std::ffi::OsStr) -> bool {
+    component
+        .as_encoded_bytes()
+        .iter()
+        .any(|byte| matches!(*byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}' | b'!'))
+}
+
+fn leading_literal_glob_prefix(pattern: &str) -> Option<PathBuf> {
+    let mut prefix = PathBuf::new();
+    for component in Path::new(pattern).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(segment) => {
+                if component_has_glob_meta(segment) {
+                    break;
+                }
+                prefix.push(segment);
+            }
+            _ => break,
+        }
+    }
+    if prefix.as_os_str().is_empty() {
+        None
+    } else {
+        Some(prefix)
+    }
+}
+
 fn deny_globs_require_descendant_scan(deny_globs: &[String], target_relative: &Path) -> bool {
     for pattern in deny_globs {
         let normalized = crate::path_utils_internal::normalize_glob_pattern_for_matching(pattern);
-        if pattern_has_glob_meta(&normalized) {
-            return true;
+        if !pattern_has_glob_meta(&normalized) {
+            if Path::new(normalized.as_str()).starts_with(target_relative) {
+                return true;
+            }
+            continue;
         }
-        if Path::new(normalized.as_str()).starts_with(target_relative) {
+        let Some(prefix) = leading_literal_glob_prefix(&normalized) else {
+            return true;
+        };
+        if prefix.starts_with(target_relative) || target_relative.starts_with(&prefix) {
             return true;
         }
     }
@@ -488,6 +522,33 @@ mod recursive_scan_tests {
     #[test]
     fn scan_required_when_pattern_uses_glob_meta() {
         let deny_globs = vec!["public/*.txt".to_string()];
+        assert!(deny_globs_require_descendant_scan(
+            &deny_globs,
+            Path::new("public")
+        ));
+    }
+
+    #[test]
+    fn scan_skipped_when_glob_prefix_is_disjoint() {
+        let deny_globs = vec!["private/*.txt".to_string()];
+        assert!(!deny_globs_require_descendant_scan(
+            &deny_globs,
+            Path::new("public")
+        ));
+    }
+
+    #[test]
+    fn scan_required_when_glob_prefix_overlaps_target() {
+        let deny_globs = vec!["private/*.txt".to_string()];
+        assert!(deny_globs_require_descendant_scan(
+            &deny_globs,
+            Path::new("private")
+        ));
+    }
+
+    #[test]
+    fn scan_required_when_glob_has_no_literal_prefix() {
+        let deny_globs = vec!["**/.git/**".to_string()];
         assert!(deny_globs_require_descendant_scan(
             &deny_globs,
             Path::new("public")

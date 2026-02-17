@@ -4,30 +4,41 @@ use std::path::{Component, Path, PathBuf};
 use crate::error::{Error, Result};
 
 #[cfg(unix)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
+    Some(a.dev() == b.dev() && a.ino() == b.ino())
 }
 
 #[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+#[inline]
+fn windows_identity_fields_match<T: Eq, U: Eq>(
+    a_volume: Option<T>,
+    a_index: Option<U>,
+    b_volume: Option<T>,
+    b_index: Option<U>,
+) -> Option<bool> {
+    match (a_volume, a_index, b_volume, b_index) {
+        (Some(a_volume), Some(a_index), Some(b_volume), Some(b_index)) => {
+            Some(a_volume == b_volume && a_index == b_index)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::windows::fs::MetadataExt;
-    match (
+    windows_identity_fields_match(
         a.volume_serial_number(),
         a.file_index(),
         b.volume_serial_number(),
         b.file_index(),
-    ) {
-        (Some(a_volume), Some(a_index), Some(b_volume), Some(b_index)) => {
-            a_volume == b_volume && a_index == b_index
-        }
-        _ => false,
-    }
+    )
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
-    false
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
+    None
 }
 
 #[cfg(any(unix, windows))]
@@ -115,14 +126,26 @@ fn cleanup_created_dir(
     verify_parent_identity(parent, parent_relative, expected_parent_meta)?;
     let current_meta = fs::symlink_metadata(next)
         .map_err(|err| Error::io_path("symlink_metadata", relative, err))?;
-    if current_meta.file_type().is_symlink()
-        || !current_meta.is_dir()
-        || !metadata_same_file(created_meta, &current_meta)
-    {
+    if current_meta.file_type().is_symlink() || !current_meta.is_dir() {
         return Err(Error::InvalidPath(format!(
             "path {} changed before cleanup after validation failure: {validation_err}",
             relative.display()
         )));
+    }
+    match metadata_same_file(created_meta, &current_meta) {
+        Some(true) => {}
+        Some(false) => {
+            return Err(Error::InvalidPath(format!(
+                "path {} changed before cleanup after validation failure: {validation_err}",
+                relative.display()
+            )));
+        }
+        None => {
+            return Err(Error::InvalidPath(format!(
+                "path {} identity could not be verified before cleanup after validation failure: {validation_err}",
+                relative.display()
+            )));
+        }
     }
     fs::remove_dir(next).map_err(|cleanup_err| {
         let cleanup_context = std::io::Error::new(
@@ -155,14 +178,26 @@ fn verify_parent_identity(
 ) -> Result<()> {
     let current_parent_meta = fs::symlink_metadata(parent)
         .map_err(|err| Error::io_path("symlink_metadata", parent_relative, err))?;
-    if current_parent_meta.file_type().is_symlink()
-        || !current_parent_meta.is_dir()
-        || !metadata_same_file(expected_parent_meta, &current_parent_meta)
-    {
+    if current_parent_meta.file_type().is_symlink() || !current_parent_meta.is_dir() {
         return Err(Error::InvalidPath(format!(
             "parent path {} changed during operation",
             parent_relative.display()
         )));
+    }
+    match metadata_same_file(expected_parent_meta, &current_parent_meta) {
+        Some(true) => {}
+        Some(false) => {
+            return Err(Error::InvalidPath(format!(
+                "parent path {} changed during operation",
+                parent_relative.display()
+            )));
+        }
+        None => {
+            return Err(Error::InvalidPath(format!(
+                "parent path {} identity could not be verified during operation",
+                parent_relative.display()
+            )));
+        }
     }
     Ok(())
 }
@@ -372,4 +407,37 @@ pub(super) fn ensure_dir_under_root(
     }
 
     Ok(current)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::windows_identity_fields_match;
+
+    #[test]
+    fn windows_identity_requires_all_fields_present() {
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(None, Some(1), None, Some(1)),
+            None
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(1), None, Some(1), None),
+            None
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(None, None, None, None),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_identity_compares_values_when_all_present() {
+        assert_eq!(
+            windows_identity_fields_match(Some(7_u32), Some(11_u64), Some(7_u32), Some(11_u64)),
+            Some(true)
+        );
+        assert_eq!(
+            windows_identity_fields_match(Some(7_u32), Some(11_u64), Some(9_u32), Some(11_u64)),
+            Some(false)
+        );
+    }
 }
