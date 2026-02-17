@@ -47,12 +47,35 @@ fn missing_response(requested_path: &Path) -> DeleteResponse {
     }
 }
 
+fn pattern_has_glob_meta(pattern: &str) -> bool {
+    pattern
+        .bytes()
+        .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}' | b'!'))
+}
+
+fn deny_globs_require_descendant_scan(deny_globs: &[String], target_relative: &Path) -> bool {
+    for pattern in deny_globs {
+        let normalized = crate::path_utils_internal::normalize_glob_pattern_for_matching(pattern);
+        if pattern_has_glob_meta(&normalized) {
+            return true;
+        }
+        if Path::new(normalized.as_str()).starts_with(target_relative) {
+            return true;
+        }
+    }
+    false
+}
+
 fn ensure_recursive_delete_allows_descendants(
     ctx: &Context,
     target_abs: &Path,
     target_relative: &Path,
 ) -> Result<()> {
-    if ctx.policy.secrets.deny_globs.is_empty() {
+    let deny_globs = &ctx.policy.secrets.deny_globs;
+    if deny_globs.is_empty() {
+        return Ok(());
+    }
+    if !deny_globs_require_descendant_scan(deny_globs, target_relative) {
         return Ok(());
     }
 
@@ -433,4 +456,41 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
         deleted: true,
         kind,
     })
+}
+
+#[cfg(test)]
+mod recursive_scan_tests {
+    use std::path::Path;
+
+    use super::deny_globs_require_descendant_scan;
+
+    #[test]
+    fn scan_skipped_when_literal_patterns_cannot_match_descendants() {
+        let deny_globs = vec![
+            "private/token.txt".to_string(),
+            "secrets/key.pem".to_string(),
+        ];
+        assert!(!deny_globs_require_descendant_scan(
+            &deny_globs,
+            Path::new("public")
+        ));
+    }
+
+    #[test]
+    fn scan_required_when_literal_pattern_is_under_target_subtree() {
+        let deny_globs = vec!["public/blocked.txt".to_string()];
+        assert!(deny_globs_require_descendant_scan(
+            &deny_globs,
+            Path::new("public")
+        ));
+    }
+
+    #[test]
+    fn scan_required_when_pattern_uses_glob_meta() {
+        let deny_globs = vec!["public/*.txt".to_string()];
+        assert!(deny_globs_require_descendant_scan(
+            &deny_globs,
+            Path::new("public")
+        ));
+    }
 }
