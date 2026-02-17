@@ -27,6 +27,13 @@ fn max_estimated_list_dir_response_bytes(max_entries: usize, max_line_bytes: usi
     max_entries.saturating_mul(max_line_bytes)
 }
 
+fn runtime_max_entries_cap(max_entries: usize) -> usize {
+    // Guardrail for extreme policies/requests: retaining a very large top-k heap can
+    // inflate memory well beyond the response-byte budget.
+    const MAX_RUNTIME_RETAINED_ENTRIES: usize = 250_000;
+    max_entries.min(MAX_RUNTIME_RETAINED_ENTRIES)
+}
+
 #[cfg(unix)]
 fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
@@ -405,10 +412,11 @@ fn is_list_dir_truncated(
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
     ctx.ensure_policy_permission(ctx.policy.permissions.list_dir, "list_dir")?;
 
-    let max_entries = request
+    let requested_max_entries = request
         .max_entries
         .unwrap_or(ctx.policy.limits.max_results)
         .min(ctx.policy.limits.max_results);
+    let max_entries = runtime_max_entries_cap(requested_max_entries);
 
     let (dir, relative_dir, requested_path) =
         ctx.canonical_path_in_root(&request.root_id, &request.path)?;
@@ -640,7 +648,7 @@ mod tests {
         entry_kind_and_size_no_follow, initial_entries_capacity, initial_heap_capacity,
         is_list_dir_truncated, list_entry_estimated_response_bytes,
         list_entry_min_estimated_response_bytes, max_estimated_list_dir_response_bytes,
-        relative_entry_path, relative_entry_path_for_deny,
+        relative_entry_path, relative_entry_path_for_deny, runtime_max_entries_cap,
     };
 
     #[test]
@@ -657,6 +665,19 @@ mod tests {
         assert_eq!(initial_entries_capacity(16), 16);
         assert_eq!(initial_entries_capacity(4096), 4096);
         assert_eq!(initial_entries_capacity(100_000), 4096);
+    }
+
+    #[test]
+    fn runtime_max_entries_cap_preserves_small_values() {
+        assert_eq!(runtime_max_entries_cap(0), 0);
+        assert_eq!(runtime_max_entries_cap(16), 16);
+        assert_eq!(runtime_max_entries_cap(250_000), 250_000);
+    }
+
+    #[test]
+    fn runtime_max_entries_cap_bounds_extreme_values() {
+        assert_eq!(runtime_max_entries_cap(250_001), 250_000);
+        assert_eq!(runtime_max_entries_cap(1_000_000), 250_000);
     }
 
     #[test]

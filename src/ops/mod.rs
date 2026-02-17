@@ -121,4 +121,7 @@ pub enum ScanLimitReason {
     /// Traversal stopped after collecting too many matches, as bounded by
     /// `limits.max_results`.
     Results,
+    /// Traversal stopped after estimated response bytes exceeded the configured
+    /// response budget (`limits.max_glob_bytes` or `limits.max_results * limits.max_line_bytes`).
+    ResponseBytes,
 }

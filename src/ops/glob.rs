@@ -211,7 +211,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                 }
                 let path_bytes = file.relative_path.as_os_str().as_encoded_bytes().len();
                 if response_bytes.saturating_add(path_bytes) > max_response_bytes {
-                    diag.mark_limit_reached(ScanLimitReason::Results);
+                    diag.mark_limit_reached(ScanLimitReason::ResponseBytes);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
                 response_bytes = response_bytes.saturating_add(path_bytes);

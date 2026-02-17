@@ -422,7 +422,7 @@ fn glob_truncates_when_response_byte_budget_is_exceeded() {
     assert!(resp.scan_limit_reached);
     assert_eq!(
         resp.scan_limit_reason,
-        Some(safe_fs_tools::ops::ScanLimitReason::Results)
+        Some(safe_fs_tools::ops::ScanLimitReason::ResponseBytes)
     );
 }
 
@@ -467,6 +467,6 @@ fn glob_uses_dedicated_response_budget_when_configured() {
     assert!(resp.scan_limit_reached);
     assert_eq!(
         resp.scan_limit_reason,
-        Some(safe_fs_tools::ops::ScanLimitReason::Results)
+        Some(safe_fs_tools::ops::ScanLimitReason::ResponseBytes)
     );
 }

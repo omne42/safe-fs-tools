@@ -779,7 +779,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 // If even an empty text payload would exceed budget, stop before expensive
                 // redaction/truncation work.
                 if estimated_response_bytes.saturating_add(path_bytes) > max_response_bytes {
-                    diag.mark_limit_reached(ScanLimitReason::Results);
+                    diag.mark_limit_reached(ScanLimitReason::ResponseBytes);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
                 let (text, line_truncated) = if has_redact_regexes {
@@ -824,7 +824,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 // when this match would be truncated.
                 let entry_bytes = path_bytes.saturating_add(text.len());
                 if estimated_response_bytes.saturating_add(entry_bytes) > max_response_bytes {
-                    diag.mark_limit_reached(ScanLimitReason::Results);
+                    diag.mark_limit_reached(ScanLimitReason::ResponseBytes);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
                 estimated_response_bytes = estimated_response_bytes.saturating_add(entry_bytes);

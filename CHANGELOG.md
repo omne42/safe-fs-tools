@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `glob`/`grep` now report response-byte budget truncation as `scan_limit_reason=response_bytes` (instead of `results`), improving limit observability when byte budgets trigger early stops.
+- `list_dir` now applies a conservative runtime cap to retained top-k entries, reducing worst-case heap growth under extreme `max_entries` policy/request combinations.
 - `perf_ops` now includes dedicated redaction-path benchmarks (`read/full_large_file_with_redaction_regex` and `grep/plain_query_stable_sort_with_redaction_regex`), so `read`/`grep` regressions can be compared explicitly across no-redaction vs regex-redaction paths.
 - Added Linux/Android regression coverage for the `src has no xattrs` branch in `preserve_unix_security_metadata`, ensuring destination xattrs are pruned when xattr copy is enabled.
 - `perf-safety` ASan workflow now runs targeted Unix xattr metadata regression tests explicitly, so `preserve_unix_security_metadata` coverage remains pinned in sanitizer runs.

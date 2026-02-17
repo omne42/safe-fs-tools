@@ -956,7 +956,7 @@ fn grep_truncation_is_deterministic_under_response_byte_budget() {
     assert!(resp.scan_limit_reached);
     assert_eq!(
         resp.scan_limit_reason,
-        Some(safe_fs_tools::ops::ScanLimitReason::Results)
+        Some(safe_fs_tools::ops::ScanLimitReason::ResponseBytes)
     );
 }
 
