@@ -78,7 +78,7 @@ pub struct ListDirResponse {
 #[derive(Debug)]
 struct Candidate {
     file_name: OsString,
-    name: String,
+    cached_lossy_name: OnceCell<String>,
 }
 
 impl Candidate {
@@ -88,14 +88,21 @@ impl Candidate {
             file_name,
             cached_lossy_name,
         } = entry;
-        let name = if let Some(valid_utf8) = file_name.to_str() {
-            valid_utf8.to_string()
+        Self {
+            file_name,
+            cached_lossy_name,
+        }
+    }
+
+    #[inline]
+    fn name(&self) -> &str {
+        if let Some(valid_utf8) = self.file_name.to_str() {
+            valid_utf8
         } else {
-            cached_lossy_name
-                .into_inner()
-                .unwrap_or_else(|| file_name.to_string_lossy().into_owned())
-        };
-        Self { file_name, name }
+            self.cached_lossy_name
+                .get_or_init(|| self.file_name.to_string_lossy().into_owned())
+                .as_str()
+        }
     }
 
     #[inline]
@@ -105,9 +112,17 @@ impl Candidate {
         kind: &'static str,
         size_bytes: u64,
     ) -> ListDirEntry {
+        let path = relative_entry_path(relative_dir, self.file_name.as_os_str());
+        let name = match self.file_name.into_string() {
+            Ok(valid_utf8) => valid_utf8,
+            Err(file_name) => self
+                .cached_lossy_name
+                .into_inner()
+                .unwrap_or_else(|| file_name.to_string_lossy().into_owned()),
+        };
         ListDirEntry {
-            path: relative_entry_path(relative_dir, &self.file_name),
-            name: self.name,
+            path,
+            name,
             kind: kind.to_string(),
             size_bytes,
         }
@@ -116,7 +131,7 @@ impl Candidate {
 
 impl PartialEq for Candidate {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+        self.name() == other.name()
             && Path::new(self.file_name.as_os_str()) == Path::new(other.file_name.as_os_str())
     }
 }
@@ -131,7 +146,7 @@ impl PartialOrd for Candidate {
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name.cmp(&other.name).then_with(|| {
+        self.name().cmp(other.name()).then_with(|| {
             Path::new(self.file_name.as_os_str()).cmp(Path::new(other.file_name.as_os_str()))
         })
     }
@@ -168,7 +183,7 @@ impl EntryCandidate {
 
     #[inline]
     fn sorts_before(&self, other: &Candidate) -> bool {
-        self.compare_name(other.name.as_str()).then_with(|| {
+        self.compare_name(other.name()).then_with(|| {
             Path::new(self.file_name.as_os_str()).cmp(Path::new(other.file_name.as_os_str()))
         }) == std::cmp::Ordering::Less
     }
@@ -440,7 +455,7 @@ fn list_entry_response_bytes(relative_dir: &Path, candidate: &Candidate, kind: &
             .saturating_add(file_name_bytes)
     };
     path_bytes
-        .saturating_add(candidate.name.len())
+        .saturating_add(candidate.name().len())
         .saturating_add(kind.len())
 }
 
@@ -467,33 +482,38 @@ mod tests {
     }
 
     #[test]
-    fn candidate_heap_into_sorted_vec_preserves_name_then_path_order() {
+    fn candidate_heap_into_sorted_vec_preserves_display_name_then_path_order() {
         let mut heap = BinaryHeap::new();
         heap.push(Candidate {
             file_name: OsString::from("b-alpha"),
-            name: "alpha".to_string(),
+            cached_lossy_name: std::cell::OnceCell::new(),
         });
         heap.push(Candidate {
             file_name: OsString::from("a-beta"),
-            name: "beta".to_string(),
+            cached_lossy_name: std::cell::OnceCell::new(),
         });
         heap.push(Candidate {
             file_name: OsString::from("a-alpha"),
-            name: "alpha".to_string(),
+            cached_lossy_name: std::cell::OnceCell::new(),
         });
 
         let ordered = heap
             .into_sorted_vec()
             .into_iter()
-            .map(|candidate| (candidate.name, PathBuf::from(candidate.file_name)))
+            .map(|candidate| {
+                (
+                    candidate.name().to_string(),
+                    PathBuf::from(candidate.file_name.as_os_str()),
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(
             ordered,
             vec![
-                ("alpha".to_string(), PathBuf::from("a-alpha")),
-                ("alpha".to_string(), PathBuf::from("b-alpha")),
-                ("beta".to_string(), PathBuf::from("a-beta")),
+                ("a-alpha".to_string(), PathBuf::from("a-alpha")),
+                ("a-beta".to_string(), PathBuf::from("a-beta")),
+                ("b-alpha".to_string(), PathBuf::from("b-alpha")),
             ]
         );
     }
@@ -566,7 +586,7 @@ mod tests {
     fn entry_response_bytes_include_path_name_and_kind() {
         let candidate = Candidate {
             file_name: OsString::from("file.txt"),
-            name: "file.txt".to_string(),
+            cached_lossy_name: std::cell::OnceCell::new(),
         };
         let bytes = list_entry_response_bytes(std::path::Path::new("nested"), &candidate, "file");
         assert!(bytes >= "nested/file.txt".len() + "file.txt".len() + "file".len());
@@ -583,7 +603,7 @@ mod tests {
         };
         let other = Candidate {
             file_name: OsString::from("y"),
-            name: "z".to_string(),
+            cached_lossy_name: std::cell::OnceCell::new(),
         };
 
         let _ = candidate.sorts_before(&other);

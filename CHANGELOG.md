@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unix xattr sync now skips per-attribute destination-value probes when the destination starts with no xattrs, removing one extra `fgetxattr` syscall per source attribute on fresh temp files.
 - `delete --recursive` deny-glob pre-scan now treats `!` as a literal unless it appears inside a character class (`[...]`), avoiding unnecessary subtree pre-scans for literal-bang paths like `!private/token.txt`.
 - `delete --recursive` deny-glob pre-scan now uses boundary helpers with Windows case-insensitive semantics for literal/prefix overlap checks, preventing case-variant patterns from skipping required descendant scans on Windows.
+- `list_dir` top-k candidate retention now keeps UTF-8 display names lazy (store `OsString` + on-demand lossy cache) instead of eagerly duplicating `String` names, reducing retained memory for large directory listings.
 - `delete --recursive` deny pre-scan now stores target-relative suffixes in its traversal stack (instead of repeating full root-relative prefixes), reducing transient memory footprint on deep/wide directory trees.
 - `delete --recursive` deny pre-scan stack now stores only target-relative suffixes and derives absolute paths on demand, removing an extra per-node `PathBuf` from queued traversal state in wide directory trees.
 - `delete --recursive` deny pre-scan now keeps target-relative suffix joins borrow-first (`Cow<Path>`), avoiding per-entry relative `PathBuf` clones when scanning from the root target (`.`).
