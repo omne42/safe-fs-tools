@@ -80,11 +80,18 @@ struct Candidate {
 impl Candidate {
     #[inline]
     fn from_entry(entry: EntryCandidate) -> Self {
-        let name = entry.name_for_output();
-        Self {
-            file_name: entry.file_name,
-            name,
-        }
+        let EntryCandidate {
+            file_name,
+            cached_lossy_name,
+        } = entry;
+        let name = if let Some(valid_utf8) = file_name.to_str() {
+            valid_utf8.to_string()
+        } else {
+            cached_lossy_name
+                .into_inner()
+                .unwrap_or_else(|| file_name.to_string_lossy().into_owned())
+        };
+        Self { file_name, name }
     }
 
     #[inline]
@@ -160,16 +167,6 @@ impl EntryCandidate {
         self.compare_name(other.name.as_str()).then_with(|| {
             Path::new(self.file_name.as_os_str()).cmp(Path::new(other.file_name.as_os_str()))
         }) == std::cmp::Ordering::Less
-    }
-
-    #[inline]
-    fn name_for_output(&self) -> String {
-        if let Some(valid_utf8) = self.file_name.to_str() {
-            return valid_utf8.to_string();
-        }
-        self.cached_lossy_name
-            .get_or_init(|| self.file_name.to_string_lossy().into_owned())
-            .clone()
     }
 }
 

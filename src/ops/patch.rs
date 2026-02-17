@@ -105,7 +105,9 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
         });
     }
 
-    let changed = updated != content;
+    // Fast path: most real patches change byte length, so avoid a full string
+    // equality scan when lengths already differ.
+    let changed = updated.len() != content.len() || updated != content;
     if changed {
         super::io::write_bytes_atomic_checked(&path, &relative, updated.as_bytes(), identity)?;
     }
