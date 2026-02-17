@@ -301,26 +301,37 @@ fn validate_canonical_roots_non_overlapping(canonical_roots: &[CanonicalRoot]) -
 
 #[cfg(windows)]
 fn validate_root_group_non_overlapping(roots: &[&CanonicalRoot]) -> Result<()> {
-    for (idx, a) in roots.iter().enumerate() {
-        for b in roots.iter().skip(idx + 1) {
-            if canonical_paths_equal(&a.canonical_path, &b.canonical_path) {
-                return Err(overlap_error(
-                    &a.id,
-                    &a.canonical_path,
-                    &b.id,
-                    &b.canonical_path,
-                    true,
-                ));
-            }
-            if canonical_paths_overlap(&a.canonical_path, &b.canonical_path) {
-                return Err(overlap_error(
-                    &a.id,
-                    &a.canonical_path,
-                    &b.id,
-                    &b.canonical_path,
-                    false,
-                ));
-            }
+    if roots.len() < 2 {
+        return Ok(());
+    }
+
+    // Within a drive/UNC group, case-insensitive lexical order allows overlap
+    // checks with only adjacent pairs instead of O(n^2) pairwise checks.
+    let mut sorted = roots.to_vec();
+    sorted.sort_unstable_by(|a, b| {
+        canonical_paths_cmp_case_insensitive(&a.canonical_path, &b.canonical_path)
+    });
+
+    for pair in sorted.windows(2) {
+        let a = pair[0];
+        let b = pair[1];
+        if canonical_paths_equal(&a.canonical_path, &b.canonical_path) {
+            return Err(overlap_error(
+                &a.id,
+                &a.canonical_path,
+                &b.id,
+                &b.canonical_path,
+                true,
+            ));
+        }
+        if canonical_paths_overlap(&a.canonical_path, &b.canonical_path) {
+            return Err(overlap_error(
+                &a.id,
+                &a.canonical_path,
+                &b.id,
+                &b.canonical_path,
+                false,
+            ));
         }
     }
     Ok(())
@@ -356,4 +367,52 @@ fn canonical_paths_equal(a: &Path, b: &Path) -> bool {
 fn canonical_paths_overlap(a: &Path, b: &Path) -> bool {
     crate::path_utils::starts_with_case_insensitive_normalized(a, b)
         || crate::path_utils::starts_with_case_insensitive_normalized(b, a)
+}
+
+#[cfg(windows)]
+fn canonical_paths_cmp_case_insensitive(a: &Path, b: &Path) -> std::cmp::Ordering {
+    crate::platform::windows_path_compare::os_str_cmp_case_insensitive(a.as_os_str(), b.as_os_str())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{CanonicalRoot, Error, RootMode, validate_root_group_non_overlapping};
+
+    fn canonical_root(id: &str, canonical_path: &str) -> CanonicalRoot {
+        CanonicalRoot {
+            id: id.to_string(),
+            canonical_path: PathBuf::from(canonical_path),
+            mode: RootMode::ReadOnly,
+        }
+    }
+
+    #[test]
+    fn windows_group_overlap_detects_case_insensitive_parent_child() {
+        let root_a = canonical_root("root_a", r"C:\A\child");
+        let root_b = canonical_root("root_b", r"c:\a");
+        let root_c = canonical_root("root_c", r"C:\B");
+        let roots = vec![&root_a, &root_b, &root_c];
+
+        let err =
+            validate_root_group_non_overlapping(&roots).expect_err("overlap should be rejected");
+        match err {
+            Error::InvalidPolicy(message) => {
+                assert!(message.contains("overlaps with root"), "message: {message}");
+                assert!(message.contains("root_a"), "message: {message}");
+                assert!(message.contains("root_b"), "message: {message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn windows_group_non_overlapping_paths_are_accepted() {
+        let root_a = canonical_root("root_a", r"C:\Alpha");
+        let root_b = canonical_root("root_b", r"C:\Beta");
+        let roots = vec![&root_a, &root_b];
+
+        validate_root_group_non_overlapping(&roots).expect("non-overlapping roots should pass");
+    }
 }

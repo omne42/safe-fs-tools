@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
@@ -23,26 +24,32 @@ unsafe extern "system" {
 }
 
 pub(crate) fn os_str_eq_case_insensitive(a: &OsStr, b: &OsStr) -> bool {
+    os_str_cmp_case_insensitive(a, b) == Ordering::Equal
+}
+
+pub(crate) fn os_str_cmp_case_insensitive(a: &OsStr, b: &OsStr) -> Ordering {
+    const CSTR_LESS_THAN: i32 = 1;
     const CSTR_EQUAL: i32 = 2;
+    const CSTR_GREATER_THAN: i32 = 3;
 
     // Fast path: exact `OsStr` equality avoids UTF-16 allocations and FFI call.
     if a == b {
-        return true;
+        return Ordering::Equal;
     }
 
-    // Fast path: ASCII-only case-insensitive compare without allocations.
+    // Fast path: ASCII-only case-insensitive ordering without allocations.
     // Falls back when non-ASCII code units differ and require Windows ordinal rules.
-    if let Some(eq) = ascii_case_insensitive_eq_fast(a, b) {
-        return eq;
+    if let Some(ordering) = ascii_case_insensitive_cmp_fast(a, b) {
+        return ordering;
     }
 
     let a_wide: Vec<u16> = a.encode_wide().collect();
     let b_wide: Vec<u16> = b.encode_wide().collect();
     let Ok(a_len) = i32::try_from(a_wide.len()) else {
-        return false;
+        return fallback_os_str_ordering(a, b);
     };
     let Ok(b_len) = i32::try_from(b_wide.len()) else {
-        return false;
+        return fallback_os_str_ordering(a, b);
     };
 
     let a_ptr = if a_wide.is_empty() {
@@ -60,7 +67,16 @@ pub(crate) fn os_str_eq_case_insensitive(a: &OsStr, b: &OsStr) -> bool {
     // - `a_ptr`/`b_ptr` are null for empty strings or valid UTF-16 buffers for the given lengths.
     // - `a_wide`/`b_wide` live across the call and pointers do not escape.
     // - `ignore_case = 1` requests ordinal, case-insensitive comparison.
-    unsafe { compare_string_ordinal(a_ptr, a_len, b_ptr, b_len, 1) == CSTR_EQUAL }
+    match unsafe { compare_string_ordinal(a_ptr, a_len, b_ptr, b_len, 1) } {
+        CSTR_LESS_THAN => Ordering::Less,
+        CSTR_EQUAL => Ordering::Equal,
+        CSTR_GREATER_THAN => Ordering::Greater,
+        _ => fallback_os_str_ordering(a, b),
+    }
+}
+
+fn fallback_os_str_ordering(a: &OsStr, b: &OsStr) -> Ordering {
+    a.encode_wide().cmp(b.encode_wide())
 }
 
 #[inline]
@@ -73,16 +89,17 @@ fn lower_ascii_u16(unit: u16) -> u16 {
 }
 
 // Returns:
-// - `Some(true/false)` when ASCII-only comparison is conclusive.
+// - `Some(Ordering)` when ASCII-only comparison is conclusive.
 // - `None` when non-ASCII differences require Windows ordinal comparison.
-fn ascii_case_insensitive_eq_fast(a: &OsStr, b: &OsStr) -> Option<bool> {
+fn ascii_case_insensitive_cmp_fast(a: &OsStr, b: &OsStr) -> Option<Ordering> {
     let mut a_iter = a.encode_wide();
     let mut b_iter = b.encode_wide();
 
     loop {
         match (a_iter.next(), b_iter.next()) {
-            (None, None) => return Some(true),
-            (Some(_), None) | (None, Some(_)) => return Some(false),
+            (None, None) => return Some(Ordering::Equal),
+            (Some(_), None) => return Some(Ordering::Greater),
+            (None, Some(_)) => return Some(Ordering::Less),
             (Some(a_unit), Some(b_unit)) => {
                 if a_unit == b_unit {
                     continue;
@@ -90,13 +107,41 @@ fn ascii_case_insensitive_eq_fast(a: &OsStr, b: &OsStr) -> Option<bool> {
                 if a_unit <= 0x7f && b_unit <= 0x7f {
                     let a_lower = lower_ascii_u16(a_unit);
                     let b_lower = lower_ascii_u16(b_unit);
-                    if a_lower == b_lower {
-                        continue;
-                    }
-                    return Some(false);
+                    return Some(a_lower.cmp(&b_lower));
                 }
                 return None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use super::ascii_case_insensitive_cmp_fast;
+
+    #[test]
+    fn ascii_fast_cmp_matches_case_insensitive_expectations() {
+        assert_eq!(
+            ascii_case_insensitive_cmp_fast(OsStr::new("Alpha"), OsStr::new("alpha")),
+            Some(std::cmp::Ordering::Equal)
+        );
+        assert_eq!(
+            ascii_case_insensitive_cmp_fast(OsStr::new("alpha"), OsStr::new("beta")),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            ascii_case_insensitive_cmp_fast(OsStr::new("beta"), OsStr::new("Alpha")),
+            Some(std::cmp::Ordering::Greater)
+        );
+    }
+
+    #[test]
+    fn ascii_fast_cmp_falls_back_for_non_ascii_differences() {
+        assert_eq!(
+            ascii_case_insensitive_cmp_fast(OsStr::new("Ä"), OsStr::new("ä")),
+            None
+        );
     }
 }
