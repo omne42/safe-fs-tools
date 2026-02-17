@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -49,84 +49,15 @@ fn missing_response(requested_path: &Path) -> DeleteResponse {
     }
 }
 
-fn pattern_has_glob_meta(pattern: &str) -> bool {
-    pattern
-        .bytes()
-        .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}'))
-}
-
-fn component_has_glob_meta(component: &std::ffi::OsStr) -> bool {
-    component
-        .as_encoded_bytes()
-        .iter()
-        .any(|byte| matches!(*byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}'))
-}
-
-#[inline]
-fn starts_with_boundary_semantics(path: &Path, prefix: &Path) -> bool {
-    let normalized_path = crate::path_utils::normalized_for_boundary(path);
-    let normalized_prefix = crate::path_utils::normalized_for_boundary(prefix);
-    crate::path_utils::starts_with_case_insensitive_normalized(
-        normalized_path.as_ref(),
-        normalized_prefix.as_ref(),
-    )
-}
-
-#[inline]
-fn overlaps_by_boundary_prefix(a: &Path, b: &Path) -> bool {
-    starts_with_boundary_semantics(a, b) || starts_with_boundary_semantics(b, a)
-}
-
-fn leading_literal_glob_prefix(pattern: &str) -> Option<PathBuf> {
-    let mut prefix = PathBuf::new();
-    for component in Path::new(pattern).components() {
-        match component {
-            Component::CurDir => {}
-            Component::Normal(segment) => {
-                if component_has_glob_meta(segment) {
-                    break;
-                }
-                prefix.push(segment);
-            }
-            _ => break,
-        }
-    }
-    if prefix.as_os_str().is_empty() {
-        None
-    } else {
-        Some(prefix)
-    }
-}
-
-fn deny_globs_require_descendant_scan(deny_globs: &[String], target_relative: &Path) -> bool {
-    for pattern in deny_globs {
-        let normalized = crate::path_utils_internal::normalize_glob_pattern_for_matching(pattern);
-        if !pattern_has_glob_meta(&normalized) {
-            if starts_with_boundary_semantics(Path::new(normalized.as_str()), target_relative) {
-                return true;
-            }
-            continue;
-        }
-        let Some(prefix) = leading_literal_glob_prefix(&normalized) else {
-            return true;
-        };
-        if overlaps_by_boundary_prefix(&prefix, target_relative) {
-            return true;
-        }
-    }
-    false
-}
-
 fn ensure_recursive_delete_allows_descendants(
     ctx: &Context,
     target_abs: &Path,
     target_relative: &Path,
 ) -> Result<()> {
-    let deny_globs = &ctx.policy.secrets.deny_globs;
-    if deny_globs.is_empty() {
-        return Ok(());
-    }
-    if !deny_globs_require_descendant_scan(deny_globs, target_relative) {
+    if !ctx
+        .redactor
+        .requires_recursive_delete_descendant_scan(target_relative)
+    {
         return Ok(());
     }
 
@@ -624,11 +555,21 @@ mod recursive_scan_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        child_relative_prefix, deny_globs_require_descendant_scan,
-        ensure_recursive_delete_scan_within_budget, target_relative_child,
+        child_relative_prefix, ensure_recursive_delete_scan_within_budget, target_relative_child,
         target_relative_with_suffix,
     };
     use crate::error::Error;
+    use crate::policy::SecretRules;
+    use crate::redaction::SecretRedactor;
+
+    fn deny_globs_require_descendant_scan(deny_globs: &[String], target_relative: &Path) -> bool {
+        let redactor = SecretRedactor::from_rules(&SecretRules {
+            deny_globs: deny_globs.to_vec(),
+            ..SecretRules::default()
+        })
+        .expect("redactor");
+        redactor.requires_recursive_delete_descendant_scan(target_relative)
+    }
 
     #[test]
     fn scan_skipped_when_literal_patterns_cannot_match_descendants() {
