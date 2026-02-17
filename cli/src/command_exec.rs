@@ -440,7 +440,7 @@ mod tests {
             entries: vec![safe_fs_tools::ops::ListDirEntry {
                 path: path.clone(),
                 name: "x".to_string(),
-                kind: "file".to_string(),
+                kind: safe_fs_tools::ops::ListDirEntryKind::File,
                 size_bytes: 1,
             }],
             truncated: false,

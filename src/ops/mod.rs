@@ -39,7 +39,7 @@ pub use delete::{DeleteKind, DeleteRequest, DeleteResponse, delete};
 pub use edit::{EditRequest, EditResponse, edit_range};
 pub use glob::{GlobRequest, GlobResponse, glob_paths};
 pub use grep::{GrepMatch, GrepRequest, GrepResponse, grep};
-pub use list_dir::{ListDirEntry, ListDirRequest, ListDirResponse, list_dir};
+pub use list_dir::{ListDirEntry, ListDirEntryKind, ListDirRequest, ListDirResponse, list_dir};
 pub use mkdir::{MkdirRequest, MkdirResponse, mkdir};
 pub use move_path::{MovePathRequest, MovePathResponse, move_path};
 pub use patch::{PatchRequest, PatchResponse, apply_unified_patch};

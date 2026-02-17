@@ -4,6 +4,10 @@ use std::path::PathBuf;
 
 use common::all_permissions_test_policy;
 use safe_fs_tools::ops::{Context, ListDirRequest, ReadRequest, list_dir, read_file};
+#[cfg(feature = "glob")]
+use safe_fs_tools::ops::{GlobRequest, glob_paths};
+#[cfg(feature = "grep")]
+use safe_fs_tools::ops::{GrepRequest, grep};
 use safe_fs_tools::policy::RootMode;
 
 // Large-input correctness tests (not micro-benchmarks).
@@ -14,6 +18,10 @@ const LIST_LIMIT: usize = 10;
 // 884_000 bytes payload (~863.3 KiB) to exercise large-read paths near max_read_bytes.
 const READ_LINE: &str = "0123456789abcdef\n";
 const READ_LINE_REPEAT: usize = 52_000;
+#[cfg(any(feature = "grep", feature = "glob"))]
+const MATCH_FILE_COUNT: usize = 256;
+#[cfg(any(feature = "grep", feature = "glob"))]
+const MATCH_RESULT_LIMIT: usize = 64;
 
 fn prepare_large_file_fixture() -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -26,6 +34,20 @@ fn build_read_context(dir: &tempfile::TempDir, max_read_bytes: u64) -> Context {
     let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
     policy.limits.max_read_bytes = max_read_bytes;
     Context::new(policy).expect("ctx")
+}
+
+#[cfg(any(feature = "grep", feature = "glob"))]
+fn prepare_many_long_path_match_files(file_count: usize) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for idx in 0..file_count {
+        let level1 = format!("segment_{:03}_{}", idx % 32, "x".repeat(24));
+        let level2 = format!("branch_{:03}", idx / 32);
+        let parent = dir.path().join(level1).join(level2);
+        std::fs::create_dir_all(&parent).expect("mkdir");
+        let path = parent.join(format!("file_{idx:04}.txt"));
+        std::fs::write(path, "needle in haystack\n").expect("write");
+    }
+    dir
 }
 
 #[test]
@@ -119,4 +141,50 @@ fn read_rejects_file_exceeding_max_read_bytes() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[cfg(feature = "grep")]
+#[test]
+fn grep_handles_many_long_path_matches_near_result_cap() {
+    let dir = prepare_many_long_path_match_files(MATCH_FILE_COUNT);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_results = MATCH_RESULT_LIMIT;
+    policy.limits.max_line_bytes = 256;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = grep(
+        &ctx,
+        GrepRequest {
+            root_id: "root".to_string(),
+            query: "needle".to_string(),
+            regex: false,
+            glob: Some("**/*.txt".to_string()),
+        },
+    )
+    .expect("grep");
+
+    assert_eq!(resp.matches.len(), MATCH_RESULT_LIMIT);
+    assert!(resp.truncated);
+    assert!(resp.matches.iter().all(|m| m.text.contains("needle")));
+}
+
+#[cfg(feature = "glob")]
+#[test]
+fn glob_handles_many_long_path_matches_near_result_cap() {
+    let dir = prepare_many_long_path_match_files(MATCH_FILE_COUNT);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_results = MATCH_RESULT_LIMIT;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "**/*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert_eq!(resp.matches.len(), MATCH_RESULT_LIMIT);
+    assert!(resp.truncated);
 }

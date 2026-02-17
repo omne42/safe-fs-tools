@@ -61,12 +61,38 @@ pub struct ListDirRequest {
     pub max_entries: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ListDirEntryKind {
+    File,
+    Dir,
+    Symlink,
+    Other,
+}
+
+impl ListDirEntryKind {
+    #[inline]
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Dir => "dir",
+            Self::Symlink => "symlink",
+            Self::Other => "other",
+        }
+    }
+
+    #[inline]
+    const fn serialized_len(self) -> usize {
+        self.as_str().len()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListDirEntry {
     pub path: PathBuf,
     pub name: String,
     #[serde(rename = "type")]
-    pub kind: String,
+    pub kind: ListDirEntryKind,
     pub size_bytes: u64,
 }
 
@@ -114,7 +140,7 @@ impl Candidate {
     fn into_list_entry(
         self,
         relative_dir: &Path,
-        kind: &'static str,
+        kind: ListDirEntryKind,
         size_bytes: u64,
     ) -> ListDirEntry {
         let path = relative_entry_path(relative_dir, self.file_name.as_os_str());
@@ -128,7 +154,7 @@ impl Candidate {
         ListDirEntry {
             path,
             name,
-            kind: kind.to_string(),
+            kind,
             size_bytes,
         }
     }
@@ -232,17 +258,17 @@ fn ensure_directory_identity_unchanged(
     }
 }
 
-fn entry_kind_and_size_no_follow(path: &Path) -> std::io::Result<(&'static str, u64)> {
+fn entry_kind_and_size_no_follow(path: &Path) -> std::io::Result<(ListDirEntryKind, u64)> {
     let meta = fs::symlink_metadata(path)?;
     let file_type = meta.file_type();
     if file_type.is_file() {
-        Ok(("file", meta.len()))
+        Ok((ListDirEntryKind::File, meta.len()))
     } else if file_type.is_dir() {
-        Ok(("dir", 0))
+        Ok((ListDirEntryKind::Dir, 0))
     } else if file_type.is_symlink() {
-        Ok(("symlink", 0))
+        Ok((ListDirEntryKind::Symlink, 0))
     } else {
-        Ok(("other", 0))
+        Ok((ListDirEntryKind::Other, 0))
     }
 }
 
@@ -457,7 +483,11 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     })
 }
 
-fn list_entry_response_bytes(relative_dir: &Path, candidate: &Candidate, kind: &str) -> usize {
+fn list_entry_response_bytes(
+    relative_dir: &Path,
+    candidate: &Candidate,
+    kind: ListDirEntryKind,
+) -> usize {
     let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
     let path_bytes = if relative_dir == Path::new(".") {
         file_name_bytes
@@ -471,12 +501,11 @@ fn list_entry_response_bytes(relative_dir: &Path, candidate: &Candidate, kind: &
     };
     path_bytes
         .saturating_add(candidate.name().len())
-        .saturating_add(kind.len())
+        .saturating_add(kind.serialized_len())
 }
 
 fn list_entry_min_response_bytes(relative_dir: &Path, candidate: &Candidate) -> usize {
-    // Entry kinds are one of: "dir", "file", "other", "symlink".
-    const MIN_KIND_BYTES: usize = 3; // "dir"
+    const MIN_KIND_BYTES: usize = ListDirEntryKind::Dir.serialized_len();
     let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
     let path_bytes = if relative_dir == Path::new(".") {
         file_name_bytes
@@ -503,9 +532,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Candidate, entry_kind_and_size_no_follow, initial_entries_capacity, initial_heap_capacity,
-        is_list_dir_truncated, list_entry_min_response_bytes, list_entry_response_bytes,
-        max_list_dir_response_bytes, relative_entry_path, relative_entry_path_for_deny,
+        Candidate, ListDirEntryKind, entry_kind_and_size_no_follow, initial_entries_capacity,
+        initial_heap_capacity, is_list_dir_truncated, list_entry_min_response_bytes,
+        list_entry_response_bytes, max_list_dir_response_bytes, relative_entry_path,
+        relative_entry_path_for_deny,
     };
 
     #[test]
@@ -631,8 +661,17 @@ mod tests {
             file_name: OsString::from("file.txt"),
             cached_lossy_name: std::cell::OnceCell::new(),
         };
-        let bytes = list_entry_response_bytes(std::path::Path::new("nested"), &candidate, "file");
-        assert!(bytes >= "nested/file.txt".len() + "file.txt".len() + "file".len());
+        let bytes = list_entry_response_bytes(
+            std::path::Path::new("nested"),
+            &candidate,
+            ListDirEntryKind::File,
+        );
+        assert!(
+            bytes
+                >= "nested/file.txt".len()
+                    + "file.txt".len()
+                    + ListDirEntryKind::File.as_str().len()
+        );
     }
 
     #[test]
@@ -642,7 +681,12 @@ mod tests {
             cached_lossy_name: std::cell::OnceCell::new(),
         };
         let min_bytes = list_entry_min_response_bytes(Path::new("nested"), &candidate);
-        for kind in ["dir", "file", "other", "symlink"] {
+        for kind in [
+            ListDirEntryKind::Dir,
+            ListDirEntryKind::File,
+            ListDirEntryKind::Other,
+            ListDirEntryKind::Symlink,
+        ] {
             let exact = list_entry_response_bytes(Path::new("nested"), &candidate, kind);
             assert!(min_bytes <= exact);
         }
@@ -682,7 +726,7 @@ mod tests {
         std::os::unix::fs::symlink(&outside, &victim).expect("create symlink");
 
         let (kind, size_bytes) = entry_kind_and_size_no_follow(&victim).expect("metadata");
-        assert_eq!(kind, "symlink");
+        assert_eq!(kind, ListDirEntryKind::Symlink);
         assert_eq!(size_bytes, 0);
     }
 }
