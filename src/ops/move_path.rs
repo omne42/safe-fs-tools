@@ -273,15 +273,10 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
         })?;
 
     let mut from_relative = from_relative_parent.join(from_name);
-    let mut to_relative = requested_to.clone();
 
     if ctx.redactor.is_path_denied(&from_relative) {
         return Err(Error::SecretPathDenied(from_relative));
     }
-    if ctx.redactor.is_path_denied(&to_relative) {
-        return Err(Error::SecretPathDenied(to_relative));
-    }
-
     let source = from_parent.join(from_name);
 
     let source_meta = fs::symlink_metadata(&source)
@@ -309,7 +304,7 @@ pub fn move_path(ctx: &Context, request: MovePathRequest) -> Result<MovePathResp
                 root_id: request.root_id.clone(),
                 path: requested_to.clone(),
             })?;
-    to_relative = to_relative_parent.join(to_name);
+    let mut to_relative = to_relative_parent.join(to_name);
     if ctx.redactor.is_path_denied(&to_relative) {
         return Err(Error::SecretPathDenied(to_relative));
     }

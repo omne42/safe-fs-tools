@@ -306,10 +306,6 @@ fn resolve_and_validate_paths<'ctx>(
     if ctx.redactor.is_path_denied(&from_relative) {
         return Err(Error::SecretPathDenied(from_relative));
     }
-    if ctx.redactor.is_path_denied(&requested_to) {
-        return Err(Error::SecretPathDenied(requested_to.clone()));
-    }
-
     let source = from_parent.join(from_name);
     if !crate::path_utils::starts_with_case_insensitive_normalized(&source, canonical_root) {
         return Err(Error::OutsideRoot {

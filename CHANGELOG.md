@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `copy_file`/`move_path` now skip one redundant destination secret-glob check after lexical resolution has already enforced the same deny rule, removing duplicate matcher work and one unnecessary `PathBuf` clone on write-path setup.
 - Windows `glob`/`grep` path-normalization matching now clears thread-local wide-char scratch buffers before shrinking, avoiding one-call memory retention after very long path inputs.
 - `list_dir` retained-entry materialization now reuses one absolute-path scratch buffer instead of allocating `dir.join(...)` per entry, reducing short-lived `PathBuf` churn on large listings.
 - Added a `criterion` benchmark target (`perf_ops`) covering representative `read`/`list_dir`/`glob`/`grep` workloads, so performance regressions can be tracked with repeatable metrics.
