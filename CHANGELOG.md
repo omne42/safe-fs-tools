@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `copy_file` now preserves same-path/same-file no-op semantics before enforcing `max_write_bytes`, avoiding false `file_too_large` errors for no-op copies.
 - `move_path` and `delete` parent-path revalidation now uses boundary-semantic path equality (case-insensitive on Windows), avoiding false TOCTOU revalidation failures from case-only path differences.
 - `delete --recursive` deny pre-scan now reuses a per-directory relative-path buffer for child checks and borrows the empty-suffix relative path, reducing per-entry `PathBuf` allocations in large tree scans.
 - `list_dir` response assembly now performs a minimum-size budget precheck before per-entry `symlink_metadata` reads, avoiding avoidable metadata syscalls once the response budget is already exhausted.

@@ -139,14 +139,6 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
     let (mut input, source_meta) =
         super::io::open_regular_file_for_read(&paths.source, &paths.from_relative)?;
 
-    if source_meta.len() > ctx.policy.limits.max_write_bytes {
-        return Err(Error::FileTooLarge {
-            path: paths.from_relative.clone(),
-            size_bytes: source_meta.len(),
-            max_bytes: ctx.policy.limits.max_write_bytes,
-        });
-    }
-
     ensure_destination_parent_identity_verification_supported()?;
     let destination = prepare_destination(ctx, &request, &mut paths)?;
     if crate::path_utils::paths_equal_case_insensitive_normalized(&paths.source, &destination.path)
@@ -179,6 +171,13 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
                 paths.requested_to,
             ));
         }
+        if source_meta.len() > ctx.policy.limits.max_write_bytes {
+            return Err(Error::FileTooLarge {
+                path: paths.from_relative.clone(),
+                size_bytes: source_meta.len(),
+                max_bytes: ctx.policy.limits.max_write_bytes,
+            });
+        }
         if meta.is_dir() {
             return Err(Error::InvalidPath(
                 "destination exists and is a directory".to_string(),
@@ -192,6 +191,12 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         if !request.overwrite {
             return Err(Error::InvalidPath("destination exists".to_string()));
         }
+    } else if source_meta.len() > ctx.policy.limits.max_write_bytes {
+        return Err(Error::FileTooLarge {
+            path: paths.from_relative.clone(),
+            size_bytes: source_meta.len(),
+            max_bytes: ctx.policy.limits.max_write_bytes,
+        });
     }
 
     let destination_parent_meta = capture_destination_parent_identity(

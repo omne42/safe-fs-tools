@@ -881,6 +881,40 @@ fn copy_file_same_path_is_a_noop_when_source_exists() {
 }
 
 #[test]
+fn copy_file_same_path_is_noop_even_when_file_exceeds_max_write_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("same.txt"),
+        "this file is larger than one byte",
+    )
+    .expect("write");
+
+    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    policy.permissions.copy_file = true;
+    policy.limits.max_write_bytes = 1;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = copy_file(
+        &ctx,
+        CopyFileRequest {
+            root_id: "root".to_string(),
+            from: PathBuf::from("same.txt"),
+            to: PathBuf::from("same.txt"),
+            overwrite: false,
+            create_parents: false,
+        },
+    )
+    .expect("same-path copy should remain a no-op even when source is large");
+
+    assert_eq!(resp.from, PathBuf::from("same.txt"));
+    assert_eq!(resp.to, PathBuf::from("same.txt"));
+    assert_eq!(resp.requested_from, Some(PathBuf::from("same.txt")));
+    assert_eq!(resp.requested_to, Some(PathBuf::from("same.txt")));
+    assert!(!resp.copied);
+    assert_eq!(resp.bytes, 0);
+}
+
+#[test]
 #[cfg(any(unix, windows))]
 fn copy_file_rejects_symlink_sources() {
     let dir = tempfile::tempdir().expect("tempdir");
