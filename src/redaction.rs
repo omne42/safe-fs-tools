@@ -183,20 +183,60 @@ impl SecretRedactor {
             return RedactionOutcome::Text(Cow::Borrowed(input));
         }
 
-        let mut current: Cow<'_, str> = Cow::Borrowed(input);
+        // Reuse two owned buffers across regex passes to avoid per-regex reallocation churn.
+        let mut buffers = [String::new(), String::new()];
+        let mut active_buffer: Option<usize> = None;
         for regex in &self.redact {
-            if current.is_empty() {
-                break;
-            }
-            match replace_regex_with_limit(current.as_ref(), regex, self.replacement.as_str()) {
-                RegexReplaceResult::NoMatch => continue,
-                RegexReplaceResult::Replaced(text) => current = Cow::Owned(text),
-                RegexReplaceResult::OutputLimitExceeded => {
+            let result = match active_buffer {
+                None => {
+                    if input.is_empty() {
+                        break;
+                    }
+                    replace_regex_with_limit(
+                        input,
+                        regex,
+                        self.replacement.as_str(),
+                        &mut buffers[0],
+                    )
+                    .map_replaced_to(0)
+                }
+                Some(0) => {
+                    let (left, right) = buffers.split_at_mut(1);
+                    let source = left[0].as_str();
+                    if source.is_empty() {
+                        break;
+                    }
+                    replace_regex_with_limit(
+                        source,
+                        regex,
+                        self.replacement.as_str(),
+                        &mut right[0],
+                    )
+                    .map_replaced_to(1)
+                }
+                Some(1) => {
+                    let (left, right) = buffers.split_at_mut(1);
+                    let source = right[0].as_str();
+                    if source.is_empty() {
+                        break;
+                    }
+                    replace_regex_with_limit(source, regex, self.replacement.as_str(), &mut left[0])
+                        .map_replaced_to(0)
+                }
+                Some(_) => unreachable!("active buffer index must be 0 or 1"),
+            };
+            match result {
+                RegexReplaceOutcome::NoMatch => {}
+                RegexReplaceOutcome::Replaced(next_buffer) => active_buffer = Some(next_buffer),
+                RegexReplaceOutcome::OutputLimitExceeded => {
                     return RedactionOutcome::OutputLimitExceeded;
                 }
             }
         }
-        RedactionOutcome::Text(current)
+        match active_buffer {
+            Some(idx) => RedactionOutcome::Text(Cow::Owned(std::mem::take(&mut buffers[idx]))),
+            None => RedactionOutcome::Text(Cow::Borrowed(input)),
+        }
     }
 
     #[cfg(feature = "grep")]
@@ -290,8 +330,24 @@ fn accumulate_pattern_bytes(total: &mut usize, pattern_bytes: usize) -> Result<(
 
 enum RegexReplaceResult {
     NoMatch,
-    Replaced(String),
+    Replaced,
     OutputLimitExceeded,
+}
+
+enum RegexReplaceOutcome {
+    NoMatch,
+    Replaced(usize),
+    OutputLimitExceeded,
+}
+
+impl RegexReplaceResult {
+    fn map_replaced_to(self, buffer_idx: usize) -> RegexReplaceOutcome {
+        match self {
+            Self::NoMatch => RegexReplaceOutcome::NoMatch,
+            Self::Replaced => RegexReplaceOutcome::Replaced(buffer_idx),
+            Self::OutputLimitExceeded => RegexReplaceOutcome::OutputLimitExceeded,
+        }
+    }
 }
 
 fn append_segment_with_limit(output: &mut String, segment: &str) -> bool {
@@ -304,29 +360,38 @@ fn append_segment_with_limit(output: &mut String, segment: &str) -> bool {
     }
 }
 
-fn replace_regex_with_limit(input: &str, regex: &Regex, replacement: &str) -> RegexReplaceResult {
+fn replace_regex_with_limit(
+    input: &str,
+    regex: &Regex,
+    replacement: &str,
+    output: &mut String,
+) -> RegexReplaceResult {
     let mut matches = regex.find_iter(input);
     let Some(first_match) = matches.next() else {
         return RegexReplaceResult::NoMatch;
     };
 
-    let mut output = String::with_capacity(input.len().min(MAX_REDACTED_OUTPUT_BYTES));
+    output.clear();
+    let target_capacity = input.len().min(MAX_REDACTED_OUTPUT_BYTES);
+    if output.capacity() < target_capacity {
+        output.reserve(target_capacity.saturating_sub(output.capacity()));
+    }
     let mut last = 0usize;
 
     for found in std::iter::once(first_match).chain(matches) {
-        if !append_segment_with_limit(&mut output, &input[last..found.start()]) {
+        if !append_segment_with_limit(output, &input[last..found.start()]) {
             return RegexReplaceResult::OutputLimitExceeded;
         }
-        if !append_segment_with_limit(&mut output, replacement) {
+        if !append_segment_with_limit(output, replacement) {
             return RegexReplaceResult::OutputLimitExceeded;
         }
         last = found.end();
     }
 
-    if !append_segment_with_limit(&mut output, &input[last..]) {
+    if !append_segment_with_limit(output, &input[last..]) {
         return RegexReplaceResult::OutputLimitExceeded;
     }
-    RegexReplaceResult::Replaced(output)
+    RegexReplaceResult::Replaced
 }
 
 fn is_root_relative(path: &Path) -> bool {

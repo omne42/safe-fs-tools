@@ -101,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal write path cleanup: `commit_write` now consumes `WriteCommitContext` so permission metadata is moved into temp-file commit without an extra `Permissions` clone.
 - Redaction compilation cleanup: redact patterns now compile once into `Regex` values (remove duplicate `Regex` + `RegexSet` compilation of the same rules).
 - Redaction hot-path allocation trim: per-regex replacement now delays `String` allocation until first match instead of allocating on no-match paths.
+- Redaction regex-chain allocation trim: multi-regex replacement now reuses a two-buffer ping-pong strategy across passes instead of allocating a new `String` on every matching regex.
 - Path-boundary fast path: add internal normalized-path helpers to avoid repeated lexical normalization in hot root-boundary checks.
 - `grep` line scanning now treats bare `\r` as a line terminator (and still normalizes `\r\n`), fixing cross-line matching/line-number errors on CR-delimited files.
 - Path-boundary helper fast path: avoid normalization allocation for already-clean paths (no `.`/`..` segments).
