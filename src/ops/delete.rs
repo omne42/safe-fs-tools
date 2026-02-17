@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -126,25 +127,26 @@ fn ensure_recursive_delete_allows_descendants(
         let dir_abs = target_abs.join(&dir_suffix);
         let dir_relative = target_relative_with_suffix(target_relative, &dir_suffix);
         ensure_recursive_delete_scan_within_budget(
-            &dir_relative,
+            dir_relative.as_ref(),
             scanned_entries,
             max_walk_entries,
             &started,
             max_walk,
         )?;
-        let entries =
-            fs::read_dir(&dir_abs).map_err(|err| Error::io_path("read_dir", &dir_relative, err))?;
+        let entries = fs::read_dir(&dir_abs)
+            .map_err(|err| Error::io_path("read_dir", dir_relative.as_ref(), err))?;
 
         for entry in entries {
             scanned_entries = scanned_entries.saturating_add(1);
             ensure_recursive_delete_scan_within_budget(
-                &dir_relative,
+                dir_relative.as_ref(),
                 scanned_entries,
                 max_walk_entries,
                 &started,
                 max_walk,
             )?;
-            let entry = entry.map_err(|err| Error::io_path("read_dir", &dir_relative, err))?;
+            let entry =
+                entry.map_err(|err| Error::io_path("read_dir", dir_relative.as_ref(), err))?;
             let child_name = entry.file_name();
             let child_suffix = if dir_suffix.as_os_str().is_empty() {
                 PathBuf::from(&child_name)
@@ -153,13 +155,13 @@ fn ensure_recursive_delete_allows_descendants(
             };
             let child_relative = target_relative_with_suffix(target_relative, &child_suffix);
 
-            if ctx.redactor.is_path_denied(&child_relative) {
-                return Err(Error::SecretPathDenied(child_relative));
+            if ctx.redactor.is_path_denied(child_relative.as_ref()) {
+                return Err(Error::SecretPathDenied(child_relative.into_owned()));
             }
 
             let child_type = entry
                 .file_type()
-                .map_err(|err| Error::io_path("file_type", &child_relative, err))?;
+                .map_err(|err| Error::io_path("file_type", child_relative.as_ref(), err))?;
             if child_type.is_dir() {
                 stack.push(child_suffix);
             }
@@ -170,14 +172,14 @@ fn ensure_recursive_delete_allows_descendants(
 }
 
 #[inline]
-fn target_relative_with_suffix(target_relative: &Path, suffix: &Path) -> PathBuf {
+fn target_relative_with_suffix<'a>(target_relative: &Path, suffix: &'a Path) -> Cow<'a, Path> {
     if suffix.as_os_str().is_empty() {
-        return target_relative.to_path_buf();
+        return Cow::Owned(target_relative.to_path_buf());
     }
     if target_relative == Path::new(".") {
-        return suffix.to_path_buf();
+        return Cow::Borrowed(suffix);
     }
-    target_relative.join(suffix)
+    Cow::Owned(target_relative.join(suffix))
 }
 
 fn ensure_recursive_delete_scan_within_budget(
