@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `perf_ops` now includes a dedicated `read/full_large_file_with_redaction_regex` benchmark, so `read` regressions can be compared explicitly across no-redaction vs regex-redaction paths.
+- `perf_ops` now includes dedicated redaction-path benchmarks (`read/full_large_file_with_redaction_regex` and `grep/plain_query_stable_sort_with_redaction_regex`), so `read`/`grep` regressions can be compared explicitly across no-redaction vs regex-redaction paths.
 - Added Linux/Android regression coverage for the `src has no xattrs` branch in `preserve_unix_security_metadata`, ensuring destination xattrs are pruned when xattr copy is enabled.
 - `perf-safety` ASan workflow now runs targeted Unix xattr metadata regression tests explicitly, so `preserve_unix_security_metadata` coverage remains pinned in sanitizer runs.
 - Linux/Android Unix-metadata coverage now includes executable xattr sync regression tests for copy/prune and copy-disabled paths, improving dynamic safety verification of `preserve_unix_security_metadata`.

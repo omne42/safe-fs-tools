@@ -73,7 +73,7 @@ fn setup_fixture() -> BenchFixture {
     let ctx_stable = Context::new(stable_policy).expect("ctx stable");
     let ctx_redaction = {
         let mut policy = permissive_policy(tempdir.path());
-        policy.secrets.redact_regexes = vec!["needle-[0-9]+".to_string()];
+        policy.secrets.redact_regexes = vec!["needle".to_string()];
         Context::new(policy).expect("ctx redaction")
     };
     #[cfg(any(feature = "glob", feature = "grep"))]
@@ -159,6 +159,14 @@ fn bench_ops(c: &mut Criterion) {
         b.iter(|| {
             let req = fixture.grep_req.clone();
             grep(&fixture.ctx_stable, req).expect("grep");
+        });
+    });
+
+    #[cfg(feature = "grep")]
+    c.bench_function("grep/plain_query_stable_sort_with_redaction_regex", |b| {
+        b.iter(|| {
+            let req = fixture.grep_req.clone();
+            grep(&fixture.ctx_redaction, req).expect("grep");
         });
     });
 
