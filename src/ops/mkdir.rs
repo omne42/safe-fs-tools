@@ -9,28 +9,41 @@ use crate::error::{Error, Result};
 use super::Context;
 
 #[cfg(unix)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
+    Some(a.dev() == b.dev() && a.ino() == b.ino())
 }
 
 #[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+#[inline]
+fn windows_identity_fields_match<T: Eq, U: Eq>(
+    a_volume: Option<T>,
+    a_index: Option<U>,
+    b_volume: Option<T>,
+    b_index: Option<U>,
+) -> Option<bool> {
+    match (a_volume, a_index, b_volume, b_index) {
+        (Some(a_volume), Some(a_index), Some(b_volume), Some(b_index)) => {
+            Some(a_volume == b_volume && a_index == b_index)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
     use std::os::windows::fs::MetadataExt;
-    let (Some(a_volume), Some(a_index), Some(b_volume), Some(b_index)) = (
+    windows_identity_fields_match(
         a.volume_serial_number(),
         a.file_index(),
         b.volume_serial_number(),
         b.file_index(),
-    ) else {
-        return false;
-    };
-    a_volume == b_volume && a_index == b_index
+    )
 }
 
 #[cfg(not(any(unix, windows)))]
-fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
-    false
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
+    None
 }
 
 fn ensure_target_dir_within_root(
@@ -71,11 +84,18 @@ fn ensure_parent_dir_unchanged(
             "unsupported platform for directory identity check".to_string(),
         ));
     }
-    if !metadata_same_file(expected_parent_meta, &current_parent_meta) {
-        return Err(Error::InvalidPath(format!(
-            "parent path {} changed during operation",
-            relative_parent.display()
-        )));
+    match metadata_same_file(expected_parent_meta, &current_parent_meta) {
+        Some(true) => {}
+        Some(false) => {
+            return Err(Error::InvalidPath(format!(
+                "parent path {} changed during operation",
+                relative_parent.display()
+            )));
+        }
+        None => {
+            // Best-effort fallback for Windows filesystems that do not expose stable file IDs.
+            // Parent path re-resolution above still guarantees the canonical parent path.
+        }
     }
     Ok(())
 }
@@ -92,14 +112,26 @@ fn cleanup_created_target_dir(
     ensure_parent_dir_unchanged(canonical_parent, relative_parent, expected_parent_meta)?;
     let current_target_meta = fs::symlink_metadata(target)
         .map_err(|err| Error::io_path("symlink_metadata", relative, err))?;
-    if current_target_meta.file_type().is_symlink()
-        || !current_target_meta.is_dir()
-        || !metadata_same_file(created_target_meta, &current_target_meta)
-    {
+    if current_target_meta.file_type().is_symlink() || !current_target_meta.is_dir() {
         return Err(Error::InvalidPath(format!(
             "path {} changed before cleanup",
             relative.display()
         )));
+    }
+    match metadata_same_file(created_target_meta, &current_target_meta) {
+        Some(true) => {}
+        Some(false) => {
+            return Err(Error::InvalidPath(format!(
+                "path {} changed before cleanup",
+                relative.display()
+            )));
+        }
+        None => {
+            return Err(Error::InvalidPath(format!(
+                "path {} identity unavailable before cleanup",
+                relative.display()
+            )));
+        }
     }
     fs::remove_dir(target).map_err(|cleanup_err| {
         let cleanup_context = std::io::Error::new(
@@ -110,6 +142,39 @@ fn cleanup_created_target_dir(
         );
         Error::io_path("remove_dir", relative, cleanup_context)
     })
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::windows_identity_fields_match;
+
+    #[test]
+    fn windows_identity_requires_all_fields_present() {
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(None, Some(1), None, Some(1)),
+            None
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(Some(1), None, Some(1), None),
+            None
+        );
+        assert_eq!(
+            windows_identity_fields_match::<u32, u64>(None, None, None, None),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_identity_compares_values_when_all_present() {
+        assert_eq!(
+            windows_identity_fields_match(Some(7_u32), Some(11_u64), Some(7_u32), Some(11_u64)),
+            Some(true)
+        );
+        assert_eq!(
+            windows_identity_fields_match(Some(7_u32), Some(11_u64), Some(9_u32), Some(11_u64)),
+            Some(false)
+        );
+    }
 }
 
 struct MkdirPathContext<'a> {

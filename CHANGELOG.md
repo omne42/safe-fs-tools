@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added a `criterion` benchmark target (`perf_ops`) covering representative `read`/`list_dir`/`glob`/`grep` workloads, so performance regressions can be tracked with repeatable metrics.
 - Expanded `perf_ops` benchmarks to compare `glob`/`grep` with `traversal.stable_sort=true/false`, so stable-order overhead can be measured directly before policy tuning.
+- `mkdir` Windows parent-identity checks now treat missing file-ID fields as an explicit “identity unavailable” state (instead of “changed”), avoiding false parent-tamper rejections on filesystems that do not expose stable IDs while keeping cleanup safety checks fail-closed.
 - `glob`/`grep` response post-sort now honors `traversal.stable_sort`: when disabled, large result sets skip the final O(n log n) ordering pass to reduce CPU cost.
 - `list_dir` `max_entries=0` count-only mode now skips per-entry `file_type` probing and exits on the first visible non-denied entry, reducing syscall overhead on large directories.
 - `list_dir` deny checks and traversal directory-probe checks now reuse mutable path buffers in hot loops, reducing per-entry temporary `PathBuf` allocations on large directory scans.
