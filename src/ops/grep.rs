@@ -97,7 +97,7 @@ fn initial_reader_capacity(max_capped_line_bytes: usize) -> usize {
 }
 
 #[cfg(feature = "grep")]
-fn max_grep_response_bytes(max_results: usize, max_line_bytes: usize) -> usize {
+fn max_estimated_grep_response_bytes(max_results: usize, max_line_bytes: usize) -> usize {
     max_results.saturating_mul(max_line_bytes)
 }
 
@@ -444,11 +444,13 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let read_line_options =
         ReadLineCappedOptions::new(Some(&started), max_walk).with_stop_after_cap(is_regex);
     let max_line_bytes = ctx.policy.limits.max_line_bytes;
-    let max_response_bytes = max_grep_response_bytes(ctx.policy.limits.max_results, max_line_bytes);
+    let max_response_bytes =
+        max_estimated_grep_response_bytes(ctx.policy.limits.max_results, max_line_bytes);
     let root_path = ctx.canonical_root(&request.root_id)?;
     let mut matches =
         Vec::<GrepMatch>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
-    let mut response_bytes = 0usize;
+    // Estimated payload-byte guardrail; not a strict process-memory cap.
+    let mut estimated_response_bytes = 0usize;
     let mut counters = GrepSkipCounters::default();
     let mut diag = TraversalDiagnostics::default();
     let mut line_buf = Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes));
@@ -668,7 +670,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 let path_bytes = file_path_bytes;
                 // If even an empty text payload would exceed budget, stop before expensive
                 // redaction/truncation work.
-                if response_bytes.saturating_add(path_bytes) > max_response_bytes {
+                if estimated_response_bytes.saturating_add(path_bytes) > max_response_bytes {
                     diag.mark_limit_reached(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
@@ -713,11 +715,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 // Check response budget before cloning path buffers to avoid wasted allocations
                 // when this match would be truncated.
                 let entry_bytes = path_bytes.saturating_add(text.len());
-                if response_bytes.saturating_add(entry_bytes) > max_response_bytes {
+                if estimated_response_bytes.saturating_add(entry_bytes) > max_response_bytes {
                     diag.mark_limit_reached(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
-                response_bytes = response_bytes.saturating_add(entry_bytes);
+                estimated_response_bytes = estimated_response_bytes.saturating_add(entry_bytes);
                 // Response schema owns `PathBuf` per match. Avoid cloning in the common
                 // single-match case by cloning only after the first match already exists.
                 let path = match first_match_index {

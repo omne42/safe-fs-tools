@@ -22,7 +22,7 @@ fn initial_entries_capacity(candidate_count: usize) -> usize {
     candidate_count.min(MAX_INITIAL_ENTRIES_CAPACITY)
 }
 
-fn max_list_dir_response_bytes(max_entries: usize, max_line_bytes: usize) -> usize {
+fn max_estimated_list_dir_response_bytes(max_entries: usize, max_line_bytes: usize) -> usize {
     max_entries.saturating_mul(max_line_bytes)
 }
 
@@ -378,7 +378,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let mut zero_limit_truncated = false;
     let mut response_budget_truncated = false;
     let max_response_bytes =
-        max_list_dir_response_bytes(max_entries, ctx.policy.limits.max_line_bytes);
+        max_estimated_list_dir_response_bytes(max_entries, ctx.policy.limits.max_line_bytes);
 
     let read_dir =
         fs::read_dir(&dir).map_err(|err| Error::io_path("read_dir", &relative_dir, err))?;
@@ -433,12 +433,16 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         // Avoid huge upfront allocation when policy/request allows very large `max_entries`.
         // The vector can still grow as needed, but starts from a bounded capacity.
         let mut entries = Vec::with_capacity(initial_entries_capacity(heap.len()));
-        let mut response_bytes = 0usize;
+        // Estimated payload-byte guardrail; not a strict process-memory cap.
+        let mut estimated_response_bytes = 0usize;
         for candidate in heap.into_sorted_vec() {
             // Fast precheck: if even the minimum possible serialized entry size no longer fits the
             // response budget, avoid extra metadata syscalls and stop immediately.
-            let min_entry_response_bytes = list_entry_min_response_bytes(&relative_dir, &candidate);
-            if response_bytes.saturating_add(min_entry_response_bytes) > max_response_bytes {
+            let min_entry_response_bytes =
+                list_entry_min_estimated_response_bytes(&relative_dir, &candidate);
+            if estimated_response_bytes.saturating_add(min_entry_response_bytes)
+                > max_response_bytes
+            {
                 response_budget_truncated = true;
                 break;
             }
@@ -455,12 +459,14 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                     continue;
                 }
             };
-            let entry_response_bytes = list_entry_response_bytes(&relative_dir, &candidate, kind);
-            if response_bytes.saturating_add(entry_response_bytes) > max_response_bytes {
+            let entry_response_bytes =
+                list_entry_estimated_response_bytes(&relative_dir, &candidate, kind);
+            if estimated_response_bytes.saturating_add(entry_response_bytes) > max_response_bytes {
                 response_budget_truncated = true;
                 break;
             }
-            response_bytes = response_bytes.saturating_add(entry_response_bytes);
+            estimated_response_bytes =
+                estimated_response_bytes.saturating_add(entry_response_bytes);
             entries.push(candidate.into_list_entry(&relative_dir, kind, size_bytes));
         }
         entries
@@ -483,7 +489,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     })
 }
 
-fn list_entry_response_bytes(
+fn list_entry_estimated_response_bytes(
     relative_dir: &Path,
     candidate: &Candidate,
     kind: ListDirEntryKind,
@@ -504,7 +510,7 @@ fn list_entry_response_bytes(
         .saturating_add(kind.serialized_len())
 }
 
-fn list_entry_min_response_bytes(relative_dir: &Path, candidate: &Candidate) -> usize {
+fn list_entry_min_estimated_response_bytes(relative_dir: &Path, candidate: &Candidate) -> usize {
     const MIN_KIND_BYTES: usize = ListDirEntryKind::Dir.serialized_len();
     let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
     let path_bytes = if relative_dir == Path::new(".") {
@@ -533,9 +539,9 @@ mod tests {
 
     use super::{
         Candidate, ListDirEntryKind, entry_kind_and_size_no_follow, initial_entries_capacity,
-        initial_heap_capacity, is_list_dir_truncated, list_entry_min_response_bytes,
-        list_entry_response_bytes, max_list_dir_response_bytes, relative_entry_path,
-        relative_entry_path_for_deny,
+        initial_heap_capacity, is_list_dir_truncated, list_entry_estimated_response_bytes,
+        list_entry_min_estimated_response_bytes, max_estimated_list_dir_response_bytes,
+        relative_entry_path, relative_entry_path_for_deny,
     };
 
     #[test]
@@ -651,8 +657,8 @@ mod tests {
 
     #[test]
     fn max_response_bytes_scales_with_requested_entries() {
-        assert_eq!(max_list_dir_response_bytes(0, 4096), 0);
-        assert_eq!(max_list_dir_response_bytes(3, 4096), 12_288);
+        assert_eq!(max_estimated_list_dir_response_bytes(0, 4096), 0);
+        assert_eq!(max_estimated_list_dir_response_bytes(3, 4096), 12_288);
     }
 
     #[test]
@@ -661,7 +667,7 @@ mod tests {
             file_name: OsString::from("file.txt"),
             cached_lossy_name: std::cell::OnceCell::new(),
         };
-        let bytes = list_entry_response_bytes(
+        let bytes = list_entry_estimated_response_bytes(
             std::path::Path::new("nested"),
             &candidate,
             ListDirEntryKind::File,
@@ -680,14 +686,14 @@ mod tests {
             file_name: OsString::from("file.txt"),
             cached_lossy_name: std::cell::OnceCell::new(),
         };
-        let min_bytes = list_entry_min_response_bytes(Path::new("nested"), &candidate);
+        let min_bytes = list_entry_min_estimated_response_bytes(Path::new("nested"), &candidate);
         for kind in [
             ListDirEntryKind::Dir,
             ListDirEntryKind::File,
             ListDirEntryKind::Other,
             ListDirEntryKind::Symlink,
         ] {
-            let exact = list_entry_response_bytes(Path::new("nested"), &candidate, kind);
+            let exact = list_entry_estimated_response_bytes(Path::new("nested"), &candidate, kind);
             assert!(min_bytes <= exact);
         }
     }

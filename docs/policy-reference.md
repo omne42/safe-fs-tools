@@ -36,6 +36,7 @@ max_walk_entries = 500000
 max_walk_files = 200000
 # max_walk_ms = 1000
 max_line_bytes = 4096
+preserve_unix_xattrs = true
 
 [secrets]
 deny_globs = [".git/**", "**/.git/**"]
@@ -81,12 +82,17 @@ Defaults:
 - `max_walk_files = 200_000`
 - `max_walk_ms = None`
 - `max_line_bytes = 4_096`
+- `preserve_unix_xattrs = true`
 
 Constraints:
 
 - Most limits must be `> 0`.
 - `max_walk_files <= max_walk_entries`.
 - Hard caps are enforced by validation to prevent pathological policy values.
+- `max_line_bytes` also scales the default response-byte estimate budget
+  (`max_results * max_line_bytes`) used by `glob`/`grep`/`list_dir`.
+- `preserve_unix_xattrs` only affects Linux/Android overwrite writes. Disabling can reduce
+  syscall overhead but stops xattr preservation.
 
 ## `secrets`
 

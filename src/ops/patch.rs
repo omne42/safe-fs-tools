@@ -133,7 +133,13 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
     // equality scan when lengths already differ.
     let changed = updated.len() != content.len() || updated != content;
     if changed {
-        super::io::write_bytes_atomic_checked(&path, &relative, updated.as_bytes(), identity)?;
+        super::io::write_bytes_atomic_checked(
+            &path,
+            &relative,
+            updated.as_bytes(),
+            identity,
+            ctx.policy.limits.preserve_unix_xattrs,
+        )?;
     }
     Ok(PatchResponse {
         path: relative,

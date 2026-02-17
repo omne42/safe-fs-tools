@@ -33,7 +33,12 @@ max_walk_entries = 500000
 max_walk_files = 200000
 # Optional wall-clock traversal budget for `glob`/`grep` (ms). Omit for no budget.
 max_walk_ms = 1000 # recommended starting point for untrusted inputs
+# `max_line_bytes` clips returned text lines and also scales default response-byte estimate
+# budgets (`max_results * max_line_bytes`) for `glob`/`grep`/`list_dir`.
 max_line_bytes = 4096
+# Linux/Android only: preserve source xattrs during atomic overwrite writes.
+# Disable only in performance-priority environments where xattr fidelity is not required.
+preserve_unix_xattrs = true
 
 # Suggested tighter budgets for server / untrusted workloads (example only):
 # max_read_bytes = 262144

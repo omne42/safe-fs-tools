@@ -79,7 +79,13 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
     if replacement != replaced {
         // Apply edits in-place to avoid rebuilding the full output string.
         content.replace_range(offsets.start_offset..offsets.end_offset, &replacement);
-        super::io::write_bytes_atomic_checked(&path, &relative, content.as_bytes(), identity)?;
+        super::io::write_bytes_atomic_checked(
+            &path,
+            &relative,
+            content.as_bytes(),
+            identity,
+            ctx.policy.limits.preserve_unix_xattrs,
+        )?;
 
         let output_len = usize_to_u64(content.len(), &relative, "output size")?;
         return Ok(EditResponse {

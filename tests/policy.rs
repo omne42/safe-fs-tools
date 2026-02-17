@@ -475,6 +475,30 @@ fn policy_deserialization_allows_disabling_traversal_stable_sort() {
     assert!(!policy.traversal.stable_sort);
 }
 
+#[test]
+fn policy_deserialization_sets_preserve_unix_xattrs_default_true() {
+    let raw = r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}]
+}"#;
+
+    let policy: SandboxPolicy = serde_json::from_str(raw).expect("should parse");
+    assert!(
+        policy.limits.preserve_unix_xattrs,
+        "limits.preserve_unix_xattrs should default to true"
+    );
+}
+
+#[test]
+fn policy_deserialization_allows_disabling_preserve_unix_xattrs() {
+    let raw = r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}],
+  "limits": { "preserve_unix_xattrs": false }
+}"#;
+
+    let policy: SandboxPolicy = serde_json::from_str(raw).expect("should parse");
+    assert!(!policy.limits.preserve_unix_xattrs);
+}
+
 #[cfg(feature = "policy-io")]
 #[test]
 fn policy_deserialization_rejects_unknown_fields_in_toml() {

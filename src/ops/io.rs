@@ -235,8 +235,16 @@ pub(super) fn write_bytes_atomic_checked(
     relative: &Path,
     bytes: &[u8],
     expected_identity: FileIdentity,
+    preserve_unix_xattrs: bool,
 ) -> Result<()> {
-    write_bytes_atomic_impl(path, relative, bytes, Some(expected_identity), true)
+    write_bytes_atomic_impl(
+        path,
+        relative,
+        bytes,
+        Some(expected_identity),
+        true,
+        preserve_unix_xattrs,
+    )
 }
 
 fn write_bytes_atomic_impl(
@@ -245,6 +253,7 @@ fn write_bytes_atomic_impl(
     bytes: &[u8],
     expected_identity: Option<FileIdentity>,
     recheck_before_commit: bool,
+    preserve_unix_xattrs: bool,
 ) -> Result<()> {
     // Preserve prior behavior: fail if the original file isn't writable.
     let (existing_file, meta) = open_regular_file_for_write(path, relative)?;
@@ -294,6 +303,7 @@ fn write_bytes_atomic_impl(
         &existing_file,
         &meta,
         tmp_file.as_file(),
+        preserve_unix_xattrs,
     )
     .map_err(|err| Error::io_path("preserve_metadata", relative, err))?;
     tmp_file

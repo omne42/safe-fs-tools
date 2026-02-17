@@ -77,6 +77,10 @@ pub struct Limits {
     /// - `Some(0)` => immediately stop traversal (useful for tests / hard disable).
     #[serde(default)]
     pub max_walk_ms: Option<u64>,
+    /// Maximum bytes retained per returned text line.
+    ///
+    /// This also scales the default response-byte *estimate* budget for `glob`/`grep`/`list_dir`
+    /// (`max_results * max_line_bytes`). It is not a strict process-memory cap.
     #[serde(default = "default_max_line_bytes")]
     pub max_line_bytes: usize,
     /// Optional byte budget for `glob` response payload (sum of matched relative-path bytes).
@@ -85,6 +89,12 @@ pub struct Limits {
     /// - `Some(0)` is invalid and rejected by policy validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_glob_bytes: Option<usize>,
+    /// Preserve Linux/Android extended attributes during atomic overwrite writes.
+    ///
+    /// Keep enabled for metadata fidelity (for example SELinux labels). Disabling can reduce
+    /// syscall overhead on filesystems with many xattrs, at the cost of xattr preservation.
+    #[serde(default = "default_preserve_unix_xattrs")]
+    pub preserve_unix_xattrs: bool,
 }
 
 const fn default_max_read_bytes() -> u64 {
@@ -109,6 +119,10 @@ const fn default_max_walk_files() -> usize {
 
 const fn default_max_line_bytes() -> usize {
     4096
+}
+
+const fn default_preserve_unix_xattrs() -> bool {
+    true
 }
 
 const ROOT_ID_MAX_LEN: usize = 64;
@@ -221,6 +235,7 @@ impl Default for Limits {
             max_walk_ms: None,
             max_line_bytes: default_max_line_bytes(),
             max_glob_bytes: None,
+            preserve_unix_xattrs: default_preserve_unix_xattrs(),
         }
     }
 }

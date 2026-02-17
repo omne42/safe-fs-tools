@@ -5,6 +5,7 @@ pub(crate) fn preserve_unix_security_metadata(
     src_file: &fs::File,
     src_meta: &fs::Metadata,
     tmp_file: &fs::File,
+    copy_xattrs: bool,
 ) -> std::io::Result<()> {
     use std::collections::HashSet;
     use std::ffi::{CStr, CString};
@@ -216,6 +217,10 @@ pub(crate) fn preserve_unix_security_metadata(
         }
     }
 
+    if !copy_xattrs {
+        return Ok(());
+    }
+
     let src_fd = src_file.as_raw_fd();
     let fd = tmp_file.as_raw_fd();
 
@@ -288,6 +293,7 @@ pub(crate) fn preserve_unix_security_metadata(
     _src_file: &fs::File,
     src_meta: &fs::Metadata,
     tmp_file: &fs::File,
+    _copy_xattrs: bool,
 ) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
