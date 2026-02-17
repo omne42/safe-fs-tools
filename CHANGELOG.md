@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `grep` plain-query streaming matcher now checks chunk-local hits first and limits cross-chunk checks to a bounded tail/prefix window, reducing per-chunk memory movement on long no-match lines.
 - Redaction regex-chain state tracking now uses a typed internal enum (instead of `Option<usize>`), removing an unreachable branch and making buffer-state transitions compile-time checked.
 - `list_dir` entry kind storage now uses an enum-backed serialized type string instead of per-entry heap `String` allocation, reducing allocation overhead on large directory listings without changing JSON output.
 - `copy_file` now preserves same-path/same-file no-op semantics before enforcing `max_write_bytes`, avoiding false `file_too_large` errors for no-op copies.
