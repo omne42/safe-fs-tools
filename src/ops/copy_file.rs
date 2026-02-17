@@ -122,6 +122,12 @@ struct PreparedDestination {
     path: PathBuf,
 }
 
+struct TempCopy {
+    file: fs::File,
+    path: tempfile::TempPath,
+    bytes: u64,
+}
+
 pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResponse> {
     ctx.ensure_write_operation_allowed(
         &request.root_id,
@@ -197,7 +203,7 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         &destination_parent_meta,
         &destination.to_effective_relative,
     )?;
-    let (tmp_path, bytes) = copy_to_temp(
+    let temp_copy = copy_to_temp(
         &mut input,
         &destination.parent,
         &destination_parent_meta,
@@ -205,8 +211,9 @@ pub fn copy_file(ctx: &Context, request: CopyFileRequest) -> Result<CopyFileResp
         &destination.to_effective_relative,
         ctx.policy.limits.max_write_bytes,
     )?;
+    let bytes = temp_copy.bytes;
     commit_replace(
-        &tmp_path,
+        temp_copy,
         &destination.path,
         &destination.parent,
         &destination_parent_meta,
@@ -368,7 +375,7 @@ fn copy_to_temp(
     from_relative: &Path,
     to_effective_relative: &Path,
     max_write_bytes: u64,
-) -> Result<(tempfile::TempPath, u64)> {
+) -> Result<TempCopy> {
     let mut tmp_file = tempfile::Builder::new()
         .prefix(".safe-fs-tools.")
         .suffix(".tmp")
@@ -391,12 +398,12 @@ fn copy_to_temp(
         });
     }
 
-    let tmp_path = tmp_file.into_temp_path();
-    Ok((tmp_path, bytes))
+    let (file, path) = tmp_file.into_parts();
+    Ok(TempCopy { file, path, bytes })
 }
 
 fn commit_replace(
-    tmp_path: &tempfile::TempPath,
+    temp_copy: TempCopy,
     destination: &Path,
     destination_parent: &Path,
     expected_parent_meta: &fs::Metadata,
@@ -404,14 +411,13 @@ fn commit_replace(
     overwrite: bool,
     source_meta: &fs::Metadata,
 ) -> Result<()> {
-    let tmp_path_ref: &Path = tmp_path.as_ref();
-
-    fs::set_permissions(tmp_path_ref, source_meta.permissions())
+    temp_copy
+        .file
+        .set_permissions(source_meta.permissions())
         .map_err(|err| Error::io_path("set_permissions", to_effective_relative, err))?;
-    fs::OpenOptions::new()
-        .read(true)
-        .open(tmp_path_ref)
-        .and_then(|file| file.sync_all())
+    temp_copy
+        .file
+        .sync_all()
         .map_err(|err| Error::io_path("sync", to_effective_relative, err))?;
 
     verify_destination_parent_identity(
@@ -419,6 +425,13 @@ fn commit_replace(
         expected_parent_meta,
         to_effective_relative,
     )?;
+    verify_temp_path_identity(
+        &temp_copy.file,
+        temp_copy.path.as_ref(),
+        to_effective_relative,
+    )?;
+
+    let tmp_path_ref: &Path = temp_copy.path.as_ref();
     super::io::rename_replace(tmp_path_ref, destination, overwrite).map_err(|err| match err {
         super::io::RenameReplaceError::Io(err) => {
             if !overwrite && super::io::is_destination_exists_rename_error(&err) {
@@ -436,6 +449,36 @@ fn commit_replace(
         }
     })?;
     Ok(())
+}
+
+fn temp_path_changed_error(to_effective_relative: &Path) -> Error {
+    Error::InvalidPath(format!(
+        "temporary copy file changed during commit for path {}",
+        to_effective_relative.display()
+    ))
+}
+
+fn verify_temp_path_identity(
+    temp_file: &fs::File,
+    temp_path: &Path,
+    to_effective_relative: &Path,
+) -> Result<()> {
+    let temp_file_meta = temp_file
+        .metadata()
+        .map_err(|err| Error::io_path("metadata", to_effective_relative, err))?;
+    let temp_path_meta = fs::symlink_metadata(temp_path)
+        .map_err(|err| Error::io_path("symlink_metadata", to_effective_relative, err))?;
+    if !temp_path_meta.is_file() {
+        return Err(temp_path_changed_error(to_effective_relative));
+    }
+    match metadata_same_file(&temp_file_meta, &temp_path_meta) {
+        Some(true) => Ok(()),
+        Some(false) => Err(temp_path_changed_error(to_effective_relative)),
+        None => Err(Error::InvalidPath(format!(
+            "cannot verify temporary copy file identity for path {}",
+            to_effective_relative.display()
+        ))),
+    }
 }
 
 #[cfg(any(unix, windows))]
@@ -526,5 +569,35 @@ fn noop_response(
         requested_to: Some(requested_to),
         copied: false,
         bytes: 0,
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::path::Path;
+
+    use super::verify_temp_path_identity;
+    use crate::error::Error;
+
+    #[test]
+    fn temp_path_identity_check_detects_replaced_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tmp = tempfile::Builder::new()
+            .prefix(".safe-fs-tools.")
+            .suffix(".tmp")
+            .tempfile_in(dir.path())
+            .expect("create temp file");
+        let (file, path) = tmp.into_parts();
+        let temp_path = path.to_path_buf();
+
+        std::fs::remove_file(&temp_path).expect("unlink temp path");
+        std::fs::write(&temp_path, b"replacement").expect("write replacement");
+
+        let err = verify_temp_path_identity(&file, &temp_path, Path::new("dst.txt"))
+            .expect_err("replaced temp path must be rejected");
+        match err {
+            Error::InvalidPath(msg) => assert!(msg.contains("temporary copy file changed")),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
