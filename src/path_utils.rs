@@ -141,8 +141,7 @@ fn reconstruct_path(path: &Path, parts: NormalizedPathParts) -> PathBuf {
             // the prefix). Append a separator instead.
             #[cfg(windows)]
             {
-                out.as_mut_os_string()
-                    .push(std::path::MAIN_SEPARATOR.to_string());
+                out.as_mut_os_string().push("\\");
             }
             #[cfg(not(windows))]
             {

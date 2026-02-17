@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Windows path normalization micro-optimization: avoid temporary `String` allocation when appending the root separator after a prefix in lexical path reconstruction.
 - `grep` per-file streaming reader now uses a bounded preallocated `BufReader` capacity (up to 64KiB) instead of the default 8KiB buffer, reducing syscall overhead on large-file scans.
 - CLI JSON path-output hardening: `list-dir`/`glob`/`grep` now emit lossy UTF-8 path strings for non-UTF8 filesystem paths instead of failing response serialization with `path contains invalid UTF-8 characters`.
 - `list_dir` truncation correctness: responses now set `truncated=true` when directory enumeration loses entries due to I/O errors (including `max_entries=0` count-only mode), so partial results are never reported as complete.
