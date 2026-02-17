@@ -454,6 +454,9 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         let mut entries = Vec::with_capacity(initial_entries_capacity(heap.len()));
         // Estimated payload-byte guardrail; not a strict process-memory cap.
         let mut estimated_response_bytes = 0usize;
+        // Reuse a single absolute-path buffer while materializing retained entries.
+        // This avoids one `PathBuf` allocation per candidate in large directories.
+        let mut abs_entry_path = dir.clone();
         for candidate in heap.into_sorted_vec() {
             // Fast precheck: if even the minimum possible serialized entry size no longer fits the
             // response budget, avoid extra metadata syscalls and stop immediately.
@@ -467,8 +470,11 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
             }
             // Resolve final type/size only for retained top-k entries, avoiding
             // repeated metadata probes for candidates that were later evicted.
-            let abs_entry_path = dir.join(candidate.file_name.as_os_str());
-            let (kind, size_bytes) = match entry_kind_and_size_no_follow(&abs_entry_path) {
+            let entry_name = candidate.file_name.as_os_str();
+            abs_entry_path.push(entry_name);
+            let kind_and_size = entry_kind_and_size_no_follow(abs_entry_path.as_path());
+            let _ = abs_entry_path.pop();
+            let (kind, size_bytes) = match kind_and_size {
                 Ok(value) => value,
                 Err(_) => {
                     skipped_io_errors = skipped_io_errors.saturating_add(1);

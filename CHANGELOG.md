@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` retained-entry materialization now reuses one absolute-path scratch buffer instead of allocating `dir.join(...)` per entry, reducing short-lived `PathBuf` churn on large listings.
 - Added a `criterion` benchmark target (`perf_ops`) covering representative `read`/`list_dir`/`glob`/`grep` workloads, so performance regressions can be tracked with repeatable metrics.
 - Expanded `perf_ops` benchmarks to compare `glob`/`grep` with `traversal.stable_sort=true/false`, so stable-order overhead can be measured directly before policy tuning.
 - `mkdir` Windows parent-identity checks now treat missing file-ID fields as an explicit “identity unavailable” state (instead of “changed”), avoiding false parent-tamper rejections on filesystems that do not expose stable IDs while keeping cleanup safety checks fail-closed.
