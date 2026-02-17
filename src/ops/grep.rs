@@ -489,12 +489,12 @@ fn build_grep_response(
 
 #[cfg(feature = "grep")]
 fn maybe_sort_grep_matches(matches: &mut [GrepMatch], stable_sort: bool) {
-    if stable_sort && matches.len() > 1 && !matches_sorted_by_path_line(matches) {
+    if stable_sort && matches.len() > 1 {
         matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
     }
 }
 
-#[cfg(feature = "grep")]
+#[cfg(all(test, feature = "grep"))]
 fn matches_sorted_by_path_line(matches: &[GrepMatch]) -> bool {
     matches.windows(2).all(|pair| {
         let left = &pair[0];

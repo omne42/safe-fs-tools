@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `glob`/`grep` stable-sort post-processing now sorts directly when `traversal.stable_sort=true` (removing the separate sortedness pre-scan), and aligned test-helper `cfg` gates with feature-gated test modules so `--no-default-features` clippy/gate runs stay green.
 - `grep` now validates UTF-8 across the full streamed line (including bytes beyond retained capped prefixes) on both no-match and matched-line paths, fixing false negatives where invalid UTF-8 after a long capped ASCII prefix could be incorrectly treated as searchable text.
 - `read` line-range path now uses a bounded `BufReader` preallocation (8 KiB to 64 KiB) based on `max_read_bytes` instead of always using the default 8 KiB, reducing syscall churn on large-file line scans.
 - `copy_file`/`move_path` now skip one redundant destination secret-glob check after lexical resolution has already enforced the same deny rule, removing duplicate matcher work and one unnecessary `PathBuf` clone on write-path setup.

@@ -81,12 +81,12 @@ fn build_glob_response(
 
 #[cfg(feature = "glob")]
 fn maybe_sort_glob_matches(matches: &mut [PathBuf], stable_sort: bool) {
-    if stable_sort && matches.len() > 1 && !matches_sorted_by_path(matches) {
+    if stable_sort && matches.len() > 1 {
         matches.sort();
     }
 }
 
-#[cfg(feature = "glob")]
+#[cfg(all(test, feature = "glob"))]
 fn matches_sorted_by_path(matches: &[PathBuf]) -> bool {
     matches.windows(2).all(|pair| pair[0] <= pair[1])
 }
