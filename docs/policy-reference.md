@@ -43,6 +43,7 @@ redact_regexes = []
 replacement = "***REDACTED***"
 
 [traversal]
+stable_sort = true
 skip_globs = ["node_modules/**", "target/**"]
 ```
 
@@ -98,6 +99,7 @@ Defaults include `.git` and `.env` deny patterns.
 ## `traversal`
 
 - `skip_globs`: traversal performance filter for `glob`/`grep` only.
+- `stable_sort` (default `true`): sort directory entries before traversal to keep deterministic order.
 - Does not deny direct file operations.
 
 ## Validation Stages

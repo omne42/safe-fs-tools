@@ -64,6 +64,10 @@ redact_regexes = [
 replacement = "***REDACTED***"
 
 [traversal]
+# Keep directory traversal order stable across filesystems (deterministic truncation/order).
+# Set false to reduce CPU/memory in very large directories at the cost of non-deterministic
+# traversal order when limits are hit.
+stable_sort = true
 # For traversal performance only: skipped in `glob`/`grep` but still readable directly.
 # Glob patterns are root-relative (relative to the selected root). Do not start with '/' and do not include '..' segments.
 skip_globs = [

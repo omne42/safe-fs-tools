@@ -60,6 +60,7 @@ mod tests {
         assert_eq!(policy.secrets.replacement, base.secrets.replacement);
         assert_eq!(policy.paths.allow_absolute, base.paths.allow_absolute);
         assert_eq!(policy.traversal.skip_globs, base.traversal.skip_globs);
+        assert_eq!(policy.traversal.stable_sort, base.traversal.stable_sort);
         assert_eq!(policy.limits.max_read_bytes, base.limits.max_read_bytes);
         assert_eq!(policy.limits.max_patch_bytes, base.limits.max_patch_bytes);
         assert_eq!(policy.limits.max_write_bytes, base.limits.max_write_bytes);

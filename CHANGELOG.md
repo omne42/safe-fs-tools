@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `move_path` and `delete` parent-path revalidation now uses boundary-semantic path equality (case-insensitive on Windows), avoiding false TOCTOU revalidation failures from case-only path differences.
 - `delete --recursive` deny pre-scan now reuses a per-directory relative-path buffer for child checks and borrows the empty-suffix relative path, reducing per-entry `PathBuf` allocations in large tree scans.
 - `delete --recursive` deny-glob pre-scan now reuses `SecretRedactor`-precompiled literal/prefix scan metadata instead of re-normalizing and re-parsing patterns per call, reducing repeated CPU/allocation overhead on recursive delete checks.
+- Traversal policy now supports `traversal.stable_sort` (default `true`): keep deterministic sorted walk order by default, with an opt-out for large-directory `glob`/`grep` performance tuning.
 - `list_dir` response assembly now performs a minimum-size budget precheck before per-entry `symlink_metadata` reads, avoiding avoidable metadata syscalls once the response budget is already exhausted.
 - `patch` working-set guardrail now uses a policy-derived cap (`max_read_bytes + max_patch_bytes + max_write_bytes`) clamped by the existing 512 MiB hard limit, reducing peak-memory allowance under tighter policies.
 - Policy/CLI large-input reads now cap initial `Vec` preallocation for policy files and text input files (while keeping existing hard byte limits), reducing one-shot allocation spikes under large inputs.

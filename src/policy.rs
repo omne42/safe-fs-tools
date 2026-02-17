@@ -236,7 +236,7 @@ pub struct SecretRules {
     pub replacement: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TraversalRules {
     /// Glob patterns that should be skipped during traversal (`glob`/`grep`) for performance.
@@ -244,6 +244,12 @@ pub struct TraversalRules {
     /// Unlike `secrets.deny_globs`, this does **not** deny direct access to the path.
     #[serde(default)]
     pub skip_globs: Vec<String>,
+    /// Keep traversal directory entry order stable across filesystems by sorting names.
+    ///
+    /// Disabling this can improve `glob`/`grep` performance for very large directories at the
+    /// cost of non-deterministic truncation order when scan limits are hit.
+    #[serde(default = "default_traversal_stable_sort")]
+    pub stable_sort: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,12 +289,25 @@ fn default_redaction_replacement() -> String {
     "***REDACTED***".to_string()
 }
 
+const fn default_traversal_stable_sort() -> bool {
+    true
+}
+
 impl Default for SecretRules {
     fn default() -> Self {
         Self {
             deny_globs: default_secret_deny_globs(),
             redact_regexes: Vec::new(),
             replacement: default_redaction_replacement(),
+        }
+    }
+}
+
+impl Default for TraversalRules {
+    fn default() -> Self {
+        Self {
+            skip_globs: Vec::new(),
+            stable_sort: default_traversal_stable_sort(),
         }
     }
 }

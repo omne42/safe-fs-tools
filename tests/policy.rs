@@ -451,6 +451,30 @@ fn policy_deserialization_rejects_unknown_fields() {
     }
 }
 
+#[test]
+fn policy_deserialization_sets_traversal_stable_sort_default_true() {
+    let raw = r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}]
+}"#;
+
+    let policy: SandboxPolicy = serde_json::from_str(raw).expect("should parse");
+    assert!(
+        policy.traversal.stable_sort,
+        "traversal.stable_sort should default to true"
+    );
+}
+
+#[test]
+fn policy_deserialization_allows_disabling_traversal_stable_sort() {
+    let raw = r#"{
+  "roots": [{"id": "root", "path": "/", "mode": "read_only"}],
+  "traversal": { "stable_sort": false }
+}"#;
+
+    let policy: SandboxPolicy = serde_json::from_str(raw).expect("should parse");
+    assert!(!policy.traversal.stable_sort);
+}
+
 #[cfg(feature = "policy-io")]
 #[test]
 fn policy_deserialization_rejects_unknown_fields_in_toml() {

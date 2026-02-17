@@ -91,45 +91,35 @@ pub(super) fn walkdir_traversal_iter<'a>(
     walk_root: &'a Path,
 ) -> impl Iterator<Item = walkdir::Result<walkdir::DirEntry>> + 'a {
     let has_path_filters = ctx.has_traversal_path_filters();
-    WalkDir::new(walk_root)
+    let walkdir = WalkDir::new(walk_root)
         .follow_root_links(false)
-        .follow_links(false)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_entry(move |entry| {
-            if entry.depth() == 0 {
-                return true;
-            }
-            if !has_path_filters {
-                return true;
-            }
-            let is_dir = entry.file_type().is_dir();
-            let relative = match entry.path().strip_prefix(root_path) {
-                Ok(relative) => std::borrow::Cow::Borrowed(relative),
-                Err(_) => {
-                    #[cfg(windows)]
+        .follow_links(false);
+    let walkdir = if ctx.policy.traversal.stable_sort {
+        walkdir.sort_by_file_name()
+    } else {
+        walkdir
+    };
+    walkdir.into_iter().filter_entry(move |entry| {
+        if entry.depth() == 0 {
+            return true;
+        }
+        if !has_path_filters {
+            return true;
+        }
+        let is_dir = entry.file_type().is_dir();
+        let relative = match entry.path().strip_prefix(root_path) {
+            Ok(relative) => std::borrow::Cow::Borrowed(relative),
+            Err(_) => {
+                #[cfg(windows)]
+                {
+                    if let Some(relative) =
+                        crate::path_utils::strip_prefix_case_insensitive_normalized(
+                            entry.path(),
+                            root_path,
+                        )
                     {
-                        if let Some(relative) =
-                            crate::path_utils::strip_prefix_case_insensitive_normalized(
-                                entry.path(),
-                                root_path,
-                            )
-                        {
-                            std::borrow::Cow::Owned(relative)
-                        } else {
-                            debug_assert!(
-                                crate::path_utils::strip_prefix_case_insensitive_normalized(
-                                    entry.path(),
-                                    root_path,
-                                )
-                                .is_some(),
-                                "walkdir yielded a path outside the selected root"
-                            );
-                            return false;
-                        }
-                    }
-                    #[cfg(not(windows))]
-                    {
+                        std::borrow::Cow::Owned(relative)
+                    } else {
                         debug_assert!(
                             crate::path_utils::strip_prefix_case_insensitive_normalized(
                                 entry.path(),
@@ -141,21 +131,34 @@ pub(super) fn walkdir_traversal_iter<'a>(
                         return false;
                     }
                 }
-            };
-
-            if ctx.redactor.is_path_denied(relative.as_ref())
-                || ctx.is_traversal_path_skipped(relative.as_ref())
-            {
-                return false;
-            }
-            if is_dir {
-                let probe = relative.as_ref().join(TRAVERSAL_GLOB_PROBE_NAME);
-                if ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe) {
+                #[cfg(not(windows))]
+                {
+                    debug_assert!(
+                        crate::path_utils::strip_prefix_case_insensitive_normalized(
+                            entry.path(),
+                            root_path,
+                        )
+                        .is_some(),
+                        "walkdir yielded a path outside the selected root"
+                    );
                     return false;
                 }
             }
-            true
-        })
+        };
+
+        if ctx.redactor.is_path_denied(relative.as_ref())
+            || ctx.is_traversal_path_skipped(relative.as_ref())
+        {
+            return false;
+        }
+        if is_dir {
+            let probe = relative.as_ref().join(TRAVERSAL_GLOB_PROBE_NAME);
+            if ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe) {
+                return false;
+            }
+        }
+        true
+    })
 }
 
 #[derive(Debug)]
