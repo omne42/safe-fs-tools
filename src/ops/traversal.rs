@@ -36,6 +36,15 @@ fn shrink_reusable_vec<T>(buf: &mut Vec<T>, max_capacity: usize) -> bool {
     }
 }
 
+#[cfg(any(
+    all(windows, any(feature = "glob", feature = "grep")),
+    all(test, any(feature = "glob", feature = "grep"))
+))]
+fn clear_and_shrink_reusable_vec<T>(buf: &mut Vec<T>, max_capacity: usize) -> bool {
+    buf.clear();
+    shrink_reusable_vec(buf, max_capacity)
+}
+
 #[cfg(any(feature = "glob", feature = "grep"))]
 mod compile;
 #[cfg(any(feature = "glob", feature = "grep"))]
@@ -113,7 +122,7 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
             );
             let normalized = OsString::from_wide(&normalized_wide);
             let matched = glob.is_match(Path::new(&normalized));
-            let _ = shrink_reusable_vec(&mut normalized_wide, MAX_RETAINED_WIDE_UNITS);
+            let _ = clear_and_shrink_reusable_vec(&mut normalized_wide, MAX_RETAINED_WIDE_UNITS);
             matched
         });
     }
@@ -240,5 +249,12 @@ mod tests {
         let mut buf: Vec<u8> = Vec::with_capacity(128);
         assert!(shrink_reusable_vec(&mut buf, 32));
         assert!(!shrink_reusable_vec(&mut buf, 256));
+    }
+
+    #[test]
+    fn clear_and_shrink_reusable_vec_clears_non_empty_buffer() {
+        let mut buf = vec![0_u8; 128];
+        assert!(clear_and_shrink_reusable_vec(&mut buf, 32));
+        assert!(buf.is_empty());
     }
 }
