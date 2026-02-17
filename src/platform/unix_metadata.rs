@@ -322,3 +322,199 @@ pub(crate) fn preserve_unix_security_metadata(
     }
     Ok(())
 }
+
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+mod tests {
+    use std::ffi::CString;
+    use std::fs::{self, OpenOptions};
+    use std::os::fd::AsRawFd;
+
+    fn xattr_not_supported(err: &std::io::Error) -> bool {
+        matches!(err.raw_os_error(), Some(code) if [
+            libc::ENOTSUP,
+            libc::EOPNOTSUPP,
+            libc::EPERM,
+            libc::EACCES
+        ]
+        .contains(&code))
+    }
+
+    fn set_xattr(file: &fs::File, name: &str, value: &[u8]) -> std::io::Result<()> {
+        let name = CString::new(name).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "xattr name contained NUL")
+        })?;
+        // SAFETY: fd is valid, and name/value buffers remain alive for the syscall duration.
+        let rc = unsafe {
+            libc::fsetxattr(
+                file.as_raw_fd(),
+                name.as_ptr(),
+                value.as_ptr().cast::<libc::c_void>(),
+                value.len(),
+                0,
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    fn get_xattr(file: &fs::File, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        let name = CString::new(name).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "xattr name contained NUL")
+        })?;
+        // SAFETY: fd and name pointer are valid; null buffer probes required length.
+        let len =
+            unsafe { libc::fgetxattr(file.as_raw_fd(), name.as_ptr(), std::ptr::null_mut(), 0) };
+        if len < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ENODATA) {
+                return Ok(None);
+            }
+            return Err(err);
+        }
+        let len = usize::try_from(len).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "xattr length overflow")
+        })?;
+        let mut out = vec![0_u8; len];
+        // SAFETY: destination buffer is valid for `out.len()` bytes.
+        let read = unsafe {
+            libc::fgetxattr(
+                file.as_raw_fd(),
+                name.as_ptr(),
+                out.as_mut_ptr().cast::<libc::c_void>(),
+                out.len(),
+            )
+        };
+        if read < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let read = usize::try_from(read).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "xattr read length overflow",
+            )
+        })?;
+        out.truncate(read);
+        Ok(Some(out))
+    }
+
+    fn remove_xattr(file: &fs::File, name: &str) -> std::io::Result<()> {
+        let name = CString::new(name).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "xattr name contained NUL")
+        })?;
+        // SAFETY: fd and name pointer are valid for syscall duration.
+        let rc = unsafe { libc::fremovexattr(file.as_raw_fd(), name.as_ptr()) };
+        if rc == 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ENODATA) {
+            return Ok(());
+        }
+        Err(err)
+    }
+
+    fn supports_user_xattrs(file: &fs::File) -> bool {
+        const PROBE: &str = "user.safe_fs_tools_probe";
+        match set_xattr(file, PROBE, b"1") {
+            Ok(()) => {
+                let _ = remove_xattr(file, PROBE);
+                true
+            }
+            Err(err) if xattr_not_supported(&err) => false,
+            Err(err) => panic!("xattr probe failed: {err}"),
+        }
+    }
+
+    #[test]
+    fn preserve_unix_security_metadata_syncs_and_prunes_xattrs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_path = dir.path().join("src.txt");
+        let dst_path = dir.path().join("dst.txt");
+        fs::write(&src_path, "src").expect("write src");
+        fs::write(&dst_path, "dst").expect("write dst");
+
+        let src_file = OpenOptions::new()
+            .read(true)
+            .open(&src_path)
+            .expect("open src");
+        let dst_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&dst_path)
+            .expect("open dst");
+        if !supports_user_xattrs(&src_file) || !supports_user_xattrs(&dst_file) {
+            return;
+        }
+
+        set_xattr(&src_file, "user.safe_fs_tools_keep", b"keep").expect("set src keep");
+        set_xattr(&src_file, "user.safe_fs_tools_update", b"new").expect("set src update");
+        set_xattr(&dst_file, "user.safe_fs_tools_update", b"old").expect("set dst update");
+        set_xattr(&dst_file, "user.safe_fs_tools_remove", b"gone").expect("set dst remove");
+
+        super::preserve_unix_security_metadata(
+            &src_file,
+            &src_file.metadata().expect("src metadata"),
+            &dst_file,
+            true,
+        )
+        .expect("preserve metadata");
+
+        assert_eq!(
+            get_xattr(&dst_file, "user.safe_fs_tools_keep").expect("get dst keep"),
+            Some(b"keep".to_vec())
+        );
+        assert_eq!(
+            get_xattr(&dst_file, "user.safe_fs_tools_update").expect("get dst update"),
+            Some(b"new".to_vec())
+        );
+        assert_eq!(
+            get_xattr(&dst_file, "user.safe_fs_tools_remove").expect("get dst remove"),
+            None
+        );
+    }
+
+    #[test]
+    fn preserve_unix_security_metadata_keeps_dst_xattrs_when_copy_disabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_path = dir.path().join("src.txt");
+        let dst_path = dir.path().join("dst.txt");
+        fs::write(&src_path, "src").expect("write src");
+        fs::write(&dst_path, "dst").expect("write dst");
+
+        let src_file = OpenOptions::new()
+            .read(true)
+            .open(&src_path)
+            .expect("open src");
+        let dst_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&dst_path)
+            .expect("open dst");
+        if !supports_user_xattrs(&src_file) || !supports_user_xattrs(&dst_file) {
+            return;
+        }
+
+        set_xattr(&src_file, "user.safe_fs_tools_src_only", b"src-only").expect("set src xattr");
+        set_xattr(&dst_file, "user.safe_fs_tools_dst_only", b"dst-only").expect("set dst xattr");
+
+        super::preserve_unix_security_metadata(
+            &src_file,
+            &src_file.metadata().expect("src metadata"),
+            &dst_file,
+            false,
+        )
+        .expect("preserve metadata");
+
+        assert_eq!(
+            get_xattr(&dst_file, "user.safe_fs_tools_src_only").expect("get dst src-only"),
+            None
+        );
+        assert_eq!(
+            get_xattr(&dst_file, "user.safe_fs_tools_dst_only").expect("get dst dst-only"),
+            Some(b"dst-only".to_vec())
+        );
+    }
+}

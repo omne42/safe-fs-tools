@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Linux/Android Unix-metadata coverage now includes executable xattr sync regression tests for copy/prune and copy-disabled paths, improving dynamic safety verification of `preserve_unix_security_metadata`.
 - `read` now short-circuits redaction when `secrets.redact_regexes` is empty, avoiding unnecessary redaction-state dispatch on the common no-regex path.
 - `list_dir` now precomputes root-path flags and response path-prefix byte counts once per call, reducing repeated per-entry/path-candidate checks in large directory listings.
 - `glob`/`grep` safe-prefix setup now skips deny/skip prechecks (and related probe metadata checks) when no traversal path filters are configured, reducing per-call overhead in common permissive policies.
