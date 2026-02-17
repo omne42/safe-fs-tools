@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` response assembly now uses a bounded initial `Vec` capacity for retained entries (instead of preallocating to full candidate count), reducing peak allocation spikes under very large `max_entries` settings.
 - `list_dir` now enforces a per-call response byte budget (`max_entries * limits.max_line_bytes`) during entry materialization and marks `truncated=true` when the budget is hit, reducing large-response memory spikes.
 - Windows path normalization micro-optimization: avoid temporary `String` allocation when appending the root separator after a prefix in lexical path reconstruction.
 - `grep` per-file streaming reader now uses a bounded preallocated `BufReader` capacity (up to 64KiB) instead of the default 8KiB buffer, reducing syscall overhead on large-file scans.

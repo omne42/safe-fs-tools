@@ -17,6 +17,11 @@ fn initial_heap_capacity(max_entries: usize) -> usize {
     max_entries.min(MAX_INITIAL_HEAP_CAPACITY)
 }
 
+fn initial_entries_capacity(candidate_count: usize) -> usize {
+    const MAX_INITIAL_ENTRIES_CAPACITY: usize = 4096;
+    candidate_count.min(MAX_INITIAL_ENTRIES_CAPACITY)
+}
+
 fn max_list_dir_response_bytes(max_entries: usize, max_line_bytes: usize) -> usize {
     max_entries.saturating_mul(max_line_bytes)
 }
@@ -398,7 +403,9 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let entries = if max_entries == 0 {
         Vec::new()
     } else {
-        let mut entries = Vec::with_capacity(heap.len());
+        // Avoid huge upfront allocation when policy/request allows very large `max_entries`.
+        // The vector can still grow as needed, but starts from a bounded capacity.
+        let mut entries = Vec::with_capacity(initial_entries_capacity(heap.len()));
         let mut response_bytes = 0usize;
         for candidate in heap.into_sorted_vec() {
             // Resolve final type/size only for retained top-k entries, avoiding
@@ -468,9 +475,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Candidate, entry_kind_and_size_no_follow, initial_heap_capacity, is_list_dir_truncated,
-        list_entry_response_bytes, max_list_dir_response_bytes, relative_entry_path,
-        relative_entry_path_for_deny,
+        Candidate, entry_kind_and_size_no_follow, initial_entries_capacity, initial_heap_capacity,
+        is_list_dir_truncated, list_entry_response_bytes, max_list_dir_response_bytes,
+        relative_entry_path, relative_entry_path_for_deny,
     };
 
     #[test]
@@ -479,6 +486,14 @@ mod tests {
         assert_eq!(initial_heap_capacity(16), 16);
         assert_eq!(initial_heap_capacity(1024), 1024);
         assert_eq!(initial_heap_capacity(4096), 1024);
+    }
+
+    #[test]
+    fn initial_entries_capacity_is_capped() {
+        assert_eq!(initial_entries_capacity(0), 0);
+        assert_eq!(initial_entries_capacity(16), 16);
+        assert_eq!(initial_entries_capacity(4096), 4096);
+        assert_eq!(initial_entries_capacity(100_000), 4096);
     }
 
     #[test]
