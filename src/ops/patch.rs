@@ -95,6 +95,11 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
             max_bytes: ctx.policy.limits.max_write_bytes,
         });
     }
+    let max_patch_working_set_bytes = effective_patch_working_set_limit(
+        ctx.policy.limits.max_read_bytes,
+        max_patch_bytes,
+        ctx.policy.limits.max_write_bytes,
+    );
     // Guard against extreme peak RSS from holding input, patch text, and patched output together.
     let estimated_working_set_bytes = estimated_patch_working_set_bytes(
         content.len(),
@@ -103,12 +108,12 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
     )
     .ok_or(Error::InputTooLarge {
         size_bytes: u64::MAX,
-        max_bytes: MAX_PATCH_WORKING_SET_BYTES,
+        max_bytes: max_patch_working_set_bytes,
     })?;
-    if estimated_working_set_bytes > MAX_PATCH_WORKING_SET_BYTES {
+    if estimated_working_set_bytes > max_patch_working_set_bytes {
         return Err(Error::InputTooLarge {
             size_bytes: estimated_working_set_bytes,
-            max_bytes: MAX_PATCH_WORKING_SET_BYTES,
+            max_bytes: max_patch_working_set_bytes,
         });
     }
 
@@ -224,6 +229,18 @@ fn estimated_patch_working_set_bytes(
     let content_len = u64::try_from(content_len).ok()?;
     let patch_len = u64::try_from(patch_len).ok()?;
     content_len.checked_add(patch_len)?.checked_add(updated_len)
+}
+
+#[cfg(feature = "patch")]
+fn effective_patch_working_set_limit(
+    max_read_bytes: u64,
+    max_patch_bytes: u64,
+    max_write_bytes: u64,
+) -> u64 {
+    max_read_bytes
+        .saturating_add(max_patch_bytes)
+        .saturating_add(max_write_bytes)
+        .min(MAX_PATCH_WORKING_SET_BYTES)
 }
 
 #[cfg(feature = "patch")]
@@ -567,6 +584,19 @@ mod tests {
         assert_eq!(
             estimated_patch_working_set_bytes(usize::MAX, usize::MAX, u64::MAX),
             None
+        );
+    }
+
+    #[test]
+    fn effective_patch_working_set_limit_uses_policy_derived_budget() {
+        assert_eq!(effective_patch_working_set_limit(10, 20, 30), 60);
+    }
+
+    #[test]
+    fn effective_patch_working_set_limit_respects_hard_cap() {
+        assert_eq!(
+            effective_patch_working_set_limit(u64::MAX, u64::MAX, u64::MAX),
+            MAX_PATCH_WORKING_SET_BYTES
         );
     }
 

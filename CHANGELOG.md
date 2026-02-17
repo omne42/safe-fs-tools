@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` response assembly now performs a minimum-size budget precheck before per-entry `symlink_metadata` reads, avoiding avoidable metadata syscalls once the response budget is already exhausted.
+- `patch` working-set guardrail now uses a policy-derived cap (`max_read_bytes + max_patch_bytes + max_write_bytes`) clamped by the existing 512 MiB hard limit, reducing peak-memory allowance under tighter policies.
 - Policy/CLI large-input reads now cap initial `Vec` preallocation for policy files and text input files (while keeping existing hard byte limits), reducing one-shot allocation spikes under large inputs.
 - `list_dir` now drops one redundant pre-`read_dir` directory-identity recheck and keeps post-open + post-scan verification, reducing one `symlink_metadata` syscall per call without changing TOCTOU guard semantics.
 - Policy validation now applies a hard cap to `list_dir` response budget (`limits.max_results * limits.max_line_bytes`), preventing extreme misconfiguration from permitting very large in-memory listing responses.

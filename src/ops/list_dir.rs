@@ -409,6 +409,13 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         let mut entries = Vec::with_capacity(initial_entries_capacity(heap.len()));
         let mut response_bytes = 0usize;
         for candidate in heap.into_sorted_vec() {
+            // Fast precheck: if even the minimum possible serialized entry size no longer fits the
+            // response budget, avoid extra metadata syscalls and stop immediately.
+            let min_entry_response_bytes = list_entry_min_response_bytes(&relative_dir, &candidate);
+            if response_bytes.saturating_add(min_entry_response_bytes) > max_response_bytes {
+                response_budget_truncated = true;
+                break;
+            }
             // Resolve final type/size only for retained top-k entries, avoiding
             // repeated metadata probes for candidates that were later evicted.
             let abs_entry_path = dir.join(candidate.file_name.as_os_str());
@@ -467,18 +474,38 @@ fn list_entry_response_bytes(relative_dir: &Path, candidate: &Candidate, kind: &
         .saturating_add(kind.len())
 }
 
+fn list_entry_min_response_bytes(relative_dir: &Path, candidate: &Candidate) -> usize {
+    // Entry kinds are one of: "dir", "file", "other", "symlink".
+    const MIN_KIND_BYTES: usize = 3; // "dir"
+    let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
+    let path_bytes = if relative_dir == Path::new(".") {
+        file_name_bytes
+    } else {
+        relative_dir
+            .as_os_str()
+            .as_encoded_bytes()
+            .len()
+            .saturating_add(1)
+            .saturating_add(file_name_bytes)
+    };
+    path_bytes
+        .saturating_add(candidate.name().len())
+        .saturating_add(MIN_KIND_BYTES)
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
     use std::collections::BinaryHeap;
     use std::ffi::OsStr;
     use std::ffi::OsString;
+    use std::path::Path;
     use std::path::PathBuf;
 
     use super::{
         Candidate, entry_kind_and_size_no_follow, initial_entries_capacity, initial_heap_capacity,
-        is_list_dir_truncated, list_entry_response_bytes, max_list_dir_response_bytes,
-        relative_entry_path, relative_entry_path_for_deny,
+        is_list_dir_truncated, list_entry_min_response_bytes, list_entry_response_bytes,
+        max_list_dir_response_bytes, relative_entry_path, relative_entry_path_for_deny,
     };
 
     #[test]
@@ -606,6 +633,19 @@ mod tests {
         };
         let bytes = list_entry_response_bytes(std::path::Path::new("nested"), &candidate, "file");
         assert!(bytes >= "nested/file.txt".len() + "file.txt".len() + "file".len());
+    }
+
+    #[test]
+    fn min_entry_response_bytes_is_lower_bound_for_all_kinds() {
+        let candidate = Candidate {
+            file_name: OsString::from("file.txt"),
+            cached_lossy_name: std::cell::OnceCell::new(),
+        };
+        let min_bytes = list_entry_min_response_bytes(Path::new("nested"), &candidate);
+        for kind in ["dir", "file", "other", "symlink"] {
+            let exact = list_entry_response_bytes(Path::new("nested"), &candidate, kind);
+            assert!(min_bytes <= exact);
+        }
     }
 
     #[cfg(unix)]
