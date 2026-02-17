@@ -119,10 +119,11 @@ fn ensure_recursive_delete_allows_descendants(
     let started = Instant::now();
     let mut scanned_entries: u64 = 0;
     // Keep only target-relative suffixes in the traversal stack to avoid
-    // repeating the same long target-relative prefix across every queued node.
-    let mut stack = vec![(target_abs.to_path_buf(), PathBuf::new())];
+    // repeating canonical absolute prefixes across every queued node.
+    let mut stack = vec![PathBuf::new()];
 
-    while let Some((dir_abs, dir_suffix)) = stack.pop() {
+    while let Some(dir_suffix) = stack.pop() {
+        let dir_abs = target_abs.join(&dir_suffix);
         let dir_relative = target_relative_with_suffix(target_relative, &dir_suffix);
         ensure_recursive_delete_scan_within_budget(
             &dir_relative,
@@ -160,8 +161,7 @@ fn ensure_recursive_delete_allows_descendants(
                 .file_type()
                 .map_err(|err| Error::io_path("file_type", &child_relative, err))?;
             if child_type.is_dir() {
-                let child_abs = entry.path();
-                stack.push((child_abs, child_suffix));
+                stack.push(child_suffix);
             }
         }
     }
