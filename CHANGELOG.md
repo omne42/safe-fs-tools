@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `grep` now validates UTF-8 across the full streamed line (including bytes beyond retained capped prefixes), fixing a false-negative path where invalid UTF-8 after a long capped ASCII prefix could be missed and incorrectly treated as searchable text.
 - `read` line-range path now uses a bounded `BufReader` preallocation (8 KiB to 64 KiB) based on `max_read_bytes` instead of always using the default 8 KiB, reducing syscall churn on large-file line scans.
 - `copy_file`/`move_path` now skip one redundant destination secret-glob check after lexical resolution has already enforced the same deny rule, removing duplicate matcher work and one unnecessary `PathBuf` clone on write-path setup.
 - Windows `glob`/`grep` path-normalization matching now clears thread-local wide-char scratch buffers before shrinking, avoiding one-call memory retention after very long path inputs.

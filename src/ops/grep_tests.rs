@@ -274,6 +274,7 @@ fn read_line_capped_can_short_circuit_after_cap() {
             bytes_read,
             capped,
             contains_query,
+            ..
         } => {
             assert!(capped);
             assert!(!contains_query);

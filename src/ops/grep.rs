@@ -241,6 +241,7 @@ enum ReadLineCapped {
         bytes_read: usize,
         capped: bool,
         contains_query: bool,
+        utf8_valid: bool,
     },
 }
 
@@ -269,6 +270,67 @@ impl<'a> ReadLineCappedOptions<'a> {
 }
 
 #[cfg(feature = "grep")]
+fn update_utf8_line_validity(
+    pending: &mut [u8; 3],
+    pending_len: &mut usize,
+    utf8_valid: &mut bool,
+    mut chunk: &[u8],
+) {
+    if !*utf8_valid {
+        return;
+    }
+
+    if *pending_len > 0 {
+        let needed = 4usize.saturating_sub(*pending_len);
+        let take = needed.min(chunk.len());
+        let mut combined = [0_u8; 4];
+        combined[..*pending_len].copy_from_slice(&pending[..*pending_len]);
+        combined[*pending_len..*pending_len + take].copy_from_slice(&chunk[..take]);
+        match std::str::from_utf8(&combined[..*pending_len + take]) {
+            Ok(_) => {
+                *pending_len = 0;
+                chunk = &chunk[take..];
+            }
+            Err(err) => {
+                if err.error_len().is_some() {
+                    *utf8_valid = false;
+                    *pending_len = 0;
+                    return;
+                }
+                let trailing = &combined[err.valid_up_to()..*pending_len + take];
+                if trailing.len() > pending.len() {
+                    *utf8_valid = false;
+                    *pending_len = 0;
+                    return;
+                }
+                pending[..trailing.len()].copy_from_slice(trailing);
+                *pending_len = trailing.len();
+                return;
+            }
+        }
+    }
+
+    match std::str::from_utf8(chunk) {
+        Ok(_) => {}
+        Err(err) => {
+            if err.error_len().is_some() {
+                *utf8_valid = false;
+                *pending_len = 0;
+                return;
+            }
+            let trailing = &chunk[err.valid_up_to()..];
+            if trailing.len() > pending.len() {
+                *utf8_valid = false;
+                *pending_len = 0;
+                return;
+            }
+            pending[..trailing.len()].copy_from_slice(trailing);
+            *pending_len = trailing.len();
+        }
+    }
+}
+
+#[cfg(feature = "grep")]
 fn read_line_capped<R: BufRead>(
     reader: &mut R,
     line_buf: &mut Vec<u8>,
@@ -285,6 +347,10 @@ fn read_line_capped<R: BufRead>(
         maybe_shrink_query_window(query_window, query.len());
     }
     let single_query_byte = query.and_then(|q| (q.len() == 1).then_some(q[0]));
+    let track_utf8 = query.is_some();
+    let mut utf8_pending = [0_u8; 3];
+    let mut utf8_pending_len = 0_usize;
+    let mut utf8_valid = true;
     let mut bytes_read = 0usize;
     let mut capped = false;
     let mut query_matched = false;
@@ -294,10 +360,14 @@ fn read_line_capped<R: BufRead>(
             if bytes_read == 0 {
                 return Ok(ReadLineCapped::Eof);
             }
+            if track_utf8 && utf8_pending_len > 0 {
+                utf8_valid = false;
+            }
             return Ok(ReadLineCapped::Line {
                 bytes_read,
                 capped,
                 contains_query: query_matched,
+                utf8_valid,
             });
         }
         if let (Some(started), Some(limit)) = (options.started, options.max_walk)
@@ -313,6 +383,14 @@ fn read_line_capped<R: BufRead>(
         };
         let consumed = &chunk[..split_at];
         bytes_read = bytes_read.saturating_add(consumed.len());
+        if track_utf8 {
+            update_utf8_line_validity(
+                &mut utf8_pending,
+                &mut utf8_pending_len,
+                &mut utf8_valid,
+                consumed,
+            );
+        }
 
         if let Some(query_byte) = single_query_byte {
             update_single_byte_match_state(query_byte, consumed, &mut query_matched);
@@ -336,6 +414,7 @@ fn read_line_capped<R: BufRead>(
                 bytes_read,
                 capped,
                 contains_query: query_matched,
+                utf8_valid,
             });
         }
         if reached_line_end && ended_with_cr {
@@ -348,6 +427,14 @@ fn read_line_capped<R: BufRead>(
                     update_single_byte_match_state(query_byte, b"\n", &mut query_matched);
                 } else if let Some(query) = query {
                     update_query_match_state(query_window, query, b"\n", &mut query_matched);
+                }
+                if track_utf8 {
+                    update_utf8_line_validity(
+                        &mut utf8_pending,
+                        &mut utf8_pending_len,
+                        &mut utf8_valid,
+                        b"\n",
+                    );
                 }
                 if !capped {
                     if line_buf.len() < max_line_bytes {
@@ -362,10 +449,14 @@ fn read_line_capped<R: BufRead>(
         }
 
         if reached_line_end {
+            if track_utf8 && utf8_pending_len > 0 {
+                utf8_valid = false;
+            }
             return Ok(ReadLineCapped::Line {
                 bytes_read,
                 capped,
                 contains_query: query_matched,
+                utf8_valid,
             });
         }
     }
@@ -581,7 +672,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             let mut owned_relative_path = relative_path;
             let mut first_match_index = None::<usize>;
             loop {
-                let (n, line_was_capped, contains_query) = match read_line_capped(
+                let (n, line_was_capped, contains_query, line_utf8_valid) = match read_line_capped(
                     &mut reader,
                     &mut line_buf,
                     max_capped_line_bytes,
@@ -599,7 +690,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                         bytes_read,
                         capped,
                         contains_query,
-                    }) => (bytes_read, capped, contains_query),
+                        utf8_valid,
+                    }) => (bytes_read, capped, contains_query, utf8_valid),
                     Err(_) => {
                         matches.truncate(file_match_start);
                         maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
@@ -640,18 +732,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     let _ = line_buf.pop();
                 }
                 if regex.is_none() && !contains_query {
-                    // Preserve non-UTF8 skip semantics while avoiding UTF-8 decode on the
-                    // common ASCII no-match fast path.
-                    let utf8_ok = if line_buf.is_ascii() {
-                        true
-                    } else {
-                        match std::str::from_utf8(&line_buf) {
-                            Ok(_) => true,
-                            Err(err) if line_was_capped && err.error_len().is_none() => true,
-                            Err(_) => false,
-                        }
-                    };
-                    if !utf8_ok {
+                    // `read_line_capped` validates UTF-8 across the full consumed line, including
+                    // bytes beyond the retained capped prefix.
+                    if !line_utf8_valid {
                         matches.truncate(file_match_start);
                         maybe_shrink_line_buffer(&mut line_buf, max_capped_line_bytes);
                         counters.skipped_non_utf8_files =
