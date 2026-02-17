@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `list_dir` truncation correctness: responses now set `truncated=true` when directory enumeration loses entries due to I/O errors (including `max_entries=0` count-only mode), so partial results are never reported as complete.
 - `delete --recursive` deny pre-scan now enforces `limits.max_walk_entries` and `limits.max_walk_ms`, preventing unbounded pre-delete subtree scans when secret-glob checks require descendant traversal.
 - Unix xattr sync micro-optimization: pre-size the source-name membership set during metadata copy, reducing hash table growth churn on files with many extended attributes.
+- Unix xattr sync now skips building the source-name membership set when the destination has no xattrs, trimming avoidable hash-allocation work on the common fresh-temp-file path.
 - `delete --recursive` deny pre-scan now stores target-relative suffixes in its traversal stack (instead of repeating full root-relative prefixes), reducing transient memory footprint on deep/wide directory trees.
 - `delete --recursive` deny pre-scan stack now stores only target-relative suffixes and derives absolute paths on demand, removing an extra per-node `PathBuf` from queued traversal state in wide directory trees.
 - `delete --recursive` deny pre-scan now keeps target-relative suffix joins borrow-first (`Cow<Path>`), avoiding per-entry relative `PathBuf` clones when scanning from the root target (`.`).

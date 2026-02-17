@@ -236,20 +236,22 @@ pub(crate) fn preserve_unix_security_metadata(
         return Ok(());
     }
 
-    let mut src_name_set = HashSet::<&[u8]>::with_capacity(src_names.len());
-    src_name_set.extend(src_names.iter().map(|name| name.as_bytes()));
-    for dst_name in dst_names {
-        if src_name_set.contains(dst_name.as_bytes()) {
-            continue;
-        }
-        // SAFETY: xattr name pointer is valid for this synchronous call.
-        let remove_rc = unsafe { libc::fremovexattr(fd, dst_name.as_ptr()) };
-        if remove_rc != 0 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::ENODATA) {
+    if !dst_names.is_empty() {
+        let mut src_name_set = HashSet::<&[u8]>::with_capacity(src_names.len());
+        src_name_set.extend(src_names.iter().map(|name| name.as_bytes()));
+        for dst_name in dst_names {
+            if src_name_set.contains(dst_name.as_bytes()) {
                 continue;
             }
-            return Err(err);
+            // SAFETY: xattr name pointer is valid for this synchronous call.
+            let remove_rc = unsafe { libc::fremovexattr(fd, dst_name.as_ptr()) };
+            if remove_rc != 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::ENODATA) {
+                    continue;
+                }
+                return Err(err);
+            }
         }
     }
 
