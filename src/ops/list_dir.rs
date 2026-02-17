@@ -29,8 +29,9 @@ fn max_estimated_list_dir_response_bytes(max_entries: usize, max_line_bytes: usi
 
 fn runtime_max_entries_cap(max_entries: usize) -> usize {
     // Guardrail for extreme policies/requests: retaining a very large top-k heap can
-    // inflate memory well beyond the response-byte budget.
-    const MAX_RUNTIME_RETAINED_ENTRIES: usize = 250_000;
+    // inflate memory well beyond the response-byte budget. Each retained candidate
+    // owns an `OsString` name plus heap/ordering metadata, so cap this aggressively.
+    const MAX_RUNTIME_RETAINED_ENTRIES: usize = 100_000;
     max_entries.min(MAX_RUNTIME_RETAINED_ENTRIES)
 }
 
@@ -671,13 +672,27 @@ mod tests {
     fn runtime_max_entries_cap_preserves_small_values() {
         assert_eq!(runtime_max_entries_cap(0), 0);
         assert_eq!(runtime_max_entries_cap(16), 16);
-        assert_eq!(runtime_max_entries_cap(250_000), 250_000);
+        assert_eq!(runtime_max_entries_cap(100_000), 100_000);
     }
 
     #[test]
     fn runtime_max_entries_cap_bounds_extreme_values() {
-        assert_eq!(runtime_max_entries_cap(250_001), 250_000);
-        assert_eq!(runtime_max_entries_cap(1_000_000), 250_000);
+        assert_eq!(runtime_max_entries_cap(100_001), 100_000);
+        assert_eq!(runtime_max_entries_cap(1_000_000), 100_000);
+    }
+
+    #[test]
+    fn runtime_cap_overflow_sets_truncated_via_entry_limit_rule() {
+        let capped = runtime_max_entries_cap(1_000_000);
+        assert_eq!(capped, 100_000);
+        assert!(is_list_dir_truncated(
+            capped,
+            false,
+            false,
+            capped.saturating_add(1),
+            0,
+            capped
+        ));
     }
 
     #[test]

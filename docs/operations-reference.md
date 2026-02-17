@@ -38,7 +38,8 @@ Response: `ListDirResponse { path, requested_path?, entries, truncated, skipped_
 Notes:
 
 - Lists direct children, sorted deterministically.
-- `max_entries` is capped by `limits.max_results`.
+- `max_entries` is capped by `limits.max_results` and an internal runtime cap (`100_000`) to bound retained top-k memory during very large directory scans.
+- If either cap is hit, `truncated=true` indicates that more visible entries existed than were returned.
 - `max_entries=0` is valid and returns count-only style behavior with empty entries.
 
 ## `glob`

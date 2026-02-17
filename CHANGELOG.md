@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Traversal fast path now avoids materializing absolute entry paths when `open_mode=None`; `grep` now derives the absolute path lazily only when a glob-filtered candidate must be opened, reducing per-entry `PathBuf` allocation churn in large scans.
 - `glob`/`grep` now report response-byte budget truncation as `scan_limit_reason=response_bytes` (instead of `results`), improving limit observability when byte budgets trigger early stops.
 - `list_dir` now applies a conservative runtime cap to retained top-k entries, reducing worst-case heap growth under extreme `max_entries` policy/request combinations.
+- `list_dir` runtime retained-candidate cap was tightened from `250_000` to `100_000`, reducing peak memory pressure on extreme large-directory scans while preserving top-k ordering semantics.
+- Added a regression test that locks `list_dir` runtime-cap (`100_000`) behavior to `truncated=true` semantics when matched entries exceed the capped retention limit.
 - `perf_ops` now includes dedicated redaction-path benchmarks (`read/full_large_file_with_redaction_regex` and `grep/plain_query_stable_sort_with_redaction_regex`), so `read`/`grep` regressions can be compared explicitly across no-redaction vs regex-redaction paths.
 - Added Linux/Android regression coverage for the `src has no xattrs` branch in `preserve_unix_security_metadata`, ensuring destination xattrs are pruned when xattr copy is enabled.
 - `perf-safety` ASan workflow now runs targeted Unix xattr metadata regression tests explicitly, so `preserve_unix_security_metadata` coverage remains pinned in sanitizer runs.
