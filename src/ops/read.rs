@@ -122,7 +122,10 @@ fn read_line_range(
     let (file, meta) = super::io::open_regular_file_for_read(path, relative)?;
     let file_size_bytes = meta.len();
     let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
-    let mut reader = std::io::BufReader::new(file.take(limit));
+    let mut reader = std::io::BufReader::with_capacity(
+        initial_line_range_reader_capacity(ctx.policy.limits.max_read_bytes),
+        file.take(limit),
+    );
     // Line-range reads often pull a narrow subset; start small and grow on demand.
     let mut out = Vec::<u8>::with_capacity(initial_line_range_capacity(
         file_size_bytes,
@@ -182,6 +185,16 @@ fn initial_line_range_capacity(file_size_bytes: u64, max_read_bytes: u64) -> usi
     usize::try_from(bounded)
         .ok()
         .map_or(DEFAULT_CAPACITY, |max| max.min(MAX_INITIAL_CAPACITY))
+}
+
+fn initial_line_range_reader_capacity(max_read_bytes: u64) -> usize {
+    const DEFAULT_CAPACITY: usize = 8 * 1024;
+    const MAX_INITIAL_CAPACITY: usize = 64 * 1024;
+    usize::try_from(max_read_bytes)
+        .ok()
+        .map_or(DEFAULT_CAPACITY, |max| {
+            max.clamp(DEFAULT_CAPACITY, MAX_INITIAL_CAPACITY)
+        })
 }
 
 fn read_line_discarding_bytes<R: BufRead>(reader: &mut R) -> std::io::Result<usize> {
@@ -249,4 +262,28 @@ fn usize_to_u64(value: usize, path: &Path, context: &str) -> Result<u64> {
             path.display()
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{initial_line_range_capacity, initial_line_range_reader_capacity};
+
+    #[test]
+    fn line_range_output_capacity_stays_bounded() {
+        assert_eq!(initial_line_range_capacity(1024, 4096), 1024);
+        assert_eq!(
+            initial_line_range_capacity(64 * 1024 * 1024, 64 * 1024 * 1024),
+            64 * 1024
+        );
+    }
+
+    #[test]
+    fn line_range_reader_capacity_clamps_between_bounds() {
+        assert_eq!(initial_line_range_reader_capacity(1024), 8 * 1024);
+        assert_eq!(initial_line_range_reader_capacity(16 * 1024), 16 * 1024);
+        assert_eq!(
+            initial_line_range_reader_capacity(64 * 1024 * 1024),
+            64 * 1024
+        );
+    }
 }
