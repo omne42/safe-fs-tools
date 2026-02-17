@@ -221,6 +221,7 @@ pub(crate) fn preserve_unix_security_metadata(
 
     let src_names = xattr_list_fd(src_fd)?;
     let dst_names = xattr_list_fd(fd)?;
+    let dst_names_empty = dst_names.is_empty();
     if src_names.is_empty() {
         for dst_name in dst_names {
             // SAFETY: xattr name pointer is valid for this synchronous call.
@@ -236,7 +237,7 @@ pub(crate) fn preserve_unix_security_metadata(
         return Ok(());
     }
 
-    if !dst_names.is_empty() {
+    if !dst_names_empty {
         let mut src_name_set = HashSet::<&[u8]>::with_capacity(src_names.len());
         src_name_set.extend(src_names.iter().map(|name| name.as_bytes()));
         for dst_name in dst_names {
@@ -258,9 +259,11 @@ pub(crate) fn preserve_unix_security_metadata(
     for name in src_names {
         let name_cstr = name.as_c_str();
         let src_value = xattr_read_fd_required(src_fd, name_cstr)?;
-        let dst_value = xattr_read_fd(fd, name_cstr)?;
-        if dst_value.as_deref() == Some(src_value.as_slice()) {
-            continue;
+        if !dst_names_empty {
+            let dst_value = xattr_read_fd(fd, name_cstr)?;
+            if dst_value.as_deref() == Some(src_value.as_slice()) {
+                continue;
+            }
         }
         // SAFETY: xattr name/value buffers are valid for this synchronous call.
         let set_rc = unsafe {
