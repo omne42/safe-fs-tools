@@ -16,6 +16,11 @@ If `paths.allow_absolute=false`, absolute request paths are invalid by policy.
 
 `grep` intentionally skips non-UTF8, too-large, or unreadable files and reports skip counters.
 
+## Why does `grep` return fewer results than `max_results`?
+
+`grep` can stop on response-byte budget (`scan_limit_reason=response_bytes`) before hitting
+`max_results`. This is more likely when matched paths are long. Increase limit budgets if needed.
+
 ## Why does `glob`/`grep` not follow directory symlinks?
 
 To reduce traversal ambiguity and containment risk. Symlinked files may still be handled under root checks.

@@ -70,6 +70,10 @@ Notes:
 - Empty/whitespace query is invalid.
 - Non-UTF8 and oversized files are skipped (not fatal).
 - Match text is redacted and clipped by `limits.max_line_bytes`.
+- Response truncation can happen by byte budget (`scan_limit_reason=response_bytes`) even when
+  `matches.len() < limits.max_results`, especially with long relative paths.
+- For very large directories, set `traversal.stable_sort=false` to reduce sort overhead when
+  deterministic order is not required.
 
 ## `stat`
 

@@ -91,6 +91,8 @@ Constraints:
 - Hard caps are enforced by validation to prevent pathological policy values.
 - `max_line_bytes` also scales the default response-byte estimate budget
   (`max_results * max_line_bytes`) used by `glob`/`grep`/`list_dir`.
+  `grep` response accounting includes path bytes per match, so very long relative paths can
+  trigger `scan_limit_reason=response_bytes` before `max_results` is reached.
 - `preserve_unix_xattrs` only affects Linux/Android overwrite writes. Disabling can reduce
   syscall overhead but stops xattr preservation.
 
@@ -106,6 +108,7 @@ Defaults include `.git` and `.env` deny patterns.
 
 - `skip_globs`: traversal performance filter for `glob`/`grep` only.
 - `stable_sort` (default `true`): sort directory entries before traversal to keep deterministic order.
+  Set `false` in large-directory workloads when deterministic order is not required.
 - Does not deny direct file operations.
 
 ## Validation Stages
