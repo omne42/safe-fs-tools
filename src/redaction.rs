@@ -243,7 +243,6 @@ impl SecretRedactor {
         }
     }
 
-    #[cfg(feature = "grep")]
     #[inline]
     pub(crate) fn has_redact_regexes(&self) -> bool {
         !self.redact.is_empty()

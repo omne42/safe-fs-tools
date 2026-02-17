@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `read` now short-circuits redaction when `secrets.redact_regexes` is empty, avoiding unnecessary redaction-state dispatch on the common no-regex path.
 - `list_dir` now precomputes root-path flags and response path-prefix byte counts once per call, reducing repeated per-entry/path-candidate checks in large directory listings.
 - `glob`/`grep` safe-prefix setup now skips deny/skip prechecks (and related probe metadata checks) when no traversal path filters are configured, reducing per-call overhead in common permissive policies.
 - `list_dir` now skips per-entry deny-glob matcher calls when `secrets.deny_globs` is empty, reducing hot-loop overhead on common permissive policies.

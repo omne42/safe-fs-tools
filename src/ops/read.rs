@@ -60,15 +60,19 @@ pub fn read_file(ctx: &Context, request: ReadRequest) -> Result<ReadResponse> {
         } => read_line_range(&path, &relative, ctx, start_line, end_line)?,
     };
 
-    let content = match ctx.redactor.redact_text_outcome(&content) {
-        RedactionOutcome::Text(std::borrow::Cow::Borrowed(_)) => content,
-        RedactionOutcome::Text(std::borrow::Cow::Owned(redacted)) => redacted,
-        RedactionOutcome::OutputLimitExceeded => {
-            return Err(Error::io_path(
-                "redact",
-                &relative,
-                std::io::Error::other("redacted output exceeded hard safety limit"),
-            ));
+    let content = if !ctx.redactor.has_redact_regexes() {
+        content
+    } else {
+        match ctx.redactor.redact_text_outcome(&content) {
+            RedactionOutcome::Text(std::borrow::Cow::Borrowed(_)) => content,
+            RedactionOutcome::Text(std::borrow::Cow::Owned(redacted)) => redacted,
+            RedactionOutcome::OutputLimitExceeded => {
+                return Err(Error::io_path(
+                    "redact",
+                    &relative,
+                    std::io::Error::other("redacted output exceeded hard safety limit"),
+                ));
+            }
         }
     };
 
