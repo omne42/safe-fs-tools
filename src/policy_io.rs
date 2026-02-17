@@ -5,6 +5,8 @@ use crate::{Error, Result, SandboxPolicy};
 
 const DEFAULT_MAX_POLICY_BYTES: u64 = 4 * 1024 * 1024;
 const HARD_MAX_POLICY_BYTES: u64 = 64 * 1024 * 1024;
+const DEFAULT_INITIAL_POLICY_CAPACITY: usize = 8 * 1024;
+const MAX_INITIAL_POLICY_CAPACITY: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyFormat {
@@ -154,7 +156,7 @@ fn load_policy_limited_inner(
     }
 
     let limit = max_bytes.saturating_add(1);
-    let mut bytes = Vec::<u8>::with_capacity(meta_len.min(limit) as usize);
+    let mut bytes = Vec::<u8>::with_capacity(initial_policy_capacity(meta_len, max_bytes));
     file.take(limit)
         .read_to_end(&mut bytes)
         .map_err(|err| Error::io_path("read", path, err))?;
@@ -180,4 +182,31 @@ fn load_policy_limited_inner(
         });
     }
     parsed
+}
+
+fn initial_policy_capacity(meta_len: u64, max_bytes: u64) -> usize {
+    usize::try_from(meta_len.min(max_bytes))
+        .ok()
+        .map_or(DEFAULT_INITIAL_POLICY_CAPACITY, |capacity| {
+            capacity.min(MAX_INITIAL_POLICY_CAPACITY)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::initial_policy_capacity;
+
+    #[test]
+    fn initial_policy_capacity_keeps_small_values() {
+        assert_eq!(initial_policy_capacity(1024, 4096), 1024);
+        assert_eq!(initial_policy_capacity(0, 4096), 0);
+    }
+
+    #[test]
+    fn initial_policy_capacity_caps_large_values() {
+        assert_eq!(
+            initial_policy_capacity(64 * 1024 * 1024, 64 * 1024 * 1024),
+            256 * 1024
+        );
+    }
 }
