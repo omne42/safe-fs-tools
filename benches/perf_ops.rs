@@ -33,6 +33,7 @@ fn permissive_policy(root: &Path) -> SandboxPolicy {
 struct BenchFixture {
     _tempdir: tempfile::TempDir,
     ctx_stable: Context,
+    ctx_redaction: Context,
     #[cfg(any(feature = "glob", feature = "grep"))]
     ctx_unstable: Context,
     read_req: ReadRequest,
@@ -70,6 +71,11 @@ fn setup_fixture() -> BenchFixture {
 
     let stable_policy = permissive_policy(tempdir.path());
     let ctx_stable = Context::new(stable_policy).expect("ctx stable");
+    let ctx_redaction = {
+        let mut policy = permissive_policy(tempdir.path());
+        policy.secrets.redact_regexes = vec!["needle-[0-9]+".to_string()];
+        Context::new(policy).expect("ctx redaction")
+    };
     #[cfg(any(feature = "glob", feature = "grep"))]
     let ctx_unstable = {
         let mut unstable_policy = permissive_policy(tempdir.path());
@@ -80,6 +86,7 @@ fn setup_fixture() -> BenchFixture {
     BenchFixture {
         _tempdir: tempdir,
         ctx_stable,
+        ctx_redaction,
         #[cfg(any(feature = "glob", feature = "grep"))]
         ctx_unstable,
         read_req: ReadRequest {
@@ -115,6 +122,12 @@ fn bench_ops(c: &mut Criterion) {
         b.iter(|| {
             let req = fixture.read_req.clone();
             read_file(&fixture.ctx_stable, req).expect("read");
+        });
+    });
+    c.bench_function("read/full_large_file_with_redaction_regex", |b| {
+        b.iter(|| {
+            let req = fixture.read_req.clone();
+            read_file(&fixture.ctx_redaction, req).expect("read");
         });
     });
 
