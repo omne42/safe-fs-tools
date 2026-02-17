@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `edit` write path now applies line-range replacement in-place via `String::replace_range` instead of rebuilding a second full output string, reducing peak transient memory during large-file edits.
 - `list_dir` candidate materialization now reuses cached lossy names by ownership move when available, avoiding an extra `String` clone per retained non-UTF8 entry.
 - `patch` change detection now short-circuits on `len()` mismatch before full string equality, reducing unnecessary O(n) comparisons on common size-changing patches.
+- `patch` now enforces a combined in-memory working-set guard (`original content + patch text + estimated patched output`) with a 512 MiB hard cap, failing early instead of risking extreme-memory patch applications.
 - Unix metadata copy now short-circuits the xattr sync path when the source file has no xattrs: destination xattrs are removed directly without building source membership sets, reducing transient allocations in empty-source xattr cases.
 - `list_dir` deny-path filtering now uses borrow-first relative paths for root (`.`) listings, avoiding per-entry temporary `PathBuf` allocations on the common root-directory path.
 - `copy_file` temp commit hardening: keep a single temp-file handle through permission/sync/commit and reject commits when the temp path no longer points to that same file, closing a TOCTOU window in path-reopen staging.

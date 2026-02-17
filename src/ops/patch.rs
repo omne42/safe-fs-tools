@@ -12,6 +12,9 @@ use super::Context;
 use diffy::{Line, Patch, apply};
 
 #[cfg(feature = "patch")]
+const MAX_PATCH_WORKING_SET_BYTES: u64 = 512 * 1024 * 1024;
+
+#[cfg(feature = "patch")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PatchHeaderPathError {
     EmptyPath,
@@ -90,6 +93,22 @@ pub fn apply_unified_patch(ctx: &Context, request: PatchRequest) -> Result<Patch
             path: relative.clone(),
             size_bytes: estimated_updated_len,
             max_bytes: ctx.policy.limits.max_write_bytes,
+        });
+    }
+    // Guard against extreme peak RSS from holding input, patch text, and patched output together.
+    let estimated_working_set_bytes = estimated_patch_working_set_bytes(
+        content.len(),
+        request.patch.len(),
+        estimated_updated_len,
+    )
+    .ok_or(Error::InputTooLarge {
+        size_bytes: u64::MAX,
+        max_bytes: MAX_PATCH_WORKING_SET_BYTES,
+    })?;
+    if estimated_working_set_bytes > MAX_PATCH_WORKING_SET_BYTES {
+        return Err(Error::InputTooLarge {
+            size_bytes: estimated_working_set_bytes,
+            max_bytes: MAX_PATCH_WORKING_SET_BYTES,
         });
     }
 
@@ -194,6 +213,17 @@ fn estimate_patched_content_len(content_len: usize, patch: &Patch<'_, str>) -> O
         return None;
     }
     u64::try_from(estimated).ok()
+}
+
+#[cfg(feature = "patch")]
+fn estimated_patch_working_set_bytes(
+    content_len: usize,
+    patch_len: usize,
+    updated_len: u64,
+) -> Option<u64> {
+    let content_len = u64::try_from(content_len).ok()?;
+    let patch_len = u64::try_from(patch_len).ok()?;
+    content_len.checked_add(patch_len)?.checked_add(updated_len)
 }
 
 #[cfg(feature = "patch")]
@@ -522,6 +552,22 @@ mod tests {
         .expect("parse patch");
 
         assert_eq!(estimate_patched_content_len(4, &patch), Some(8));
+    }
+
+    #[test]
+    fn estimated_patch_working_set_bytes_sums_components() {
+        assert_eq!(
+            estimated_patch_working_set_bytes(1024, 2048, 4096),
+            Some(7168)
+        );
+    }
+
+    #[test]
+    fn estimated_patch_working_set_bytes_detects_overflow() {
+        assert_eq!(
+            estimated_patch_working_set_bytes(usize::MAX, usize::MAX, u64::MAX),
+            None
+        );
     }
 
     #[cfg(windows)]
