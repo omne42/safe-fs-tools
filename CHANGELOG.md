@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CLI best-effort path redaction now selects the most specific matching root using a borrow-first prefix check and performs `strip_prefix` only once for the winning root, removing repeated per-root `PathBuf` allocations in error-render hot paths while preserving root-priority semantics (including tie stability).
 - `grep` plain-query hot loop now short-circuits non-matching lines before trailing line-ending trimming, removing two per-line buffer mutations on the common no-match path without changing UTF-8/non-UTF8 skip semantics.
 - `read` line-range scanning now uses an explicit checked line-index increment (`checked_add`) and returns a deterministic `InvalidPath` overflow error instead of relying on arithmetic overflow behavior in extreme line-count edge cases; added unit coverage for the overflow guard.
 - `list_dir` response-byte budgeting now includes the serialized decimal digit count of each entry’s `size_bytes` field (with a 1-digit minimum precheck), fixing systematic under-accounting that could delay expected `response_budget` truncation on large file-size listings; added regression coverage for size-digit accounting.

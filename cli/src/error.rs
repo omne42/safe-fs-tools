@@ -191,35 +191,40 @@ fn format_path_for_error_with_mode(
         return best_effort_leaf(path);
     }
 
-    if let Some(redaction) = redaction {
-        let mut best_match: Option<(usize, PathBuf)> = None;
-        for root in redaction
-            .roots
-            .iter()
-            .chain(redaction.canonical_roots.iter())
-        {
-            if let Some(relative) =
-                safe_fs_tools::path_utils::strip_prefix_case_insensitive(path, &root.path)
-            {
-                let should_replace = best_match
-                    .as_ref()
-                    .map(|(best_len, _)| root.normalized_depth > *best_len)
-                    .unwrap_or(true);
-                if should_replace {
-                    best_match = Some((root.normalized_depth, relative));
-                }
-            }
-        }
-
-        if let Some((_, relative)) = best_match {
-            if relative.as_os_str().is_empty() {
-                return ".".to_string();
-            }
-            return relative.display().to_string();
-        }
+    if let Some(redaction) = redaction
+        && let Some(best_root) = most_specific_matching_root(path, redaction)
+        && let Some(relative) =
+            safe_fs_tools::path_utils::strip_prefix_case_insensitive(path, &best_root.path)
+    {
+        return if relative.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            relative.display().to_string()
+        };
     }
 
     best_effort_leaf(path)
+}
+
+fn most_specific_matching_root<'a>(
+    path: &Path,
+    redaction: &'a PathRedaction,
+) -> Option<&'a RedactionRoot> {
+    let mut best_root = None::<&RedactionRoot>;
+    let mut best_depth = 0usize;
+    for root in redaction
+        .roots
+        .iter()
+        .chain(redaction.canonical_roots.iter())
+    {
+        if safe_fs_tools::path_utils::starts_with_case_insensitive(path, &root.path)
+            && root.normalized_depth > best_depth
+        {
+            best_depth = root.normalized_depth;
+            best_root = Some(root);
+        }
+    }
+    best_root
 }
 
 fn best_effort_leaf(path: &Path) -> String {
@@ -661,8 +666,8 @@ fn format_root_id_for_error(root_id: &str, mode: RedactionMode) -> String {
 mod tests {
     use super::{
         PathRedaction, RedactionMode, RedactionRoot, format_path_for_error_with_mode,
-        normalized_component_depth, render_tool_error, tool_error_details_with,
-        tool_public_message,
+        most_specific_matching_root, normalized_component_depth, render_tool_error,
+        tool_error_details_with, tool_public_message,
     };
     use std::path::{Path, PathBuf};
 
@@ -790,6 +795,19 @@ mod tests {
             RedactionMode::BestEffort,
         );
         assert_eq!(formatted, "secret.txt");
+    }
+
+    #[test]
+    fn most_specific_matching_root_keeps_first_root_on_tie() {
+        let path = PathBuf::from("/tmp/project/secret.txt");
+        let redaction = PathRedaction {
+            roots: vec![RedactionRoot::new(PathBuf::from("/tmp/project"))],
+            canonical_roots: vec![RedactionRoot::new(PathBuf::from("/tmp/project"))],
+        };
+
+        let selected = most_specific_matching_root(path.as_path(), &redaction)
+            .expect("must select matching root");
+        assert_eq!(selected.path, PathBuf::from("/tmp/project"));
     }
 
     #[test]
