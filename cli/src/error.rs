@@ -168,7 +168,7 @@ pub(crate) fn tool_error_details(tool: &safe_fs_tools::Error) -> serde_json::Val
 }
 
 fn details_map(kind: &'static str) -> serde_json::Map<String, serde_json::Value> {
-    let mut out = serde_json::Map::new();
+    let mut out = serde_json::Map::with_capacity(1);
     out.insert(
         "kind".to_string(),
         serde_json::Value::String(kind.to_string()),
@@ -245,12 +245,14 @@ fn render_tool_error_with_mode(
         }
         safe_fs_tools::Error::IoPath { op, path, source } => {
             let rendered_path = format_path_for_error_with_mode(path, redaction, mode);
+            let public_message = if redact_paths {
+                format!("io error during {op} ({rendered_path})")
+            } else {
+                tool.to_string()
+            };
             let mut out = details_map(safe_fs_tools::Error::CODE_IO_PATH);
             out.insert("op".to_string(), serde_json::Value::String(op.to_string()));
-            out.insert(
-                "path".to_string(),
-                serde_json::Value::String(rendered_path.clone()),
-            );
+            out.insert("path".to_string(), serde_json::Value::String(rendered_path));
             out.insert(
                 "io_kind".to_string(),
                 serde_json::Value::String(format!("{:?}", source.kind())),
@@ -267,21 +269,21 @@ fn render_tool_error_with_mode(
 
             ToolErrorRender {
                 details: serde_json::Value::Object(out),
-                public_message: if redact_paths {
-                    format!("io error during {op} ({rendered_path})")
-                } else {
-                    tool.to_string()
-                },
+                public_message,
             }
         }
         safe_fs_tools::Error::CommittedButUnsynced { op, path, source } => {
             let rendered_path = format_path_for_error_with_mode(path, redaction, mode);
+            let public_message = if redact_paths {
+                format!(
+                    "filesystem update committed but parent sync failed during {op} ({rendered_path})"
+                )
+            } else {
+                tool.to_string()
+            };
             let mut out = details_map(safe_fs_tools::Error::CODE_COMMITTED_UNSYNCED);
             out.insert("op".to_string(), serde_json::Value::String(op.to_string()));
-            out.insert(
-                "path".to_string(),
-                serde_json::Value::String(rendered_path.clone()),
-            );
+            out.insert("path".to_string(), serde_json::Value::String(rendered_path));
             out.insert(
                 "io_kind".to_string(),
                 serde_json::Value::String(format!("{:?}", source.kind())),
@@ -298,13 +300,7 @@ fn render_tool_error_with_mode(
 
             ToolErrorRender {
                 details: serde_json::Value::Object(out),
-                public_message: if redact_paths {
-                    format!(
-                        "filesystem update committed but parent sync failed during {op} ({rendered_path})"
-                    )
-                } else {
-                    tool.to_string()
-                },
+                public_message,
             }
         }
         safe_fs_tools::Error::InvalidPolicy(message) => {
@@ -347,26 +343,32 @@ fn render_tool_error_with_mode(
         }
         safe_fs_tools::Error::RootNotFound(root_id) => {
             let rendered_root_id = format_root_id_for_error(root_id, mode);
+            let public_message = if redact_paths {
+                format!("root not found: {rendered_root_id}")
+            } else {
+                tool.to_string()
+            };
             let mut out = details_map(safe_fs_tools::Error::CODE_ROOT_NOT_FOUND);
             out.insert(
                 "root_id".to_string(),
-                serde_json::Value::String(rendered_root_id.clone()),
+                serde_json::Value::String(rendered_root_id),
             );
             ToolErrorRender {
                 details: serde_json::Value::Object(out),
-                public_message: if redact_paths {
-                    format!("root not found: {rendered_root_id}")
-                } else {
-                    tool.to_string()
-                },
+                public_message,
             }
         }
         safe_fs_tools::Error::OutsideRoot { root_id, path } => {
             let rendered_root_id = format_root_id_for_error(root_id, mode);
+            let public_message = if redact_paths {
+                format!("path resolves outside root '{rendered_root_id}'")
+            } else {
+                tool.to_string()
+            };
             let mut out = details_map(safe_fs_tools::Error::CODE_OUTSIDE_ROOT);
             out.insert(
                 "root_id".to_string(),
-                serde_json::Value::String(rendered_root_id.clone()),
+                serde_json::Value::String(rendered_root_id),
             );
             out.insert(
                 "path".to_string(),
@@ -374,11 +376,7 @@ fn render_tool_error_with_mode(
             );
             ToolErrorRender {
                 details: serde_json::Value::Object(out),
-                public_message: if redact_paths {
-                    format!("path resolves outside root '{rendered_root_id}'")
-                } else {
-                    tool.to_string()
-                },
+                public_message,
             }
         }
         safe_fs_tools::Error::NotPermitted(message) => {
@@ -402,18 +400,16 @@ fn render_tool_error_with_mode(
         }
         safe_fs_tools::Error::SecretPathDenied(path) => {
             let rendered_path = format_path_for_error_with_mode(path, redaction, mode);
+            let public_message = if redact_paths {
+                format!("path is denied by secret rules: {rendered_path}")
+            } else {
+                tool.to_string()
+            };
             let mut out = details_map(safe_fs_tools::Error::CODE_SECRET_PATH_DENIED);
-            out.insert(
-                "path".to_string(),
-                serde_json::Value::String(rendered_path.clone()),
-            );
+            out.insert("path".to_string(), serde_json::Value::String(rendered_path));
             ToolErrorRender {
                 details: serde_json::Value::Object(out),
-                public_message: if redact_paths {
-                    format!("path is denied by secret rules: {rendered_path}")
-                } else {
-                    tool.to_string()
-                },
+                public_message,
             }
         }
         safe_fs_tools::Error::FileTooLarge {
@@ -422,38 +418,34 @@ fn render_tool_error_with_mode(
             max_bytes,
         } => {
             let rendered_path = format_path_for_error_with_mode(path, redaction, mode);
+            let public_message = if redact_paths {
+                format!(
+                    "file is too large ({size_bytes} bytes; max {max_bytes} bytes): {rendered_path}"
+                )
+            } else {
+                tool.to_string()
+            };
             let mut out = details_map(safe_fs_tools::Error::CODE_FILE_TOO_LARGE);
-            out.insert(
-                "path".to_string(),
-                serde_json::Value::String(rendered_path.clone()),
-            );
+            out.insert("path".to_string(), serde_json::Value::String(rendered_path));
             out.insert("size_bytes".to_string(), serde_json::json!(size_bytes));
             out.insert("max_bytes".to_string(), serde_json::json!(max_bytes));
             ToolErrorRender {
                 details: serde_json::Value::Object(out),
-                public_message: if redact_paths {
-                    format!(
-                        "file is too large ({size_bytes} bytes; max {max_bytes} bytes): {rendered_path}"
-                    )
-                } else {
-                    tool.to_string()
-                },
+                public_message,
             }
         }
         safe_fs_tools::Error::InvalidUtf8 { path, .. } => {
             let rendered_path = format_path_for_error_with_mode(path, redaction, mode);
+            let public_message = if redact_paths {
+                format!("invalid utf-8 in file: {rendered_path}")
+            } else {
+                tool.to_string()
+            };
             let mut out = details_map(safe_fs_tools::Error::CODE_INVALID_UTF8);
-            out.insert(
-                "path".to_string(),
-                serde_json::Value::String(rendered_path.clone()),
-            );
+            out.insert("path".to_string(), serde_json::Value::String(rendered_path));
             ToolErrorRender {
                 details: serde_json::Value::Object(out),
-                public_message: if redact_paths {
-                    format!("invalid utf-8 in file: {rendered_path}")
-                } else {
-                    tool.to_string()
-                },
+                public_message,
             }
         }
         safe_fs_tools::Error::Patch(message) => {

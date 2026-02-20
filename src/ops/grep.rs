@@ -501,6 +501,13 @@ fn matches_sorted_by_path_line(matches: &[GrepMatch]) -> bool {
 }
 
 #[cfg(feature = "grep")]
+#[inline]
+fn utf8_prefix_within(input: &str, max_bytes: usize) -> &str {
+    let end = input.floor_char_boundary(max_bytes.min(input.len()));
+    &input[..end]
+}
+
+#[cfg(feature = "grep")]
 fn maybe_shrink_line_buffer(line_buf: &mut Vec<u8>, retained_hint_bytes: usize) {
     const DEFAULT_RETAINED_CAPACITY: usize = 8 * 1024;
     const MAX_RETAINED_CAPACITY: usize = 256 * 1024;
@@ -806,17 +813,15 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     match ctx.redactor.redact_text_outcome(line) {
                         crate::redaction::RedactionOutcome::Text(redacted) => {
                             let line_truncated = line_was_capped || redacted.len() > max_line_bytes;
-                            let mut end = redacted.len().min(max_line_bytes);
-                            while end > 0 && !redacted.is_char_boundary(end) {
-                                end = end.saturating_sub(1);
-                            }
                             let text = match redacted {
-                                std::borrow::Cow::Borrowed(redacted) => redacted[..end].to_string(),
+                                std::borrow::Cow::Borrowed(redacted) => {
+                                    utf8_prefix_within(redacted, max_line_bytes).to_owned()
+                                }
                                 std::borrow::Cow::Owned(redacted) => {
-                                    if end == redacted.len() {
+                                    if redacted.len() <= max_line_bytes {
                                         redacted
                                     } else {
-                                        redacted[..end].to_string()
+                                        utf8_prefix_within(&redacted, max_line_bytes).to_owned()
                                     }
                                 }
                             };
@@ -824,20 +829,15 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                         }
                         crate::redaction::RedactionOutcome::OutputLimitExceeded => {
                             let marker = crate::redaction::REDACTION_OUTPUT_LIMIT_MARKER;
-                            let mut end = marker.len().min(max_line_bytes);
-                            while end > 0 && !marker.is_char_boundary(end) {
-                                end = end.saturating_sub(1);
-                            }
-                            (marker[..end].to_string(), true)
+                            (utf8_prefix_within(marker, max_line_bytes).to_owned(), true)
                         }
                     }
                 } else {
                     let line_truncated = line_was_capped || line.len() > max_line_bytes;
-                    let mut end = line.len().min(max_line_bytes);
-                    while end > 0 && !line.is_char_boundary(end) {
-                        end = end.saturating_sub(1);
-                    }
-                    (line[..end].to_string(), line_truncated)
+                    (
+                        utf8_prefix_within(line, max_line_bytes).to_owned(),
+                        line_truncated,
+                    )
                 };
 
                 // Check response budget before cloning path buffers to avoid wasted allocations
