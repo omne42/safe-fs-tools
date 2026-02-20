@@ -58,6 +58,14 @@ fn max_glob_response_bytes(limits: &crate::policy::Limits) -> usize {
 }
 
 #[cfg(feature = "glob")]
+#[inline]
+fn estimated_path_response_bytes(path: &std::path::Path) -> usize {
+    // Response payloads serialize paths as lossy UTF-8 strings; budget accounting
+    // must use the same representation to avoid under-counting non-UTF8 paths.
+    path.to_string_lossy().len()
+}
+
+#[cfg(feature = "glob")]
 fn build_glob_response(
     mut matches: Vec<PathBuf>,
     diag: TraversalDiagnostics,
@@ -227,7 +235,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                     diag.mark_limit_reached(ScanLimitReason::Results);
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
-                let path_bytes = file.relative_path.as_os_str().as_encoded_bytes().len();
+                let path_bytes = estimated_path_response_bytes(file.relative_path.as_path());
                 if response_bytes.saturating_add(path_bytes) > max_response_bytes {
                     diag.mark_limit_reached(ScanLimitReason::ResponseBytes);
                     return Ok(std::ops::ControlFlow::Break(()));

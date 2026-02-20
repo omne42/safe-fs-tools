@@ -102,6 +102,14 @@ fn max_estimated_grep_response_bytes(max_results: usize, max_line_bytes: usize) 
 }
 
 #[cfg(feature = "grep")]
+#[inline]
+fn estimated_path_response_bytes(path: &std::path::Path) -> usize {
+    // Response payloads serialize paths as lossy UTF-8 strings; budget accounting
+    // must use the same representation to avoid under-counting non-UTF8 paths.
+    path.to_string_lossy().len()
+}
+
+#[cfg(feature = "grep")]
 fn validate_query(query: &str) -> Result<()> {
     if query.trim().is_empty() {
         return Err(Error::InvalidPath(
@@ -708,7 +716,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             let mut scanned_bytes = 0_u64;
             let mut line_no = 0_u64;
             let file_match_start = matches.len();
-            let file_path_bytes = relative_path.as_os_str().as_encoded_bytes().len();
+            let file_path_bytes = estimated_path_response_bytes(relative_path.as_path());
             let mut owned_relative_path = relative_path;
             let mut first_match_index = None::<usize>;
             loop {

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `glob`/`grep` response-byte budgeting now counts path bytes using lossy UTF-8 display lengths (instead of raw OS bytes), fixing under-accounting for non-UTF8 paths that could delay expected `response_budget` truncation; added Unix regression coverage for both ops.
 - Redaction regex replace-buffer preallocation now uses correct `String::reserve` semantics for reused buffers, fixing a capacity-growth bug that could miss intended preallocation and trigger extra reallocations on larger follow-up inputs; added regression coverage for reused-buffer capacity growth.
 - `edit`/`patch` shared atomic-replace write path now performs a single post-write/post-metadata `sync_all` before rename (instead of two syncs), removing one redundant flush on overwrite-heavy workloads without changing durability/error semantics.
 - CLI path redaction now precomputes normalized root-depth metadata and uses it for best-prefix selection, fixing a bug where roots containing lexical segments like `..` could win as “more specific” and produce less precise redacted relative paths; this also removes repeated per-error path-component counting in hot error-render paths.

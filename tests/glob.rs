@@ -495,3 +495,37 @@ fn glob_uses_dedicated_response_budget_when_configured() {
         Some(safe_fs_tools::ops::ScanLimitReason::ResponseBytes)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn glob_response_budget_accounts_for_lossy_non_utf8_paths() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "x\n").expect("write");
+    let non_utf8_name = OsString::from_vec(vec![0xff, b'.', b't', b'x', b't']);
+    std::fs::write(dir.path().join(PathBuf::from(non_utf8_name)), "x\n").expect("write");
+
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
+    policy.limits.max_results = 2;
+    policy.limits.max_glob_bytes = Some(10);
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "*.txt".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert_eq!(resp.matches, vec![PathBuf::from("a.txt")]);
+    assert!(resp.truncated);
+    assert!(resp.scan_limit_reached);
+    assert_eq!(
+        resp.scan_limit_reason,
+        Some(safe_fs_tools::ops::ScanLimitReason::ResponseBytes)
+    );
+}
