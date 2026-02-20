@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `edit` replacement newline normalization now returns borrow-first `Cow<str>` and only allocates when line-ending conversion or trailing-newline append is required, reducing copy/allocation overhead for large unchanged replacement payloads.
 - `list_dir` `max_entries=0` count-only path now skips deny-path name extraction when `secrets.deny_globs` is empty, avoiding unnecessary per-entry `OsString` allocations while preserving existing I/O error classification.
 - `list_dir` internal candidate equality now compares `file_name` directly, removing redundant display-name normalization work in heap bookkeeping.
 - Windows traversal filtering now reuses a single case-insensitive `strip_prefix` fallback result per entry (instead of recomputing it), trimming duplicate normalization on filtered walks.

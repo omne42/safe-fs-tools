@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -53,7 +54,7 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
     let mut replacement = normalize_replacement_line_endings(&request.replacement, newline);
 
     if !replacement.is_empty() && !newline.is_empty() && !replacement.ends_with(newline) {
-        replacement.push_str(newline);
+        replacement.to_mut().push_str(newline);
     }
 
     let content_bytes = usize_to_u64(content.len(), &relative, "file size")?;
@@ -76,9 +77,12 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
     }
 
     let replaced = &content[offsets.start_offset..offsets.end_offset];
-    if replacement != replaced {
+    if replacement.as_ref() != replaced {
         // Apply edits in-place to avoid rebuilding the full output string.
-        content.replace_range(offsets.start_offset..offsets.end_offset, &replacement);
+        content.replace_range(
+            offsets.start_offset..offsets.end_offset,
+            replacement.as_ref(),
+        );
         super::io::write_bytes_atomic_checked(
             &path,
             &relative,
@@ -102,9 +106,12 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
     })
 }
 
-fn normalize_replacement_line_endings(replacement: &str, newline: &str) -> String {
+fn normalize_replacement_line_endings<'a>(replacement: &'a str, newline: &str) -> Cow<'a, str> {
     if newline.is_empty() {
-        return replacement.to_string();
+        return Cow::Borrowed(replacement);
+    }
+    if newline == "\n" && !replacement.contains('\r') {
+        return Cow::Borrowed(replacement);
     }
 
     let mut out = String::with_capacity(replacement.len());
@@ -122,7 +129,7 @@ fn normalize_replacement_line_endings(replacement: &str, newline: &str) -> Strin
         }
     }
 
-    out
+    Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -266,6 +273,7 @@ fn usize_to_u64(value: usize, path: &Path, context: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{line_ending, normalize_replacement_line_endings, split_lines_preserving_endings};
+    use std::borrow::Cow;
 
     #[test]
     fn normalize_replacement_converts_bare_cr() {
@@ -289,6 +297,20 @@ mod tests {
             normalize_replacement_line_endings("one\rtwo\r\nthree\nfour", "\r\n"),
             "one\r\ntwo\r\nthree\r\nfour"
         );
+    }
+
+    #[test]
+    fn normalize_replacement_borrows_when_no_conversion_needed() {
+        let normalized = normalize_replacement_line_endings("one\ntwo\n", "\n");
+        assert!(matches!(normalized, Cow::Borrowed(_)));
+        assert_eq!(normalized, "one\ntwo\n");
+    }
+
+    #[test]
+    fn normalize_replacement_borrows_when_target_has_no_line_ending() {
+        let normalized = normalize_replacement_line_endings("one\rtwo", "");
+        assert!(matches!(normalized, Cow::Borrowed(_)));
+        assert_eq!(normalized, "one\rtwo");
     }
 
     #[test]
