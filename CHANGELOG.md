@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CLI `list_dir`/`grep` JSON 输出组装改为显式预分配 `Vec/Map`（替代逐条 `serde_json::json!` 构造），降低大结果集下的中间分配与序列化开销。
+- CLI 路径脱敏初始化现在预分配 root 容器，并在 `canonicalize(path) == path` 时跳过重复 canonical root 记录，减少错误渲染时的前缀匹配开销。
 - `create_parents` 目录解析在已有非-symlink 目录组件上不再逐层 `canonicalize`，改为轻量 root 边界校验，降低深路径创建流程的 syscall 开销，同时保留 symlink 分支的严格校验语义。
 - Traversal fast path now avoids materializing absolute entry paths when `open_mode=None`; `grep` now derives the absolute path lazily only when a glob-filtered candidate must be opened, reducing per-entry `PathBuf` allocation churn in large scans.
 - `glob`/`grep` now report response-byte budget truncation as `scan_limit_reason=response_bytes` (instead of `results`), improving limit observability when byte budgets trigger early stops.

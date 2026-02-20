@@ -55,12 +55,14 @@ pub(crate) struct PathRedaction {
 
 impl PathRedaction {
     pub(crate) fn from_policy(policy: &safe_fs_tools::SandboxPolicy) -> Self {
-        let mut roots = Vec::<PathBuf>::new();
-        let mut canonical_roots = Vec::<PathBuf>::new();
+        let mut roots = Vec::<PathBuf>::with_capacity(policy.roots.len());
+        let mut canonical_roots = Vec::<PathBuf>::with_capacity(policy.roots.len());
 
         for root in &policy.roots {
             roots.push(root.path.clone());
-            if let Ok(canonical) = root.path.canonicalize() {
+            if let Ok(canonical) = root.path.canonicalize()
+                && canonical != root.path
+            {
                 canonical_roots.push(canonical);
             }
         }
@@ -693,6 +695,20 @@ mod tests {
             RedactionMode::BestEffort,
         );
         assert_eq!(formatted, "secret.txt");
+    }
+
+    #[test]
+    fn canonical_root_duplicate_is_skipped_when_equal_to_declared_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let policy = safe_fs_tools::SandboxPolicy::single_root(
+            "root",
+            dir.path(),
+            safe_fs_tools::RootMode::ReadOnly,
+        );
+
+        let redaction = PathRedaction::from_policy(&policy);
+        assert_eq!(redaction.roots.len(), 1);
+        assert!(redaction.canonical_roots.is_empty());
     }
 
     #[test]

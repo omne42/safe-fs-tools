@@ -2,8 +2,8 @@ use std::path::Path;
 
 use safe_fs_tools::ops::{
     Context, CopyFileRequest, DeleteRequest, EditRequest, GlobRequest, GlobResponse, GrepRequest,
-    GrepResponse, ListDirRequest, ListDirResponse, MkdirRequest, MovePathRequest, PatchRequest,
-    ReadRequest, ScanLimitReason, StatRequest, WriteFileRequest,
+    GrepResponse, ListDirEntryKind, ListDirRequest, ListDirResponse, MkdirRequest, MovePathRequest,
+    PatchRequest, ReadRequest, ScanLimitReason, StatRequest, WriteFileRequest,
 };
 
 use crate::error::CliError;
@@ -41,6 +41,16 @@ fn path_to_lossy_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn list_dir_entry_kind_json_value(kind: ListDirEntryKind) -> serde_json::Value {
+    let value = match kind {
+        ListDirEntryKind::File => "file",
+        ListDirEntryKind::Dir => "dir",
+        ListDirEntryKind::Symlink => "symlink",
+        ListDirEntryKind::Other => "other",
+    };
+    serde_json::Value::String(value.to_string())
+}
+
 fn list_dir_response_to_json_value(
     response: ListDirResponse,
 ) -> Result<serde_json::Value, CliError> {
@@ -55,18 +65,24 @@ fn list_dir_response_to_json_value(
             serde_json::Value::String(path_to_lossy_string(requested_path.as_path())),
         );
     }
-    let entries = response
-        .entries
-        .into_iter()
-        .map(|entry| {
-            serde_json::json!({
-                "path": path_to_lossy_string(entry.path.as_path()),
-                "name": entry.name,
-                "type": entry.kind,
-                "size_bytes": entry.size_bytes,
-            })
-        })
-        .collect();
+    let mut entries = Vec::with_capacity(response.entries.len());
+    for entry in response.entries {
+        let mut item = serde_json::Map::with_capacity(4);
+        item.insert(
+            "path".to_string(),
+            serde_json::Value::String(path_to_lossy_string(entry.path.as_path())),
+        );
+        item.insert("name".to_string(), serde_json::Value::String(entry.name));
+        item.insert(
+            "type".to_string(),
+            list_dir_entry_kind_json_value(entry.kind),
+        );
+        item.insert(
+            "size_bytes".to_string(),
+            serde_json::Value::from(entry.size_bytes),
+        );
+        entries.push(serde_json::Value::Object(item));
+    }
     map.insert("entries".to_string(), serde_json::Value::Array(entries));
     map.insert(
         "truncated".to_string(),
@@ -138,18 +154,21 @@ fn insert_scan_limit_reason(
 
 fn grep_response_to_json_value(response: GrepResponse) -> Result<serde_json::Value, CliError> {
     let mut map = serde_json::Map::with_capacity(12);
-    let matches = response
-        .matches
-        .into_iter()
-        .map(|item| {
-            serde_json::json!({
-                "path": path_to_lossy_string(item.path.as_path()),
-                "line": item.line,
-                "text": item.text,
-                "line_truncated": item.line_truncated,
-            })
-        })
-        .collect();
+    let mut matches = Vec::with_capacity(response.matches.len());
+    for item in response.matches {
+        let mut match_item = serde_json::Map::with_capacity(4);
+        match_item.insert(
+            "path".to_string(),
+            serde_json::Value::String(path_to_lossy_string(item.path.as_path())),
+        );
+        match_item.insert("line".to_string(), serde_json::Value::from(item.line));
+        match_item.insert("text".to_string(), serde_json::Value::String(item.text));
+        match_item.insert(
+            "line_truncated".to_string(),
+            serde_json::Value::Bool(item.line_truncated),
+        );
+        matches.push(serde_json::Value::Object(match_item));
+    }
     map.insert("matches".to_string(), serde_json::Value::Array(matches));
     map.insert(
         "truncated".to_string(),
