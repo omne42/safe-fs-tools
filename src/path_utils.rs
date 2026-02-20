@@ -35,17 +35,31 @@ pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
 }
 
 pub(crate) fn normalize_glob_pattern_for_matching(pattern: &str) -> Cow<'_, str> {
-    let normalized = normalize_glob_pattern(pattern);
-    let mut trimmed = normalized.as_ref();
-    while let Some(rest) = trimmed.strip_prefix("./") {
-        trimmed = rest;
-    }
-    if trimmed.is_empty() {
-        Cow::Borrowed(".")
-    } else if trimmed.len() == normalized.len() {
-        normalized
-    } else {
-        Cow::Owned(trimmed.to_string())
+    match normalize_glob_pattern(pattern) {
+        Cow::Borrowed(normalized) => {
+            let mut trimmed = normalized;
+            while let Some(rest) = trimmed.strip_prefix("./") {
+                trimmed = rest;
+            }
+            if trimmed.is_empty() {
+                Cow::Borrowed(".")
+            } else {
+                Cow::Borrowed(trimmed)
+            }
+        }
+        Cow::Owned(normalized) => {
+            let mut trimmed = normalized.as_str();
+            while let Some(rest) = trimmed.strip_prefix("./") {
+                trimmed = rest;
+            }
+            if trimmed.is_empty() {
+                Cow::Borrowed(".")
+            } else if trimmed.len() == normalized.len() {
+                Cow::Owned(normalized)
+            } else {
+                Cow::Owned(trimmed.to_string())
+            }
+        }
     }
 }
 
@@ -428,6 +442,12 @@ mod tests {
     #[test]
     fn normalize_glob_pattern_for_matching_borrows_when_already_normalized() {
         let normalized = normalize_glob_pattern_for_matching("a/b");
+        assert!(matches!(normalized, Cow::Borrowed("a/b")));
+    }
+
+    #[test]
+    fn normalize_glob_pattern_for_matching_borrows_when_leading_dot_segments_removed() {
+        let normalized = normalize_glob_pattern_for_matching("././a/b");
         assert!(matches!(normalized, Cow::Borrowed("a/b")));
     }
 
