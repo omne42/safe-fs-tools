@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` now allocates the deny-path scratch buffer only when `secrets.deny_globs` is configured for a non-root target path, removing one unnecessary `PathBuf` clone on the common permissive-policy path.
 - `glob`/`grep` safe-prefix directory-probe prechecks now use `symlink_metadata` (no-follow) so symlinked directory prefixes are not misclassified as traversable directories during skip/deny short-circuits.
 - `grep` with `glob` filtering now treats lazily-opened non-regular paths (for example symlinked directories) as skippable I/O entries instead of failing the whole operation with `InvalidPath`.
 - `grep` line scanning removed an unnecessary per-line query-window shrink check; query-window capacity is already bounded per request, reducing tiny hot-loop overhead on large scans.

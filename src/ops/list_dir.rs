@@ -437,7 +437,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let mut response_budget_truncated = false;
     let relative_is_root = relative_dir == Path::new(".");
     let has_deny_globs = !ctx.policy.secrets.deny_globs.is_empty();
-    let mut deny_path_scratch = (!relative_is_root).then(|| relative_dir.clone());
+    let mut deny_path_scratch = (has_deny_globs && !relative_is_root).then(|| relative_dir.clone());
     let max_response_bytes =
         max_estimated_list_dir_response_bytes(max_entries, ctx.policy.limits.max_line_bytes);
 
