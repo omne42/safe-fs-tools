@@ -171,8 +171,7 @@ impl Candidate {
 
 impl PartialEq for Candidate {
     fn eq(&self, other: &Self) -> bool {
-        self.name() == other.name()
-            && Path::new(self.file_name.as_os_str()) == Path::new(other.file_name.as_os_str())
+        self.name() == other.name() && self.file_name == other.file_name
     }
 }
 
@@ -186,9 +185,9 @@ impl PartialOrd for Candidate {
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name().cmp(other.name()).then_with(|| {
-            Path::new(self.file_name.as_os_str()).cmp(Path::new(other.file_name.as_os_str()))
-        })
+        self.name()
+            .cmp(other.name())
+            .then_with(|| self.file_name.cmp(&other.file_name))
     }
 }
 
@@ -223,9 +222,9 @@ impl EntryCandidate {
 
     #[inline]
     fn sorts_before(&self, other: &Candidate) -> bool {
-        self.compare_name(other.name()).then_with(|| {
-            Path::new(self.file_name.as_os_str()).cmp(Path::new(other.file_name.as_os_str()))
-        }) == std::cmp::Ordering::Less
+        self.compare_name(other.name())
+            .then_with(|| self.file_name.cmp(&other.file_name))
+            == std::cmp::Ordering::Less
     }
 }
 

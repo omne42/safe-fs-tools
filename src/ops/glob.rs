@@ -81,12 +81,13 @@ fn build_glob_response(
 
 #[cfg(feature = "glob")]
 fn maybe_sort_glob_matches(matches: &mut [PathBuf], stable_sort: bool) {
-    if stable_sort && matches.len() > 1 {
-        matches.sort_unstable();
+    if !stable_sort || matches.len() <= 1 || matches_sorted_by_path(matches) {
+        return;
     }
+    matches.sort_unstable();
 }
 
-#[cfg(all(test, feature = "glob"))]
+#[cfg(feature = "glob")]
 fn matches_sorted_by_path(matches: &[PathBuf]) -> bool {
     matches.windows(2).all(|pair| pair[0] <= pair[1])
 }
@@ -130,6 +131,16 @@ mod tests {
         assert_eq!(
             matches,
             vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")]
+        );
+    }
+
+    #[test]
+    fn maybe_sort_glob_matches_keeps_sorted_input_intact() {
+        let mut matches = vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")];
+        maybe_sort_glob_matches(&mut matches, true);
+        assert_eq!(
+            matches,
+            vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")]
         );
     }
 }
