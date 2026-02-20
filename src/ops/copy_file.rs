@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -112,7 +113,7 @@ struct ResolvedCopyPaths<'ctx> {
     requested_to: PathBuf,
     from_relative: PathBuf,
     source: PathBuf,
-    to_name: PathBuf,
+    to_name: OsString,
     to_parent: Option<PathBuf>,
 }
 
@@ -280,7 +281,7 @@ fn resolve_and_validate_paths<'ctx>(
             request.to
         ))
     })?;
-    let to_name = PathBuf::from(to_name);
+    let to_name = to_name.to_os_string();
 
     let from_parent_rel = requested_from.parent().unwrap_or_else(|| Path::new(""));
     let to_parent_rel = requested_to.parent().unwrap_or_else(|| Path::new(""));
@@ -346,12 +347,13 @@ fn prepare_destination(
         root_id: request.root_id.clone(),
         path: paths.requested_to.clone(),
     })?;
-    let to_effective_relative = to_relative_parent.join(&paths.to_name);
+    let to_name = Path::new(&paths.to_name);
+    let to_effective_relative = to_relative_parent.join(to_name);
     if ctx.redactor.is_path_denied(&to_effective_relative) {
         return Err(Error::SecretPathDenied(to_effective_relative));
     }
 
-    let destination = to_parent.join(&paths.to_name);
+    let destination = to_parent.join(to_name);
     if !crate::path_utils::starts_with_case_insensitive_normalized(
         &destination,
         paths.canonical_root,

@@ -684,9 +684,11 @@ fn list_entry_base_estimated_response_bytes_from_prefix(
     path_prefix_bytes: usize,
     candidate: &Candidate,
 ) -> usize {
-    let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
-    let path_bytes = path_prefix_bytes.saturating_add(file_name_bytes);
-    path_bytes.saturating_add(candidate.name().len())
+    // Path/name fields are serialized as lossy UTF-8; use display-name bytes so
+    // non-UTF8 entries do not under-account response-budget usage.
+    let display_name_bytes = candidate.name().len();
+    let path_bytes = path_prefix_bytes.saturating_add(display_name_bytes);
+    path_bytes.saturating_add(display_name_bytes)
 }
 
 #[inline]
@@ -694,11 +696,7 @@ fn relative_dir_path_prefix_bytes(relative_dir: &Path) -> usize {
     if relative_dir == Path::new(".") {
         0
     } else {
-        relative_dir
-            .as_os_str()
-            .as_encoded_bytes()
-            .len()
-            .saturating_add(1)
+        relative_dir.to_string_lossy().len().saturating_add(1)
     }
 }
 
@@ -903,6 +901,33 @@ mod tests {
                     + "file.txt".len()
                     + ListDirEntryKind::File.as_str().len()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entry_response_bytes_account_for_lossy_non_utf8_paths() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let relative_dir = PathBuf::from(OsString::from_vec(vec![0xff]));
+        let candidate = Candidate {
+            file_name: OsString::from_vec(vec![0xfe]),
+            cached_lossy_name: std::cell::OnceCell::new(),
+        };
+
+        let bytes = list_entry_estimated_response_bytes(
+            relative_dir.as_path(),
+            &candidate,
+            ListDirEntryKind::File,
+        );
+        let display_name_bytes = candidate.name().len();
+        let expected_min = relative_dir
+            .to_string_lossy()
+            .len()
+            .saturating_add(1)
+            .saturating_add(display_name_bytes)
+            .saturating_add(display_name_bytes)
+            .saturating_add(ListDirEntryKind::File.as_str().len());
+        assert!(bytes >= expected_min);
     }
 
     #[test]
