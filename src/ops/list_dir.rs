@@ -582,7 +582,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     const MIN_LIST_ENTRY_KIND_BYTES: usize = ListDirEntryKind::Dir.serialized_len();
     // Reuse a single absolute-path buffer while materializing retained entries.
     // This avoids one `PathBuf` allocation per candidate in large directories.
-    let mut abs_entry_path = dir.clone();
+    let mut abs_entry_path = dir;
     for candidate in heap.into_sorted_vec() {
         let base_response_bytes =
             list_entry_base_estimated_response_bytes_from_prefix(path_prefix_bytes, &candidate);

@@ -70,7 +70,7 @@ pub fn edit_range(ctx: &Context, request: EditRequest) -> Result<EditResponse> {
         })?;
     if output_bytes > ctx.policy.limits.max_write_bytes {
         return Err(Error::FileTooLarge {
-            path: relative.clone(),
+            path: relative,
             size_bytes: output_bytes,
             max_bytes: ctx.policy.limits.max_write_bytes,
         });

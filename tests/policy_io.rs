@@ -87,7 +87,7 @@ mod policy_io {
         let toml_policy = safe_fs_tools::policy_io::load_policy(&toml_path).expect("load toml");
         assert_eq!(toml_policy.roots.len(), 1);
         assert_eq!(toml_policy.roots[0].id, "workspace");
-        assert_eq!(toml_policy.roots[0].path, root_path.clone());
+        assert_eq!(toml_policy.roots[0].path, root_path);
         assert_eq!(toml_policy.roots[0].mode, RootMode::ReadOnly);
         assert!(toml_policy.permissions.read);
         assert!(!toml_policy.paths.allow_absolute);
@@ -124,7 +124,7 @@ mod policy_io {
         let json_policy = safe_fs_tools::policy_io::load_policy(&json_path).expect("load json");
         assert_eq!(json_policy.roots.len(), 1);
         assert_eq!(json_policy.roots[0].id, "workspace");
-        assert_eq!(json_policy.roots[0].path, root_path.clone());
+        assert_eq!(json_policy.roots[0].path, root_path);
         assert_eq!(json_policy.roots[0].mode, RootMode::ReadOnly);
         assert!(json_policy.permissions.read);
         assert!(!json_policy.paths.allow_absolute);
@@ -214,7 +214,7 @@ mod policy_io {
         let toml_policy = safe_fs_tools::policy_io::load_policy(&toml_path).expect("load toml");
         assert_eq!(toml_policy.roots.len(), 1);
         assert_eq!(toml_policy.roots[0].id, "workspace");
-        assert_eq!(toml_policy.roots[0].path, root_path.clone());
+        assert_eq!(toml_policy.roots[0].path, root_path);
         assert_eq!(toml_policy.roots[0].mode, RootMode::ReadOnly);
         assert!(toml_policy.permissions.read);
 

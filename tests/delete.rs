@@ -451,9 +451,9 @@ fn delete_revalidate_parent_detects_path_change() {
     let (burst_tx, burst_rx) = mpsc::channel::<()>();
     let (burst_started_tx, burst_started_rx) = mpsc::channel::<()>();
     let (burst_done_tx, burst_done_rx) = mpsc::channel::<()>();
-    let pivot_bg = pivot.clone();
-    let dir_a_bg = dir_a.clone();
-    let dir_b_bg = dir_b.clone();
+    let pivot_bg = pivot;
+    let dir_a_bg = dir_a;
+    let dir_b_bg = dir_b;
     let toggler = std::thread::spawn(move || {
         while keep_flapping_bg.load(Ordering::Relaxed) {
             if burst_rx.recv().is_err() {
@@ -541,7 +541,7 @@ fn delete_ignore_missing_returns_missing_when_symlink_parent_is_temporarily_abse
     let (window_tx, window_rx) = mpsc::channel::<()>();
     let (pivot_missing_tx, pivot_missing_rx) = mpsc::channel::<()>();
     let (window_done_tx, window_done_rx) = mpsc::channel::<()>();
-    let pivot_bg = pivot.clone();
+    let pivot_bg = pivot;
     let actual_parent_bg = actual_parent.clone();
     let toggler = std::thread::spawn(move || {
         while keep_flapping_bg.load(Ordering::Relaxed) {

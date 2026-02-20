@@ -272,7 +272,7 @@ pub fn write_file(ctx: &Context, request: WriteFileRequest) -> Result<WriteFileR
     })?;
     if bytes_written > ctx.policy.limits.max_write_bytes {
         return Err(Error::FileTooLarge {
-            path: requested_path.clone(),
+            path: requested_path,
             size_bytes: bytes_written,
             max_bytes: ctx.policy.limits.max_write_bytes,
         });

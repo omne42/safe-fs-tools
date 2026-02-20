@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Removed three redundant hot-path clones in `edit`/`list_dir`/`write` (`PathBuf` ownership now moved directly on early-return branches and scratch-path init), trimming avoidable allocation/copy work without changing behavior.
 - CLI `glob`/`grep` scan-limit JSON 输出改为内建字符串映射（`entries/files/time/results/response_bytes`）并移除不必要的 fallible 序列化分支；`list_dir`/`glob`/`grep` 响应组装函数同步改为无错误返回，减少热路径分支与无效错误传播风险。
 - `list_dir` `max_entries=0` 的 deny-glob count-only 扫描路径现在在命中首个非 deny 可见项后直接短路，不再额外探测 `DirEntry::file_type()`；减少潜在 metadata syscall 开销，并保持 `truncated` 判定语义不变（该路径的 `skipped_io_errors` 仅统计 `read_dir` 迭代错误）。
 - `grep` stable-sort 的“已排序预检查”现在对相邻项只做一次 `path.cmp`，避免重复路径比较，降低大结果集下的排序前扫描开销。
