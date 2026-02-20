@@ -624,6 +624,9 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         ctx.policy.limits.max_read_bytes,
         is_regex,
     );
+    // Reuse a single absolute-path buffer in glob-filter mode to avoid per-file
+    // `root_path.join(relative_path)` allocations while lazily opening files.
+    let mut open_path_scratch = PathBuf::new();
 
     diag = match walk_traversal_files(
         ctx,
@@ -651,8 +654,16 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
             let (file, meta) = match opened_file {
                 Some(opened) => opened,
                 None => {
-                    let path = path.unwrap_or_else(|| root_path.join(&relative_path));
-                    match super::io::open_regular_file_for_read(&path, &relative_path) {
+                    let path = match path.as_deref() {
+                        Some(path) => path,
+                        None => {
+                            open_path_scratch.clear();
+                            open_path_scratch.push(root_path);
+                            open_path_scratch.push(&relative_path);
+                            open_path_scratch.as_path()
+                        }
+                    };
+                    match super::io::open_regular_file_for_read(path, &relative_path) {
                         Ok(opened) => opened,
                         Err(Error::IoPath { .. })
                         | Err(Error::Io(_))
