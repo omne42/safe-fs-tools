@@ -44,13 +44,6 @@ fn validate_requested_path_contract(
     raw_input_path: &Path,
     spec: LeafValidationSpec,
 ) -> Result<()> {
-    let normalized = crate::path_utils_internal::normalize_path_lexical(requested_path);
-    debug_assert_eq!(
-        normalized.as_os_str(),
-        requested_path.as_os_str(),
-        "internal contract violation: requested path must be normalized root-relative: requested={requested_path:?}, raw={raw_input_path:?}"
-    );
-
     let has_non_relative_components = requested_path.components().any(|component| {
         matches!(
             component,
@@ -62,6 +55,29 @@ fn validate_requested_path_contract(
             "invalid {} path {:?}: internal contract violation: requested path must stay root-relative (raw input {:?})",
             spec.op_name, requested_path, raw_input_path
         )));
+    }
+
+    // Contract hardening: normalized root-relative paths may only contain `.`
+    // as the full-root marker, never as an interior segment.
+    if requested_path != Path::new(".")
+        && requested_path
+            .components()
+            .any(|component| matches!(component, Component::CurDir))
+    {
+        return Err(Error::InvalidPath(format!(
+            "invalid {} path {:?}: internal contract violation: requested path must be normalized root-relative (raw input {:?})",
+            spec.op_name, requested_path, raw_input_path
+        )));
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        let normalized = crate::path_utils_internal::normalize_path_lexical(requested_path);
+        debug_assert_eq!(
+            normalized.as_os_str(),
+            requested_path.as_os_str(),
+            "internal contract violation: requested path must be normalized root-relative: requested={requested_path:?}, raw={raw_input_path:?}"
+        );
     }
 
     Ok(())
@@ -170,6 +186,21 @@ mod tests {
         assert_eq!(
             invalid_path_message(err),
             "invalid delete path \"/tmp/file.txt\": internal contract violation: requested path must stay root-relative (raw input \"/tmp/file.txt\")"
+        );
+    }
+
+    #[test]
+    fn rejects_requested_path_with_curdir_segments() {
+        let err = ensure_non_root_leaf(
+            Path::new("./nested/file.txt"),
+            Path::new("./nested/file.txt"),
+            LeafOp::Delete,
+        )
+        .expect_err("requested path with curdir segments should be rejected");
+
+        assert_eq!(
+            invalid_path_message(err),
+            "invalid delete path \"./nested/file.txt\": internal contract violation: requested path must be normalized root-relative (raw input \"./nested/file.txt\")"
         );
     }
 
