@@ -100,7 +100,7 @@ fn ensure_recursive_delete_allows_descendants(
             child_relative_prefix.push(&child_name);
 
             if ctx.redactor.is_path_denied(&child_relative_prefix) {
-                return Err(Error::SecretPathDenied(child_relative_prefix.clone()));
+                return Err(Error::SecretPathDenied(child_relative_prefix));
             }
 
             let child_type = entry

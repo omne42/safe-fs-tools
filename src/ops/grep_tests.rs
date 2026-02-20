@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use super::{
     GrepMatch, MAX_REGEX_LINE_BYTES, ReadLineCapped, ReadLineCappedOptions,
-    matches_sorted_by_path_line, max_capped_line_bytes_for_request, maybe_shrink_line_buffer,
-    maybe_sort_grep_matches, to_owned_utf8_prefix_within,
+    initial_line_buffer_capacity, initial_reader_capacity, matches_sorted_by_path_line,
+    max_capped_line_bytes_for_request, maybe_shrink_line_buffer, maybe_sort_grep_matches,
+    to_owned_utf8_prefix_within,
 };
 
 fn m(path: &str, line: u64) -> GrepMatch {
@@ -48,6 +49,18 @@ fn maybe_sort_grep_matches_skips_sort_when_stable_sort_disabled() {
 fn regex_line_cap_is_bounded() {
     let capped = max_capped_line_bytes_for_request(8 * 1024, u64::MAX, true);
     assert_eq!(capped, MAX_REGEX_LINE_BYTES);
+}
+
+#[test]
+fn initial_capacities_respect_small_max_read_bytes() {
+    assert_eq!(initial_line_buffer_capacity(16 * 1024, 1023), 1024);
+    assert_eq!(initial_reader_capacity(16 * 1024, 2047), 2048);
+}
+
+#[test]
+fn initial_capacities_keep_default_bounds_for_large_max_read_bytes() {
+    assert_eq!(initial_line_buffer_capacity(1024, u64::MAX), 8 * 1024);
+    assert_eq!(initial_reader_capacity(1024 * 1024, u64::MAX), 64 * 1024);
 }
 
 #[test]

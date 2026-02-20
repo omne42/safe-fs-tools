@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `grep` now bounds initial line-buffer and reader-buffer preallocation by `limits.max_read_bytes + 1` (in addition to existing clamp limits), reducing per-request memory overhead under small read-budget policies without changing scan/truncation behavior; added unit coverage for the new capacity bounds.
+- `delete --recursive` deny pre-scan now returns the denied child path without cloning the scratch `PathBuf` on the error branch, removing one unnecessary allocation on the deny-hit path.
 - CLI redaction root setup now skips adding a canonical root when it is already lexically equivalent to the declared root (for example `/root/path/.` vs `/root/path`), removing redundant per-error prefix checks without changing redaction semantics; added regression coverage for lexical-equivalence deduplication.
 - `read` line-range scanning now hoists `start_line - 1` out of the hot loop, removing repeated per-line `saturating_sub` work while preserving range and UTF-8 validation behavior.
 - CLI best-effort path redaction now selects the most specific matching root using a borrow-first prefix check and performs `strip_prefix` only once for the winning root, removing repeated per-root `PathBuf` allocations in error-render hot paths while preserving root-priority semantics (including tie stability).

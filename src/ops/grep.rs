@@ -83,17 +83,29 @@ fn initial_match_capacity(max_results: usize) -> usize {
 }
 
 #[cfg(feature = "grep")]
-fn initial_line_buffer_capacity(max_line_bytes: usize) -> usize {
-    const DEFAULT_CAPACITY: usize = 8 * 1024;
-    const MAX_INITIAL_CAPACITY: usize = 64 * 1024;
-    max_line_bytes.clamp(DEFAULT_CAPACITY, MAX_INITIAL_CAPACITY)
+#[inline]
+fn max_initial_buffer_bytes(max_read_bytes: u64) -> usize {
+    usize::try_from(max_read_bytes)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1)
 }
 
 #[cfg(feature = "grep")]
-fn initial_reader_capacity(max_capped_line_bytes: usize) -> usize {
+fn initial_line_buffer_capacity(max_line_bytes: usize, max_read_bytes: u64) -> usize {
     const DEFAULT_CAPACITY: usize = 8 * 1024;
     const MAX_INITIAL_CAPACITY: usize = 64 * 1024;
-    max_capped_line_bytes.clamp(DEFAULT_CAPACITY, MAX_INITIAL_CAPACITY)
+    max_line_bytes
+        .clamp(DEFAULT_CAPACITY, MAX_INITIAL_CAPACITY)
+        .min(max_initial_buffer_bytes(max_read_bytes))
+}
+
+#[cfg(feature = "grep")]
+fn initial_reader_capacity(max_capped_line_bytes: usize, max_read_bytes: u64) -> usize {
+    const DEFAULT_CAPACITY: usize = 8 * 1024;
+    const MAX_INITIAL_CAPACITY: usize = 64 * 1024;
+    max_capped_line_bytes
+        .clamp(DEFAULT_CAPACITY, MAX_INITIAL_CAPACITY)
+        .min(max_initial_buffer_bytes(max_read_bytes))
 }
 
 #[cfg(feature = "grep")]
@@ -562,6 +574,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let max_walk = ctx.policy.limits.max_walk_ms.map(Duration::from_millis);
     let read_line_options =
         ReadLineCappedOptions::new(Some(&started), max_walk).with_stop_after_cap(is_regex);
+    let max_read_bytes = ctx.policy.limits.max_read_bytes;
     let max_line_bytes = ctx.policy.limits.max_line_bytes;
     let max_response_bytes =
         max_estimated_grep_response_bytes(ctx.policy.limits.max_results, max_line_bytes);
@@ -574,7 +587,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let mut estimated_response_bytes = 0usize;
     let mut counters = GrepSkipCounters::default();
     let mut diag = TraversalDiagnostics::default();
-    let mut line_buf = Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes));
+    let mut line_buf =
+        Vec::<u8>::with_capacity(initial_line_buffer_capacity(max_line_bytes, max_read_bytes));
     let query_window_capacity = if is_regex {
         0
     } else {
@@ -644,11 +658,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     } else {
         None
     };
-    let max_capped_line_bytes = max_capped_line_bytes_for_request(
-        max_line_bytes,
-        ctx.policy.limits.max_read_bytes,
-        is_regex,
-    );
+    let max_capped_line_bytes =
+        max_capped_line_bytes_for_request(max_line_bytes, max_read_bytes, is_regex);
     // Reuse a single absolute-path buffer in glob-filter mode to avoid per-file
     // `root_path.join(relative_path)` allocations while lazily opening files.
     let mut open_path_scratch = PathBuf::new();
@@ -710,7 +721,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
 
             let limit = ctx.policy.limits.max_read_bytes.saturating_add(1);
             let mut reader = std::io::BufReader::with_capacity(
-                initial_reader_capacity(max_capped_line_bytes),
+                initial_reader_capacity(max_capped_line_bytes, max_read_bytes),
                 file.take(limit),
             );
             let mut scanned_bytes = 0_u64;
