@@ -141,9 +141,10 @@ fn read_line_range(
 
     let mut scanned_bytes: u64 = 0;
     let mut current_line: u64 = 0;
+    let start_line_index = start_line.saturating_sub(1);
 
     loop {
-        let should_discard = current_line < start_line.saturating_sub(1);
+        let should_discard = current_line < start_line_index;
         let n = if should_discard {
             read_line_discarding_bytes_validating_utf8(
                 &mut reader,

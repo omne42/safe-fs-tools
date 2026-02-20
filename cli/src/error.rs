@@ -127,7 +127,7 @@ impl PathRedaction {
         for root in &policy.roots {
             roots.push(RedactionRoot::new(root.path.clone()));
             if let Ok(canonical) = root.path.canonicalize()
-                && canonical != root.path
+                && !paths_equivalent_for_redaction(canonical.as_path(), root.path.as_path())
             {
                 canonical_roots.push(RedactionRoot::new(canonical));
             }
@@ -138,6 +138,11 @@ impl PathRedaction {
             canonical_roots,
         }
     }
+}
+
+fn paths_equivalent_for_redaction(a: &Path, b: &Path) -> bool {
+    safe_fs_tools::path_utils::starts_with_case_insensitive(a, b)
+        && safe_fs_tools::path_utils::starts_with_case_insensitive(b, a)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -816,6 +821,21 @@ mod tests {
         let policy = safe_fs_tools::SandboxPolicy::single_root(
             "root",
             dir.path(),
+            safe_fs_tools::RootMode::ReadOnly,
+        );
+
+        let redaction = PathRedaction::from_policy(&policy);
+        assert_eq!(redaction.roots.len(), 1);
+        assert!(redaction.canonical_roots.is_empty());
+    }
+
+    #[test]
+    fn canonical_root_duplicate_is_skipped_when_lexically_equivalent_to_declared_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let declared_with_curdir = dir.path().join(".");
+        let policy = safe_fs_tools::SandboxPolicy::single_root(
+            "root",
+            &declared_with_curdir,
             safe_fs_tools::RootMode::ReadOnly,
         );
 

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CLI redaction root setup now skips adding a canonical root when it is already lexically equivalent to the declared root (for example `/root/path/.` vs `/root/path`), removing redundant per-error prefix checks without changing redaction semantics; added regression coverage for lexical-equivalence deduplication.
+- `read` line-range scanning now hoists `start_line - 1` out of the hot loop, removing repeated per-line `saturating_sub` work while preserving range and UTF-8 validation behavior.
 - CLI best-effort path redaction now selects the most specific matching root using a borrow-first prefix check and performs `strip_prefix` only once for the winning root, removing repeated per-root `PathBuf` allocations in error-render hot paths while preserving root-priority semantics (including tie stability).
 - `grep` plain-query hot loop now short-circuits non-matching lines before trailing line-ending trimming, removing two per-line buffer mutations on the common no-match path without changing UTF-8/non-UTF8 skip semantics.
 - `read` line-range scanning now uses an explicit checked line-index increment (`checked_add`) and returns a deterministic `InvalidPath` overflow error instead of relying on arithmetic overflow behavior in extreme line-count edge cases; added unit coverage for the overflow guard.
