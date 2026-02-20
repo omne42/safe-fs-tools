@@ -34,16 +34,18 @@ pub(crate) fn normalize_glob_pattern(pattern: &str) -> Cow<'_, str> {
     Cow::Borrowed(pattern)
 }
 
-pub(crate) fn normalize_glob_pattern_for_matching(pattern: &str) -> String {
+pub(crate) fn normalize_glob_pattern_for_matching(pattern: &str) -> Cow<'_, str> {
     let normalized = normalize_glob_pattern(pattern);
     let mut trimmed = normalized.as_ref();
     while let Some(rest) = trimmed.strip_prefix("./") {
         trimmed = rest;
     }
     if trimmed.is_empty() {
-        ".".to_string()
+        Cow::Borrowed(".")
+    } else if trimmed.len() == normalized.len() {
+        normalized
     } else {
-        trimmed.to_string()
+        Cow::Owned(trimmed.to_string())
     }
 }
 
@@ -421,6 +423,12 @@ mod tests {
         assert_eq!(normalize_glob_pattern_for_matching("././"), ".");
         let long = format!("{}file", "./".repeat(1024));
         assert_eq!(normalize_glob_pattern_for_matching(&long), "file");
+    }
+
+    #[test]
+    fn normalize_glob_pattern_for_matching_borrows_when_already_normalized() {
+        let normalized = normalize_glob_pattern_for_matching("a/b");
+        assert!(matches!(normalized, Cow::Borrowed("a/b")));
     }
 
     #[test]

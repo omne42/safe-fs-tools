@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `glob` pattern normalization now returns borrow-first `Cow<str>` and traversal/secrets glob compilation paths consume borrowed normalized patterns when possible, avoiding unnecessary per-request `String` allocations on already-normalized inputs.
+- `traversal.skip_globs` total-byte accounting now uses checked addition and returns an explicit overflow validation error instead of saturating arithmetic, tightening policy-shape validation for extreme inputs.
 - `list_dir` now allocates the deny-path scratch buffer only when `secrets.deny_globs` is configured for a non-root target path, removing one unnecessary `PathBuf` clone on the common permissive-policy path.
 - `glob`/`grep` safe-prefix directory-probe prechecks now use `symlink_metadata` (no-follow) so symlinked directory prefixes are not misclassified as traversable directories during skip/deny short-circuits.
 - `grep` with `glob` filtering now treats lazily-opened non-regular paths (for example symlinked directories) as skippable I/O entries instead of failing the whole operation with `InvalidPath`.
