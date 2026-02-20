@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `read` line-range scan now validates UTF-8 while streaming skipped prefix lines (before `start_line`), fixing a bug where invalid UTF-8 in discarded lines could be missed; this also enables earlier fail-fast on malformed inputs without retaining skipped-line buffers.
 - `list_dir` response-byte budgeting now accounts path/name bytes using lossy display UTF-8 lengths (instead of raw OS bytes), fixing under-accounting for non-UTF8 directory entries that could delay expected `response_budget` truncation; added Unix regression coverage for non-UTF8 path/name accounting.
 - `copy_file` destination leaf handling now keeps the destination file name as `OsString` through path preparation and only materializes `Path` views at join sites, removing one avoidable `PathBuf` allocation on the copy hot path.
 - `resolve::dir_ops::ensure_dir_under_root` now keeps the accumulating relative path in-place (`push`) and validates path segments as borrowed `OsStr`, removing one per-segment `PathBuf` allocation/clone in `create_parents` directory resolution while preserving boundary and identity checks.

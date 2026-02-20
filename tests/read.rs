@@ -310,6 +310,23 @@ fn read_rejects_non_utf8_file_line_range_read() {
 }
 
 #[test]
+fn read_rejects_non_utf8_bytes_before_selected_line_range() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("invalid-prefix.txt");
+    std::fs::write(&path, b"\xff\nok\n").expect("write");
+
+    let ctx = Context::new(read_enabled_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let err = read_err(&ctx, "invalid-prefix.txt", Some(2), Some(2));
+
+    match err {
+        safe_fs_tools::Error::InvalidUtf8 { path, .. } => {
+            assert_eq!(path, PathBuf::from("invalid-prefix.txt"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn read_line_ranges_respects_max_read_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("bigline.txt");

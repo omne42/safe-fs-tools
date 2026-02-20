@@ -135,6 +135,9 @@ fn read_line_range(
         file_size_bytes,
         ctx.policy.limits.max_read_bytes,
     ));
+    let mut utf8_pending = [0_u8; 3];
+    let mut utf8_pending_len = 0_usize;
+    let mut utf8_error = None::<std::str::Utf8Error>;
 
     let mut scanned_bytes: u64 = 0;
     let mut current_line: u64 = 0;
@@ -142,12 +145,20 @@ fn read_line_range(
     loop {
         let upcoming_line = current_line.saturating_add(1);
         let n = if upcoming_line < start_line {
-            read_line_discarding_bytes(&mut reader)
-                .map_err(|err| Error::io_path("read", relative, err))?
+            read_line_discarding_bytes_validating_utf8(
+                &mut reader,
+                &mut utf8_pending,
+                &mut utf8_pending_len,
+                &mut utf8_error,
+            )
+            .map_err(|err| Error::io_path("read", relative, err))?
         } else {
             read_line_appending_bytes(&mut reader, &mut out)
                 .map_err(|err| Error::io_path("read", relative, err))?
         };
+        if let Some(err) = utf8_error.take() {
+            return Err(Error::invalid_utf8(relative.to_path_buf(), err));
+        }
         if n == 0 {
             break;
         }
@@ -201,8 +212,91 @@ fn initial_line_range_reader_capacity(max_read_bytes: u64) -> usize {
         })
 }
 
-fn read_line_discarding_bytes<R: BufRead>(reader: &mut R) -> std::io::Result<usize> {
-    consume_next_line_bytes(reader, |_| {})
+fn utf8_error_for_incomplete_sequence(bytes: &[u8]) -> std::str::Utf8Error {
+    std::str::from_utf8(bytes).expect_err("incomplete UTF-8 sequence must be invalid")
+}
+
+fn update_utf8_validation_state(
+    pending: &mut [u8; 3],
+    pending_len: &mut usize,
+    utf8_error: &mut Option<std::str::Utf8Error>,
+    mut chunk: &[u8],
+) {
+    if utf8_error.is_some() {
+        return;
+    }
+
+    while *pending_len > 0 {
+        if chunk.is_empty() {
+            return;
+        }
+        let needed = 4usize.saturating_sub(*pending_len);
+        let take = needed.min(chunk.len());
+        let mut combined = [0_u8; 4];
+        combined[..*pending_len].copy_from_slice(&pending[..*pending_len]);
+        combined[*pending_len..*pending_len + take].copy_from_slice(&chunk[..take]);
+        match std::str::from_utf8(&combined[..*pending_len + take]) {
+            Ok(_) => {
+                *pending_len = 0;
+                chunk = &chunk[take..];
+            }
+            Err(err) => {
+                if err.error_len().is_some() {
+                    *utf8_error = Some(err);
+                    *pending_len = 0;
+                    return;
+                }
+                let trailing = &combined[err.valid_up_to()..*pending_len + take];
+                if trailing.len() > pending.len() {
+                    *utf8_error = Some(err);
+                    *pending_len = 0;
+                    return;
+                }
+                pending[..trailing.len()].copy_from_slice(trailing);
+                *pending_len = trailing.len();
+                chunk = &chunk[take..];
+            }
+        }
+    }
+
+    match std::str::from_utf8(chunk) {
+        Ok(_) => {}
+        Err(err) => {
+            if err.error_len().is_some() {
+                *utf8_error = Some(err);
+                *pending_len = 0;
+                return;
+            }
+            let trailing = &chunk[err.valid_up_to()..];
+            if trailing.len() > pending.len() {
+                *utf8_error = Some(err);
+                *pending_len = 0;
+                return;
+            }
+            pending[..trailing.len()].copy_from_slice(trailing);
+            *pending_len = trailing.len();
+        }
+    }
+}
+
+fn read_line_discarding_bytes_validating_utf8<R: BufRead>(
+    reader: &mut R,
+    utf8_pending: &mut [u8; 3],
+    utf8_pending_len: &mut usize,
+    utf8_error: &mut Option<std::str::Utf8Error>,
+) -> std::io::Result<usize> {
+    *utf8_pending_len = 0;
+    *utf8_error = None;
+    let n = consume_next_line_bytes(reader, |chunk| {
+        update_utf8_validation_state(utf8_pending, utf8_pending_len, utf8_error, chunk);
+    })?;
+    if utf8_error.is_none() && *utf8_pending_len > 0 {
+        *utf8_error = Some(utf8_error_for_incomplete_sequence(
+            &utf8_pending[..*utf8_pending_len],
+        ));
+        *utf8_pending_len = 0;
+    }
+    Ok(n)
 }
 
 fn read_line_appending_bytes<R: BufRead>(
