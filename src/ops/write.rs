@@ -100,20 +100,18 @@ fn write_temp_file(
         .as_file_mut()
         .write_all(bytes)
         .map_err(|err| Error::io_path("write", relative, err))?;
-    tmp_file
-        .as_file_mut()
-        .sync_all()
-        .map_err(|err| Error::io_path("sync", relative, err))?;
     if let Some(perms) = permissions {
         tmp_file
             .as_file()
             .set_permissions(perms)
             .map_err(|err| Error::io_path("set_permissions", relative, err))?;
-        tmp_file
-            .as_file_mut()
-            .sync_all()
-            .map_err(|err| Error::io_path("sync", relative, err))?;
     }
+    // One post-write (and post-permission-copy) sync is sufficient before atomic rename.
+    // This avoids an extra flush on overwrite paths without weakening durability behavior.
+    tmp_file
+        .as_file_mut()
+        .sync_all()
+        .map_err(|err| Error::io_path("sync", relative, err))?;
     Ok(tmp_file.into_temp_path())
 }
 

@@ -9,6 +9,8 @@ use safe_fs_tools::ops::{
     stat, write_file,
 };
 use safe_fs_tools::policy::RootMode;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[cfg(any(unix, windows))]
 fn create_symlink_file_or_skip(target: &Path, link: &Path) -> bool {
@@ -412,6 +414,41 @@ fn write_file_creates_new_files_and_respects_overwrite() {
             .expect("read overwritten file"),
         "bye"
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn write_file_overwrite_preserves_existing_permissions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("file.txt");
+    std::fs::write(&target, "old").expect("write");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640))
+        .expect("set permissions");
+
+    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let resp = write_file(
+        &ctx,
+        WriteFileRequest {
+            root_id: "root".to_string(),
+            path: PathBuf::from("file.txt"),
+            content: "new".to_string(),
+            overwrite: true,
+            create_parents: false,
+        },
+    )
+    .expect("write");
+
+    assert_eq!(resp.path, PathBuf::from("file.txt"));
+    assert_eq!(resp.requested_path, Some(PathBuf::from("file.txt")));
+    assert!(!resp.created);
+    assert_eq!(std::fs::read_to_string(&target).expect("read"), "new");
+
+    let mode = std::fs::metadata(&target)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o640);
 }
 
 #[test]
