@@ -413,6 +413,50 @@ fn is_list_dir_truncated(
     hit_entry_limit || incomplete_due_to_io || incomplete_due_to_materialization
 }
 
+fn scan_count_only_entries(
+    ctx: &Context,
+    read_dir: fs::ReadDir,
+    has_deny_globs: bool,
+    relative_is_root: bool,
+    relative_dir: &Path,
+    mut deny_path_scratch: Option<&mut PathBuf>,
+) -> Result<(bool, u64)> {
+    let mut zero_limit_truncated = false;
+    let mut skipped_io_errors: u64 = 0;
+
+    for entry in read_dir {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                skipped_io_errors = skipped_io_errors.saturating_add(1);
+                continue;
+            }
+        };
+
+        match process_dir_entry_count_only(
+            ctx,
+            entry,
+            has_deny_globs,
+            relative_is_root,
+            relative_dir,
+            deny_path_scratch.as_deref_mut(),
+        )? {
+            CountOnlyOutcome::Counted => {
+                // With `max_entries=0`, callers only need to know whether any entry exists.
+                // Stop after the first visible match to avoid scanning huge directories.
+                zero_limit_truncated = true;
+                break;
+            }
+            CountOnlyOutcome::Denied => {}
+            CountOnlyOutcome::SkippedIoError => {
+                skipped_io_errors = skipped_io_errors.saturating_add(1);
+            }
+        }
+    }
+
+    Ok((zero_limit_truncated, skipped_io_errors))
+}
+
 pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirResponse> {
     ctx.ensure_policy_permission(ctx.policy.permissions.list_dir, "list_dir")?;
 
@@ -434,22 +478,47 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         )));
     }
 
-    let mut heap = BinaryHeap::<Candidate>::with_capacity(initial_heap_capacity(max_entries));
-    let mut matched_entries: usize = 0;
-    let mut skipped_io_errors: u64 = 0;
-    let mut zero_limit_truncated = false;
-    let mut response_budget_truncated = false;
     let relative_is_root = relative_dir == Path::new(".");
     let has_deny_globs = !ctx.policy.secrets.deny_globs.is_empty();
     let mut deny_path_scratch = (has_deny_globs && !relative_is_root).then(|| relative_dir.clone());
-    let max_response_bytes =
-        max_estimated_list_dir_response_bytes(max_entries, ctx.policy.limits.max_line_bytes);
 
     let read_dir =
         fs::read_dir(&dir).map_err(|err| Error::io_path("read_dir", &relative_dir, err))?;
     // Revalidate once after opening the iterator to catch swaps between preflight
     // metadata capture and iteration setup without paying an extra metadata probe.
     ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
+
+    if max_entries == 0 {
+        let (zero_limit_truncated, skipped_io_errors) = scan_count_only_entries(
+            ctx,
+            read_dir,
+            has_deny_globs,
+            relative_is_root,
+            &relative_dir,
+            deny_path_scratch.as_mut(),
+        )?;
+        ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
+
+        let truncated = is_list_dir_truncated(
+            max_entries,
+            zero_limit_truncated,
+            false,
+            0,
+            skipped_io_errors,
+            0,
+        );
+        return Ok(ListDirResponse {
+            path: relative_dir,
+            requested_path: Some(requested_path),
+            entries: Vec::new(),
+            truncated,
+            skipped_io_errors,
+        });
+    }
+
+    let mut heap = BinaryHeap::<Candidate>::with_capacity(initial_heap_capacity(max_entries));
+    let mut matched_entries: usize = 0;
+    let mut skipped_io_errors: u64 = 0;
 
     for entry in read_dir {
         let entry = match entry {
@@ -459,28 +528,6 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 continue;
             }
         };
-        if max_entries == 0 {
-            match process_dir_entry_count_only(
-                ctx,
-                entry,
-                has_deny_globs,
-                relative_is_root,
-                &relative_dir,
-                deny_path_scratch.as_mut(),
-            )? {
-                CountOnlyOutcome::Counted => {
-                    // With `max_entries=0`, callers only need to know whether any entry exists.
-                    // Stop after the first visible match to avoid scanning huge directories.
-                    zero_limit_truncated = true;
-                    break;
-                }
-                CountOnlyOutcome::Denied => {}
-                CountOnlyOutcome::SkippedIoError => {
-                    skipped_io_errors = skipped_io_errors.saturating_add(1);
-                }
-            }
-            continue;
-        }
 
         match process_dir_entry(
             ctx,
@@ -506,63 +553,55 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     }
     ensure_directory_identity_unchanged(&dir, &relative_dir, &meta)?;
 
-    let entries = if max_entries == 0 {
-        Vec::new()
-    } else {
-        // Avoid huge upfront allocation when policy/request allows very large `max_entries`.
-        // The vector can still grow as needed, but starts from a bounded capacity.
-        let mut entries = Vec::with_capacity(initial_entries_capacity(heap.len()));
-        // Estimated payload-byte guardrail; not a strict process-memory cap.
-        let mut estimated_response_bytes = 0usize;
-        let path_prefix_bytes = relative_dir_path_prefix_bytes(&relative_dir);
-        // Reuse a single absolute-path buffer while materializing retained entries.
-        // This avoids one `PathBuf` allocation per candidate in large directories.
-        let mut abs_entry_path = dir.clone();
-        for candidate in heap.into_sorted_vec() {
-            // Fast precheck: if even the minimum possible serialized entry size no longer fits the
-            // response budget, avoid extra metadata syscalls and stop immediately.
-            let min_entry_response_bytes =
-                list_entry_min_estimated_response_bytes_from_prefix(path_prefix_bytes, &candidate);
-            if estimated_response_bytes.saturating_add(min_entry_response_bytes)
-                > max_response_bytes
-            {
-                response_budget_truncated = true;
-                break;
-            }
-            // Resolve final type/size only for retained top-k entries, avoiding
-            // repeated metadata probes for candidates that were later evicted.
-            let entry_name = candidate.file_name.as_os_str();
-            abs_entry_path.push(entry_name);
-            let kind_and_size = entry_kind_and_size_no_follow(abs_entry_path.as_path());
-            let _ = abs_entry_path.pop();
-            let (kind, size_bytes) = match kind_and_size {
-                Ok(value) => value,
-                Err(_) => {
-                    skipped_io_errors = skipped_io_errors.saturating_add(1);
-                    // Keep `truncated` based on the visible-entry count gathered during the
-                    // directory scan; metadata races here should only affect returned entry
-                    // materialization and `skipped_io_errors`.
-                    continue;
-                }
-            };
-            let entry_response_bytes = list_entry_estimated_response_bytes_from_prefix(
-                path_prefix_bytes,
-                &candidate,
-                kind,
-            );
-            if estimated_response_bytes.saturating_add(entry_response_bytes) > max_response_bytes {
-                response_budget_truncated = true;
-                break;
-            }
-            estimated_response_bytes =
-                estimated_response_bytes.saturating_add(entry_response_bytes);
-            entries.push(candidate.into_list_entry(&relative_dir, kind, size_bytes));
+    let max_response_bytes =
+        max_estimated_list_dir_response_bytes(max_entries, ctx.policy.limits.max_line_bytes);
+    // Avoid huge upfront allocation when policy/request allows very large `max_entries`.
+    // The vector can still grow as needed, but starts from a bounded capacity.
+    let mut entries = Vec::with_capacity(initial_entries_capacity(heap.len()));
+    // Estimated payload-byte guardrail; not a strict process-memory cap.
+    let mut estimated_response_bytes = 0usize;
+    let mut response_budget_truncated = false;
+    let path_prefix_bytes = relative_dir_path_prefix_bytes(&relative_dir);
+    // Reuse a single absolute-path buffer while materializing retained entries.
+    // This avoids one `PathBuf` allocation per candidate in large directories.
+    let mut abs_entry_path = dir.clone();
+    for candidate in heap.into_sorted_vec() {
+        // Fast precheck: if even the minimum possible serialized entry size no longer fits the
+        // response budget, avoid extra metadata syscalls and stop immediately.
+        let min_entry_response_bytes =
+            list_entry_min_estimated_response_bytes_from_prefix(path_prefix_bytes, &candidate);
+        if estimated_response_bytes.saturating_add(min_entry_response_bytes) > max_response_bytes {
+            response_budget_truncated = true;
+            break;
         }
-        entries
-    };
+        // Resolve final type/size only for retained top-k entries, avoiding
+        // repeated metadata probes for candidates that were later evicted.
+        let entry_name = candidate.file_name.as_os_str();
+        abs_entry_path.push(entry_name);
+        let kind_and_size = entry_kind_and_size_no_follow(abs_entry_path.as_path());
+        let _ = abs_entry_path.pop();
+        let (kind, size_bytes) = match kind_and_size {
+            Ok(value) => value,
+            Err(_) => {
+                skipped_io_errors = skipped_io_errors.saturating_add(1);
+                // Keep `truncated` based on the visible-entry count gathered during the
+                // directory scan; metadata races here should only affect returned entry
+                // materialization and `skipped_io_errors`.
+                continue;
+            }
+        };
+        let entry_response_bytes =
+            list_entry_estimated_response_bytes_from_prefix(path_prefix_bytes, &candidate, kind);
+        if estimated_response_bytes.saturating_add(entry_response_bytes) > max_response_bytes {
+            response_budget_truncated = true;
+            break;
+        }
+        estimated_response_bytes = estimated_response_bytes.saturating_add(entry_response_bytes);
+        entries.push(candidate.into_list_entry(&relative_dir, kind, size_bytes));
+    }
     let truncated = is_list_dir_truncated(
         max_entries,
-        zero_limit_truncated,
+        false,
         response_budget_truncated,
         matched_entries,
         skipped_io_errors,

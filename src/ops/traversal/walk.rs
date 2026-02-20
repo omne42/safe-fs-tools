@@ -18,7 +18,6 @@ fn resolve_walk_root_for_traversal(
     root_path: &Path,
     walk_root: &Path,
 ) -> Result<PathBuf> {
-    let canonical_root = ctx.canonical_root(root_id)?;
     let relative_walk_root =
         crate::path_utils::strip_prefix_case_insensitive_normalized(walk_root, root_path)
             .ok_or_else(|| {
@@ -30,9 +29,9 @@ fn resolve_walk_root_for_traversal(
         relative_walk_root
     };
     if relative_walk_root == Path::new(".") {
-        return Ok(canonical_root.to_path_buf());
+        return Ok(root_path.to_path_buf());
     }
-    let requested_walk_root = canonical_root.join(&relative_walk_root);
+    let requested_walk_root = root_path.join(&relative_walk_root);
 
     match ctx.canonical_path_in_root(root_id, &relative_walk_root) {
         Ok((canonical, _, _)) => {

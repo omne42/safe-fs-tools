@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` now routes `max_entries=0` through a dedicated count-only scan path and keeps the top-k materialization loop branch-free, reducing hot-loop branching/allocation overhead while preserving truncation and `skipped_io_errors` semantics.
+- Traversal walk-root resolution now reuses the already-resolved caller root path instead of doing a second root-map lookup, trimming per-request setup overhead without changing boundary checks.
 - `resolve` not-found escape classification now reuses mutable path buffers (`push`/`pop`) instead of rebuilding joined paths at every segment, removing quadratic allocation/copy behavior on deep paths while preserving outside-root symlink escape checks.
 - `edit` replacement newline normalization now returns borrow-first `Cow<str>` and only allocates when line-ending conversion or trailing-newline append is required, reducing copy/allocation overhead for large unchanged replacement payloads.
 - `list_dir` `max_entries=0` count-only path now skips deny-path name extraction when `secrets.deny_globs` is empty, avoiding unnecessary per-entry `OsString` allocations while preserving existing I/O error classification.
