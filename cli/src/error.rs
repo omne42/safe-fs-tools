@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const CLI_ERROR_CODE_JSON: &str = "json";
 
@@ -48,22 +48,88 @@ impl CliError {
 }
 
 #[derive(Debug, Clone)]
+struct RedactionRoot {
+    path: PathBuf,
+    normalized_depth: usize,
+}
+
+impl RedactionRoot {
+    fn new(path: PathBuf) -> Self {
+        let normalized_depth = normalized_component_depth(path.as_path());
+        Self {
+            path,
+            normalized_depth,
+        }
+    }
+}
+
+fn normalized_component_depth(path: &Path) -> usize {
+    if path.as_os_str().is_empty() {
+        return 1;
+    }
+
+    let mut saw_non_curdir = false;
+    let mut has_root = false;
+    let mut has_prefix = false;
+    let mut leading_parent_count = 0usize;
+    let mut normal_count = 0usize;
+
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                saw_non_curdir = true;
+                if normal_count > 0 {
+                    normal_count -= 1;
+                } else if !has_root {
+                    leading_parent_count = leading_parent_count.saturating_add(1);
+                }
+            }
+            Component::Normal(_) => {
+                saw_non_curdir = true;
+                normal_count = normal_count.saturating_add(1);
+            }
+            Component::RootDir => {
+                saw_non_curdir = true;
+                has_root = true;
+            }
+            Component::Prefix(_) => {
+                saw_non_curdir = true;
+                has_prefix = true;
+            }
+        }
+    }
+
+    if !saw_non_curdir {
+        return 1;
+    }
+    if !has_root && !has_prefix && normal_count == 0 && leading_parent_count == 0 {
+        return 1;
+    }
+
+    usize::from(has_prefix)
+        .saturating_add(usize::from(has_root))
+        .saturating_add(leading_parent_count)
+        .saturating_add(normal_count)
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct PathRedaction {
-    roots: Vec<PathBuf>,
-    canonical_roots: Vec<PathBuf>,
+    roots: Vec<RedactionRoot>,
+    canonical_roots: Vec<RedactionRoot>,
 }
 
 impl PathRedaction {
     pub(crate) fn from_policy(policy: &safe_fs_tools::SandboxPolicy) -> Self {
-        let mut roots = Vec::<PathBuf>::with_capacity(policy.roots.len());
-        let mut canonical_roots = Vec::<PathBuf>::with_capacity(policy.roots.len());
+        let mut roots = Vec::<RedactionRoot>::with_capacity(policy.roots.len());
+        let mut canonical_roots = Vec::<RedactionRoot>::with_capacity(policy.roots.len());
 
         for root in &policy.roots {
-            roots.push(root.path.clone());
+            roots.push(RedactionRoot::new(root.path.clone()));
             if let Ok(canonical) = root.path.canonicalize()
                 && canonical != root.path
             {
-                canonical_roots.push(canonical);
+                canonical_roots.push(RedactionRoot::new(canonical));
             }
         }
 
@@ -133,15 +199,14 @@ fn format_path_for_error_with_mode(
             .chain(redaction.canonical_roots.iter())
         {
             if let Some(relative) =
-                safe_fs_tools::path_utils::strip_prefix_case_insensitive(path, root)
+                safe_fs_tools::path_utils::strip_prefix_case_insensitive(path, &root.path)
             {
-                let prefix_len = root.components().count();
                 let should_replace = best_match
                     .as_ref()
-                    .map(|(best_len, _)| prefix_len > *best_len)
+                    .map(|(best_len, _)| root.normalized_depth > *best_len)
                     .unwrap_or(true);
                 if should_replace {
-                    best_match = Some((prefix_len, relative));
+                    best_match = Some((root.normalized_depth, relative));
                 }
             }
         }
@@ -595,8 +660,9 @@ fn format_root_id_for_error(root_id: &str, mode: RedactionMode) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        PathRedaction, RedactionMode, format_path_for_error_with_mode, render_tool_error,
-        tool_error_details_with, tool_public_message,
+        PathRedaction, RedactionMode, RedactionRoot, format_path_for_error_with_mode,
+        normalized_component_depth, render_tool_error, tool_error_details_with,
+        tool_public_message,
     };
     use std::path::{Path, PathBuf};
 
@@ -611,12 +677,27 @@ mod tests {
     fn strict_mode_never_returns_raw_path() {
         let path = Path::new("/tmp/secret.txt");
         let redaction = PathRedaction {
-            roots: vec![PathBuf::from("/tmp")],
+            roots: vec![RedactionRoot::new(PathBuf::from("/tmp"))],
             canonical_roots: Vec::new(),
         };
         let formatted =
             format_path_for_error_with_mode(path, Some(&redaction), RedactionMode::Strict);
         assert_eq!(formatted, "<redacted>");
+    }
+
+    #[test]
+    fn normalized_component_depth_collapses_lexical_segments() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let noisy_absolute = dir.path().join("tenant").join("..");
+
+        assert_eq!(normalized_component_depth(Path::new("")), 1);
+        assert_eq!(normalized_component_depth(Path::new(".")), 1);
+        assert_eq!(normalized_component_depth(Path::new("a/..")), 1);
+        assert_eq!(normalized_component_depth(Path::new("../a/..")), 1);
+        assert_eq!(
+            normalized_component_depth(noisy_absolute.as_path()),
+            normalized_component_depth(dir.path())
+        );
     }
 
     #[test]
@@ -683,6 +764,28 @@ mod tests {
         let absolute_under_root = missing_root.join("secret.txt");
         let formatted = format_path_for_error_with_mode(
             &absolute_under_root,
+            Some(&redaction),
+            RedactionMode::BestEffort,
+        );
+        assert_eq!(formatted, "secret.txt");
+    }
+
+    #[test]
+    fn best_effort_redaction_prefers_most_specific_normalized_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let noisy_root = dir.path().join("tenant").join("..");
+        let specific_root = dir.path().join("project");
+        let absolute_path = specific_root.join("secret.txt");
+
+        let redaction = PathRedaction {
+            roots: vec![
+                RedactionRoot::new(noisy_root),
+                RedactionRoot::new(specific_root),
+            ],
+            canonical_roots: Vec::new(),
+        };
+        let formatted = format_path_for_error_with_mode(
+            &absolute_path,
             Some(&redaction),
             RedactionMode::BestEffort,
         );

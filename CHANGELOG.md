@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CLI path redaction now precomputes normalized root-depth metadata and uses it for best-prefix selection, fixing a bug where roots containing lexical segments like `..` could win as “more specific” and produce less precise redacted relative paths; this also removes repeated per-error path-component counting in hot error-render paths.
 - `list_dir` now revalidates directory identity once more after retained-entry materialization, reducing a late TOCTOU window where post-scan metadata could be read from a replaced directory path before response return.
 - `grep` line-text clipping now uses a fast owned-prefix helper that skips UTF-8 boundary backtracking for already-in-budget text, trimming per-match hot-path overhead without changing truncation semantics.
 - `grep` UTF-8 line-text truncation now uses `str::floor_char_boundary` via a shared helper in the hot match path, removing repeated per-match boundary backtracking loops while preserving truncation semantics.
