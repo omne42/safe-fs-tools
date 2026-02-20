@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `grep` plain-query hot loop now short-circuits non-matching lines before trailing line-ending trimming, removing two per-line buffer mutations on the common no-match path without changing UTF-8/non-UTF8 skip semantics.
+- `read` line-range scanning now uses an explicit checked line-index increment (`checked_add`) and returns a deterministic `InvalidPath` overflow error instead of relying on arithmetic overflow behavior in extreme line-count edge cases; added unit coverage for the overflow guard.
 - `list_dir` response-byte budgeting now includes the serialized decimal digit count of each entry’s `size_bytes` field (with a 1-digit minimum precheck), fixing systematic under-accounting that could delay expected `response_budget` truncation on large file-size listings; added regression coverage for size-digit accounting.
 - `path_validation` leaf checks now skip an unnecessary release-build lexical-normalization allocation used only for debug assertions, and now reject non-normalized `./...` requested paths as explicit internal contract violations.
 - `glob`/`grep` response-byte budgeting now counts path bytes using lossy UTF-8 display lengths (instead of raw OS bytes), fixing under-accounting for non-UTF8 paths that could delay expected `response_budget` truncation; added Unix regression coverage for both ops.

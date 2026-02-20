@@ -143,8 +143,8 @@ fn read_line_range(
     let mut current_line: u64 = 0;
 
     loop {
-        let upcoming_line = current_line.saturating_add(1);
-        let n = if upcoming_line < start_line {
+        let should_discard = current_line < start_line.saturating_sub(1);
+        let n = if should_discard {
             read_line_discarding_bytes_validating_utf8(
                 &mut reader,
                 &mut utf8_pending,
@@ -174,7 +174,7 @@ fn read_line_range(
             });
         }
 
-        current_line += 1;
+        current_line = checked_next_line(current_line, relative)?;
         if current_line == end_line {
             break;
         }
@@ -353,6 +353,12 @@ fn invalid_line_range(message: String) -> Error {
     Error::InvalidPath(format!("invalid argument: {message}"))
 }
 
+fn checked_next_line(current_line: u64, path: &Path) -> Result<u64> {
+    current_line
+        .checked_add(1)
+        .ok_or_else(|| Error::InvalidPath(format!("{}: line count overflow", path.display())))
+}
+
 fn usize_to_u64(value: usize, path: &Path, context: &str) -> Result<u64> {
     u64::try_from(value).map_err(|_| {
         Error::InvalidPath(format!(
@@ -364,7 +370,13 @@ fn usize_to_u64(value: usize, path: &Path, context: &str) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{initial_line_range_capacity, initial_line_range_reader_capacity};
+    use std::path::Path;
+
+    use crate::error::Error;
+
+    use super::{
+        checked_next_line, initial_line_range_capacity, initial_line_range_reader_capacity,
+    };
 
     #[test]
     fn line_range_output_capacity_stays_bounded() {
@@ -383,5 +395,15 @@ mod tests {
             initial_line_range_reader_capacity(64 * 1024 * 1024),
             64 * 1024
         );
+    }
+
+    #[test]
+    fn checked_next_line_reports_overflow() {
+        let err =
+            checked_next_line(u64::MAX, Path::new("file.txt")).expect_err("must reject overflow");
+        match err {
+            Error::InvalidPath(message) => assert!(message.contains("line count overflow")),
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
