@@ -149,10 +149,15 @@ impl Candidate {
     fn into_list_entry(
         self,
         relative_dir: &Path,
+        relative_is_root: bool,
         kind: ListDirEntryKind,
         size_bytes: u64,
     ) -> ListDirEntry {
-        let path = relative_entry_path(relative_dir, self.file_name.as_os_str());
+        let path = relative_entry_path_from_root_flag(
+            relative_dir,
+            relative_is_root,
+            self.file_name.as_os_str(),
+        );
         let name = match self.file_name.into_string() {
             Ok(valid_utf8) => valid_utf8,
             Err(file_name) => self
@@ -366,9 +371,19 @@ fn is_entry_path_denied(
     denied
 }
 
+#[cfg(test)]
 #[inline]
 fn relative_entry_path(relative_dir: &Path, name: &OsStr) -> PathBuf {
-    if relative_dir == Path::new(".") {
+    relative_entry_path_from_root_flag(relative_dir, relative_dir == Path::new("."), name)
+}
+
+#[inline]
+fn relative_entry_path_from_root_flag(
+    relative_dir: &Path,
+    relative_is_root: bool,
+    name: &OsStr,
+) -> PathBuf {
+    if relative_is_root {
         PathBuf::from(name)
     } else {
         relative_dir.join(name)
@@ -577,14 +592,17 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let mut estimated_response_bytes = 0usize;
     let mut response_budget_truncated = false;
     let path_prefix_bytes = relative_dir_path_prefix_bytes(&relative_dir);
+    const MIN_LIST_ENTRY_KIND_BYTES: usize = ListDirEntryKind::Dir.serialized_len();
     // Reuse a single absolute-path buffer while materializing retained entries.
     // This avoids one `PathBuf` allocation per candidate in large directories.
     let mut abs_entry_path = dir.clone();
     for candidate in heap.into_sorted_vec() {
+        let base_response_bytes =
+            list_entry_base_estimated_response_bytes_from_prefix(path_prefix_bytes, &candidate);
         // Fast precheck: if even the minimum possible serialized entry size no longer fits the
         // response budget, avoid extra metadata syscalls and stop immediately.
         let min_entry_response_bytes =
-            list_entry_min_estimated_response_bytes_from_prefix(path_prefix_bytes, &candidate);
+            base_response_bytes.saturating_add(MIN_LIST_ENTRY_KIND_BYTES);
         if estimated_response_bytes.saturating_add(min_entry_response_bytes) > max_response_bytes {
             response_budget_truncated = true;
             break;
@@ -605,14 +623,13 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 continue;
             }
         };
-        let entry_response_bytes =
-            list_entry_estimated_response_bytes_from_prefix(path_prefix_bytes, &candidate, kind);
+        let entry_response_bytes = base_response_bytes.saturating_add(kind.serialized_len());
         if estimated_response_bytes.saturating_add(entry_response_bytes) > max_response_bytes {
             response_budget_truncated = true;
             break;
         }
         estimated_response_bytes = estimated_response_bytes.saturating_add(entry_response_bytes);
-        entries.push(candidate.into_list_entry(&relative_dir, kind, size_bytes));
+        entries.push(candidate.into_list_entry(&relative_dir, relative_is_root, kind, size_bytes));
     }
     let truncated = is_list_dir_truncated(
         max_entries,
@@ -645,16 +662,14 @@ fn list_entry_estimated_response_bytes(
     )
 }
 
+#[cfg(test)]
 #[inline]
 fn list_entry_estimated_response_bytes_from_prefix(
     path_prefix_bytes: usize,
     candidate: &Candidate,
     kind: ListDirEntryKind,
 ) -> usize {
-    let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
-    let path_bytes = path_prefix_bytes.saturating_add(file_name_bytes);
-    path_bytes
-        .saturating_add(candidate.name().len())
+    list_entry_base_estimated_response_bytes_from_prefix(path_prefix_bytes, candidate)
         .saturating_add(kind.serialized_len())
 }
 
@@ -666,17 +681,25 @@ fn list_entry_min_estimated_response_bytes(relative_dir: &Path, candidate: &Cand
     )
 }
 
+#[cfg(test)]
 #[inline]
 fn list_entry_min_estimated_response_bytes_from_prefix(
     path_prefix_bytes: usize,
     candidate: &Candidate,
 ) -> usize {
     const MIN_KIND_BYTES: usize = ListDirEntryKind::Dir.serialized_len();
+    list_entry_base_estimated_response_bytes_from_prefix(path_prefix_bytes, candidate)
+        .saturating_add(MIN_KIND_BYTES)
+}
+
+#[inline]
+fn list_entry_base_estimated_response_bytes_from_prefix(
+    path_prefix_bytes: usize,
+    candidate: &Candidate,
+) -> usize {
     let file_name_bytes = candidate.file_name.as_os_str().as_encoded_bytes().len();
     let path_bytes = path_prefix_bytes.saturating_add(file_name_bytes);
-    path_bytes
-        .saturating_add(candidate.name().len())
-        .saturating_add(MIN_KIND_BYTES)
+    path_bytes.saturating_add(candidate.name().len())
 }
 
 #[inline]
