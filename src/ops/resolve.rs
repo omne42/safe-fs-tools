@@ -68,21 +68,23 @@ fn classify_notfound_escape(
             }
         };
 
-        let next_relative = traversed_relative.join(segment);
-        let next = current.join(segment);
-        let metadata = match fs::symlink_metadata(&next) {
+        traversed_relative.push(segment);
+        current.push(segment);
+        let metadata = match fs::symlink_metadata(&current) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(Error::io_path("symlink_metadata", &next_relative, err)),
+            Err(err) => return Err(Error::io_path("symlink_metadata", &traversed_relative, err)),
         };
 
         if metadata.file_type().is_symlink() {
-            let symlink_target = fs::read_link(&next)
-                .map_err(|err| Error::io_path("read_link", &next_relative, err))?;
+            let symlink_target = fs::read_link(&current)
+                .map_err(|err| Error::io_path("read_link", &traversed_relative, err))?;
             let resolved_target = if symlink_target.is_absolute() {
                 symlink_target
             } else {
-                current.join(symlink_target)
+                let mut parent = current.clone();
+                let _ = parent.pop();
+                parent.join(symlink_target)
             };
             let resolved_target =
                 crate::path_utils_internal::normalize_path_lexical(&resolved_target);
@@ -96,18 +98,13 @@ fn classify_notfound_escape(
             current = match resolved_target.canonicalize() {
                 Ok(canonical) => canonical,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(err) => return Err(Error::io_path("canonicalize", &next_relative, err)),
+                Err(err) => return Err(Error::io_path("canonicalize", &traversed_relative, err)),
             };
             if !crate::path_utils::starts_with_case_insensitive_normalized(&current, canonical_root)
             {
                 return Err(outside_root_error(root_id, requested_path));
             }
-            traversed_relative = next_relative;
-            continue;
         }
-
-        current = next;
-        traversed_relative = next_relative;
     }
 
     Ok(())
@@ -214,5 +211,42 @@ impl super::Context {
         create_missing: bool,
     ) -> Result<PathBuf> {
         dir_ops::ensure_dir_under_root(self, root_id, relative, create_missing)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::classify_notfound_escape;
+    use crate::error::Error;
+
+    #[test]
+    fn classify_notfound_escape_allows_missing_descendant_inside_root() {
+        let root = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(root.path().join("nested")).expect("create nested dir");
+        let canonical_root = root.path().canonicalize().expect("canonical root");
+
+        let result =
+            classify_notfound_escape("root", &canonical_root, Path::new("nested/missing.txt"));
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_notfound_escape_rejects_symlink_escape_before_missing_tail() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("tempdir");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("escape"))
+            .expect("create symlink");
+        let canonical_root = root.path().canonicalize().expect("canonical root");
+
+        let err =
+            classify_notfound_escape("root", &canonical_root, Path::new("escape/missing.txt"))
+                .expect_err("should reject outside-root escape");
+        assert!(
+            matches!(err, Error::OutsideRoot { .. }),
+            "unexpected error: {err:?}"
+        );
     }
 }
