@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` `max_entries=0` now uses a no-deny fast path that short-circuits on the first visible directory entry without probing `DirEntry::file_type()`, reducing syscall overhead on large directories while keeping truncation semantics.
 - `write` overwrite staging now uses a single post-write/post-permission `sync_all` before atomic rename (instead of two syncs), reducing overwrite-path flush overhead without changing durability semantics; added a Unix regression test to lock permission-preservation behavior on overwrite.
 - `resolve` root-path derivation now reads the declared root path from `Context` runtime state (same O(1) root map as canonical roots) instead of re-scanning `policy.roots` per request, reducing repeated linear lookups and removing split-source root metadata drift risk.
 - `resolve` symlink escape classification now derives relative symlink parents from `current.parent()` instead of cloning and mutating a full `PathBuf` per symlink hop, trimming allocation churn on deep symlinked paths.

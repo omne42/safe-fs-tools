@@ -308,19 +308,14 @@ fn process_dir_entry(
 fn process_dir_entry_count_only(
     ctx: &Context,
     entry: fs::DirEntry,
-    has_deny_globs: bool,
     relative_is_root: bool,
     relative_dir: &Path,
     deny_path_scratch: Option<&mut PathBuf>,
 ) -> Result<CountOnlyOutcome> {
-    if !has_deny_globs {
-        return Ok(classify_count_only_outcome(entry.file_type().is_ok()));
-    }
-
     let name = entry.file_name();
     if is_entry_path_denied(
         ctx,
-        has_deny_globs,
+        true,
         relative_is_root,
         relative_dir,
         &name,
@@ -413,6 +408,23 @@ fn is_list_dir_truncated(
     hit_entry_limit || incomplete_due_to_io || incomplete_due_to_materialization
 }
 
+fn scan_count_only_entries_without_deny_globs(read_dir: fs::ReadDir) -> (bool, u64) {
+    let mut skipped_io_errors: u64 = 0;
+    for entry in read_dir {
+        match entry {
+            Ok(_) => {
+                // With `max_entries=0`, callers only need to know whether any visible entry
+                // exists. Without deny rules, a successful `read_dir` entry is sufficient.
+                return (true, skipped_io_errors);
+            }
+            Err(_) => {
+                skipped_io_errors = skipped_io_errors.saturating_add(1);
+            }
+        }
+    }
+    (false, skipped_io_errors)
+}
+
 fn scan_count_only_entries(
     ctx: &Context,
     read_dir: fs::ReadDir,
@@ -421,6 +433,10 @@ fn scan_count_only_entries(
     relative_dir: &Path,
     mut deny_path_scratch: Option<&mut PathBuf>,
 ) -> Result<(bool, u64)> {
+    if !has_deny_globs {
+        return Ok(scan_count_only_entries_without_deny_globs(read_dir));
+    }
+
     let mut zero_limit_truncated = false;
     let mut skipped_io_errors: u64 = 0;
 
@@ -436,7 +452,6 @@ fn scan_count_only_entries(
         match process_dir_entry_count_only(
             ctx,
             entry,
-            has_deny_globs,
             relative_is_root,
             relative_dir,
             deny_path_scratch.as_deref_mut(),
@@ -692,6 +707,7 @@ mod tests {
         is_list_dir_truncated, list_entry_estimated_response_bytes,
         list_entry_min_estimated_response_bytes, max_estimated_list_dir_response_bytes,
         relative_entry_path, relative_entry_path_for_deny, runtime_max_entries_cap,
+        scan_count_only_entries_without_deny_globs,
     };
 
     #[test]
@@ -830,6 +846,29 @@ mod tests {
         assert!(!is_list_dir_truncated(0, false, false, 0, 0, 0));
         assert!(is_list_dir_truncated(0, true, false, 0, 0, 0));
         assert!(is_list_dir_truncated(0, false, false, 0, 1, 0));
+    }
+
+    #[test]
+    fn count_only_scan_without_deny_globs_detects_visible_entry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("visible.txt"), "x").expect("write");
+        let read_dir = std::fs::read_dir(dir.path()).expect("read_dir");
+
+        let (zero_limit_truncated, skipped_io_errors) =
+            scan_count_only_entries_without_deny_globs(read_dir);
+        assert!(zero_limit_truncated);
+        assert_eq!(skipped_io_errors, 0);
+    }
+
+    #[test]
+    fn count_only_scan_without_deny_globs_handles_empty_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let read_dir = std::fs::read_dir(dir.path()).expect("read_dir");
+
+        let (zero_limit_truncated, skipped_io_errors) =
+            scan_count_only_entries_without_deny_globs(read_dir);
+        assert!(!zero_limit_truncated);
+        assert_eq!(skipped_io_errors, 0);
     }
 
     #[test]
