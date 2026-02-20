@@ -204,7 +204,6 @@ enum EntryOutcome {
 enum CountOnlyOutcome {
     Counted,
     Denied,
-    SkippedIoError,
 }
 
 struct EntryCandidate {
@@ -329,16 +328,7 @@ fn process_dir_entry_count_only(
         return Ok(CountOnlyOutcome::Denied);
     }
 
-    Ok(classify_count_only_outcome(entry.file_type().is_ok()))
-}
-
-#[inline]
-fn classify_count_only_outcome(file_type_ok: bool) -> CountOnlyOutcome {
-    if file_type_ok {
-        CountOnlyOutcome::Counted
-    } else {
-        CountOnlyOutcome::SkippedIoError
-    }
+    Ok(CountOnlyOutcome::Counted)
 }
 
 #[inline]
@@ -478,9 +468,6 @@ fn scan_count_only_entries(
                 break;
             }
             CountOnlyOutcome::Denied => {}
-            CountOnlyOutcome::SkippedIoError => {
-                skipped_io_errors = skipped_io_errors.saturating_add(1);
-            }
         }
     }
 
@@ -725,9 +712,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Candidate, CountOnlyOutcome, ListDirEntryKind, classify_count_only_outcome,
-        entry_kind_and_size_no_follow, initial_entries_capacity, initial_heap_capacity,
-        is_list_dir_truncated, list_entry_estimated_response_bytes,
+        Candidate, ListDirEntryKind, entry_kind_and_size_no_follow, initial_entries_capacity,
+        initial_heap_capacity, is_list_dir_truncated, list_entry_estimated_response_bytes,
         list_entry_min_estimated_response_bytes, max_estimated_list_dir_response_bytes,
         relative_entry_path, relative_entry_path_for_deny, runtime_max_entries_cap,
         scan_count_only_entries_without_deny_globs,
@@ -892,22 +878,6 @@ mod tests {
             scan_count_only_entries_without_deny_globs(read_dir);
         assert!(!zero_limit_truncated);
         assert_eq!(skipped_io_errors, 0);
-    }
-
-    #[test]
-    fn classify_count_only_outcome_counts_when_file_type_available() {
-        assert!(matches!(
-            classify_count_only_outcome(true),
-            CountOnlyOutcome::Counted
-        ));
-    }
-
-    #[test]
-    fn classify_count_only_outcome_marks_skipped_io_error_on_file_type_failure() {
-        assert!(matches!(
-            classify_count_only_outcome(false),
-            CountOnlyOutcome::SkippedIoError
-        ));
     }
 
     #[test]

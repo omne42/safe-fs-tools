@@ -482,7 +482,11 @@ fn matches_sorted_by_path_line(matches: &[GrepMatch]) -> bool {
     matches.windows(2).all(|pair| {
         let left = &pair[0];
         let right = &pair[1];
-        left.path < right.path || (left.path == right.path && left.line <= right.line)
+        match left.path.cmp(&right.path) {
+            std::cmp::Ordering::Less => true,
+            std::cmp::Ordering::Equal => left.line <= right.line,
+            std::cmp::Ordering::Greater => false,
+        }
     })
 }
 
