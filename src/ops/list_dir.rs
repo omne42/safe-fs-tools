@@ -27,6 +27,15 @@ fn max_estimated_list_dir_response_bytes(max_entries: usize, max_line_bytes: usi
     max_entries.saturating_mul(max_line_bytes)
 }
 
+#[inline]
+fn decimal_len_u64(value: u64) -> usize {
+    if value == 0 {
+        1
+    } else {
+        value.ilog10() as usize + 1
+    }
+}
+
 fn runtime_max_entries_cap(max_entries: usize) -> usize {
     // Guardrail for extreme policies/requests: retaining a very large top-k heap can
     // inflate memory well beyond the response-byte budget. Each retained candidate
@@ -580,6 +589,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
     let mut response_budget_truncated = false;
     let path_prefix_bytes = relative_dir_path_prefix_bytes(&relative_dir);
     const MIN_LIST_ENTRY_KIND_BYTES: usize = ListDirEntryKind::Dir.serialized_len();
+    const MIN_SIZE_BYTES_DECIMAL_LEN: usize = 1;
     // Reuse a single absolute-path buffer while materializing retained entries.
     // This avoids one `PathBuf` allocation per candidate in large directories.
     let mut abs_entry_path = dir;
@@ -590,6 +600,8 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         // response budget, avoid extra metadata syscalls and stop immediately.
         let min_entry_response_bytes =
             base_response_bytes.saturating_add(MIN_LIST_ENTRY_KIND_BYTES);
+        let min_entry_response_bytes =
+            min_entry_response_bytes.saturating_add(MIN_SIZE_BYTES_DECIMAL_LEN);
         if estimated_response_bytes.saturating_add(min_entry_response_bytes) > max_response_bytes {
             response_budget_truncated = true;
             break;
@@ -610,7 +622,9 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
                 continue;
             }
         };
-        let entry_response_bytes = base_response_bytes.saturating_add(kind.serialized_len());
+        let entry_response_bytes = base_response_bytes
+            .saturating_add(kind.serialized_len())
+            .saturating_add(decimal_len_u64(size_bytes));
         if estimated_response_bytes.saturating_add(entry_response_bytes) > max_response_bytes {
             response_budget_truncated = true;
             break;
@@ -642,11 +656,13 @@ fn list_entry_estimated_response_bytes(
     relative_dir: &Path,
     candidate: &Candidate,
     kind: ListDirEntryKind,
+    size_bytes: u64,
 ) -> usize {
     list_entry_estimated_response_bytes_from_prefix(
         relative_dir_path_prefix_bytes(relative_dir),
         candidate,
         kind,
+        size_bytes,
     )
 }
 
@@ -656,9 +672,11 @@ fn list_entry_estimated_response_bytes_from_prefix(
     path_prefix_bytes: usize,
     candidate: &Candidate,
     kind: ListDirEntryKind,
+    size_bytes: u64,
 ) -> usize {
     list_entry_base_estimated_response_bytes_from_prefix(path_prefix_bytes, candidate)
         .saturating_add(kind.serialized_len())
+        .saturating_add(decimal_len_u64(size_bytes))
 }
 
 #[cfg(test)]
@@ -711,7 +729,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Candidate, ListDirEntryKind, ensure_directory_identity_unchanged,
+        Candidate, ListDirEntryKind, decimal_len_u64, ensure_directory_identity_unchanged,
         entry_kind_and_size_no_follow, initial_entries_capacity, initial_heap_capacity,
         is_list_dir_truncated, list_entry_estimated_response_bytes,
         list_entry_min_estimated_response_bytes, max_estimated_list_dir_response_bytes,
@@ -892,16 +910,19 @@ mod tests {
             file_name: OsString::from("file.txt"),
             cached_lossy_name: std::cell::OnceCell::new(),
         };
+        let size_bytes = 12_345_u64;
         let bytes = list_entry_estimated_response_bytes(
             std::path::Path::new("nested"),
             &candidate,
             ListDirEntryKind::File,
+            size_bytes,
         );
         assert!(
             bytes
                 >= "nested/file.txt".len()
                     + "file.txt".len()
                     + ListDirEntryKind::File.as_str().len()
+                    + decimal_len_u64(size_bytes)
         );
     }
 
@@ -920,6 +941,7 @@ mod tests {
             relative_dir.as_path(),
             &candidate,
             ListDirEntryKind::File,
+            0,
         );
         let display_name_bytes = candidate.name().len();
         let expected_min = relative_dir
@@ -928,7 +950,8 @@ mod tests {
             .saturating_add(1)
             .saturating_add(display_name_bytes)
             .saturating_add(display_name_bytes)
-            .saturating_add(ListDirEntryKind::File.as_str().len());
+            .saturating_add(ListDirEntryKind::File.as_str().len())
+            .saturating_add(decimal_len_u64(0));
         assert!(bytes >= expected_min);
     }
 
@@ -945,9 +968,31 @@ mod tests {
             ListDirEntryKind::Other,
             ListDirEntryKind::Symlink,
         ] {
-            let exact = list_entry_estimated_response_bytes(Path::new("nested"), &candidate, kind);
+            let exact =
+                list_entry_estimated_response_bytes(Path::new("nested"), &candidate, kind, 0);
             assert!(min_bytes <= exact);
         }
+    }
+
+    #[test]
+    fn entry_response_bytes_account_for_size_digits() {
+        let candidate = Candidate {
+            file_name: OsString::from("a"),
+            cached_lossy_name: std::cell::OnceCell::new(),
+        };
+        let small = list_entry_estimated_response_bytes(
+            Path::new("."),
+            &candidate,
+            ListDirEntryKind::File,
+            9,
+        );
+        let large = list_entry_estimated_response_bytes(
+            Path::new("."),
+            &candidate,
+            ListDirEntryKind::File,
+            10_000,
+        );
+        assert!(large > small);
     }
 
     #[cfg(unix)]
