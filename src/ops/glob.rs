@@ -184,11 +184,12 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                 }
 
                 // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
-                let probe_denied_or_skipped = if walk_root.is_dir() {
-                    let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
-                    ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
-                } else {
-                    false
+                let probe_denied_or_skipped = match std::fs::symlink_metadata(&walk_root) {
+                    Ok(meta) if meta.is_dir() => {
+                        let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
+                        ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
+                    }
+                    Ok(_) | Err(_) => false,
                 };
                 if probe_denied_or_skipped {
                     return Ok(build_glob_response(

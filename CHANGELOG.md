@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `glob`/`grep` safe-prefix directory-probe prechecks now use `symlink_metadata` (no-follow) so symlinked directory prefixes are not misclassified as traversable directories during skip/deny short-circuits.
+- `grep` with `glob` filtering now treats lazily-opened non-regular paths (for example symlinked directories) as skippable I/O entries instead of failing the whole operation with `InvalidPath`.
+- `grep` line scanning removed an unnecessary per-line query-window shrink check; query-window capacity is already bounded per request, reducing tiny hot-loop overhead on large scans.
 - `glob` stable-sort post-processing now skips the final sort when matches are already lexicographically ordered, removing redundant `O(n log n)` work on preordered traversal results.
 - `list_dir` top-k candidate ordering now compares retained file names directly (`OsString`) for tie-breaks, avoiding repeated `Path` wrapper construction in heap comparisons.
 - CLI `list_dir`/`grep` JSON 输出组装改为显式预分配 `Vec/Map`（替代逐条 `serde_json::json!` 构造），降低大结果集下的中间分配与序列化开销。

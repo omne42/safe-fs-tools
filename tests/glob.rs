@@ -256,6 +256,31 @@ fn glob_does_not_follow_symlink_root_prefix() {
 
 #[test]
 #[cfg(unix)]
+fn glob_symlink_dir_prefix_is_not_filtered_by_directory_probe_skip_glob() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("real")).expect("mkdir");
+    symlink(dir.path().join("real"), dir.path().join("linkdir")).expect("symlink dir");
+
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadOnly);
+    policy.traversal.skip_globs = vec!["linkdir/*".to_string()];
+    let ctx = Context::new(policy).expect("ctx");
+
+    let resp = glob_paths(
+        &ctx,
+        GlobRequest {
+            root_id: "root".to_string(),
+            pattern: "linkdir".to_string(),
+        },
+    )
+    .expect("glob");
+
+    assert_eq!(resp.matches, vec![PathBuf::from("linkdir")]);
+}
+
+#[test]
+#[cfg(unix)]
 fn glob_skips_walkdir_errors() {
     if skip_when_root("glob_skips_walkdir_errors") {
         return;

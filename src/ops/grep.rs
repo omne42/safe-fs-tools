@@ -221,19 +221,6 @@ fn update_single_byte_match_state(query_byte: u8, chunk: &[u8], query_matched: &
 }
 
 #[cfg(feature = "grep")]
-fn maybe_shrink_query_window(query_window: &mut Vec<u8>, query_len: usize) {
-    const DEFAULT_RETAINED_CAPACITY: usize = 64;
-    const MAX_RETAINED_CAPACITY: usize = 8 * 1024;
-    const SHRINK_FACTOR: usize = 4;
-
-    let keep = query_len.saturating_sub(1);
-    let retained_capacity = keep.clamp(DEFAULT_RETAINED_CAPACITY, MAX_RETAINED_CAPACITY);
-    if query_window.capacity() > retained_capacity.saturating_mul(SHRINK_FACTOR) {
-        query_window.shrink_to(retained_capacity);
-    }
-}
-
-#[cfg(feature = "grep")]
 enum ReadLineCapped {
     Eof,
     TimeLimit,
@@ -341,11 +328,6 @@ fn read_line_capped<R: BufRead>(
 ) -> std::io::Result<ReadLineCapped> {
     line_buf.clear();
     query_window.clear();
-    if let Some(query) = query
-        && query.len() > 1
-    {
-        maybe_shrink_query_window(query_window, query.len());
-    }
     let single_query_byte = query.and_then(|q| (q.len() == 1).then_some(q[0]));
     let track_utf8 = query.is_some();
     let mut utf8_pending = [0_u8; 3];
@@ -588,11 +570,12 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 }
 
                 // Avoid unnecessary filesystem probes when deny/skip already short-circuits.
-                let probe_denied_or_skipped = if walk_root.is_dir() {
-                    let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
-                    ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
-                } else {
-                    false
+                let probe_denied_or_skipped = match std::fs::symlink_metadata(&walk_root) {
+                    Ok(meta) if meta.is_dir() => {
+                        let probe = prefix.join(TRAVERSAL_GLOB_PROBE_NAME);
+                        ctx.redactor.is_path_denied(&probe) || ctx.is_traversal_path_skipped(&probe)
+                    }
+                    Ok(_) | Err(_) => false,
                 };
                 if probe_denied_or_skipped {
                     return Ok(build_grep_response(
@@ -653,7 +636,11 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     let path = path.unwrap_or_else(|| root_path.join(&relative_path));
                     match super::io::open_regular_file_for_read(&path, &relative_path) {
                         Ok(opened) => opened,
-                        Err(Error::IoPath { .. }) | Err(Error::Io(_)) => {
+                        Err(Error::IoPath { .. })
+                        | Err(Error::Io(_))
+                        | Err(Error::InvalidPath(_)) => {
+                            // In glob-filter mode we lazily open paths here; treat
+                            // non-regular entries (e.g. symlinked directories) as skippable.
                             diag.inc_skipped_io_errors();
                             return Ok(std::ops::ControlFlow::Continue(()));
                         }
