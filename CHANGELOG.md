@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- release: bump crate versions (`safe-fs-tools`, `safe-fs-tools-cli`) to `1.0.0`.
 - `grep` now bounds initial line-buffer and reader-buffer preallocation by `limits.max_read_bytes + 1` (in addition to existing clamp limits), reducing per-request memory overhead under small read-budget policies without changing scan/truncation behavior; added unit coverage for the new capacity bounds.
 - `delete --recursive` deny pre-scan now returns the denied child path without cloning the scratch `PathBuf` on the error branch, removing one unnecessary allocation on the deny-hit path.
 - CLI redaction root setup now skips adding a canonical root when it is already lexically equivalent to the declared root (for example `/root/path/.` vs `/root/path`), removing redundant per-error prefix checks without changing redaction semantics; added regression coverage for lexical-equivalence deduplication.
