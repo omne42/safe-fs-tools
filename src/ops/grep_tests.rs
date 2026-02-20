@@ -160,6 +160,32 @@ fn read_line_capped_matches_query_split_across_chunks() {
 }
 
 #[test]
+fn read_line_capped_keeps_utf8_validity_when_pending_needs_multiple_chunks() {
+    let input = Cursor::new(vec![b'a', 0xE2, 0x82, 0xAC, 0xC2, 0xA2, b'\n']);
+    let mut reader = BufReader::with_capacity(3, input);
+    let mut line_buf = Vec::new();
+    let mut query_window = Vec::new();
+
+    let line = super::read_line_capped(
+        &mut reader,
+        &mut line_buf,
+        1024,
+        Some(b"a"),
+        &mut query_window,
+        ReadLineCappedOptions::new(None, None),
+    )
+    .expect("line");
+
+    assert!(matches!(
+        line,
+        ReadLineCapped::Line {
+            utf8_valid: true,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn read_line_capped_single_byte_query_uses_zero_window_state() {
     let input = Cursor::new(b"axb\n".to_vec());
     let mut reader = BufReader::with_capacity(1, input);

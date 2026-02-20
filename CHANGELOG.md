@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Fixed a `grep` streamed UTF-8 validation edge case where pending multi-byte state could stop processing the remainder of the same chunk, causing valid UTF-8 lines to be misclassified as non-UTF8 and skipped.
+- `grep` plain-query chunk matching now short-circuits impossible substring checks (`haystack < needle`) and skips cross-boundary `memmem` probes when the combined tail/prefix length cannot satisfy the query length, trimming hot-loop overhead without changing match semantics.
 - `path_utils::normalize_glob_pattern_for_matching` now keeps borrow-first semantics when trimming leading `"./"` segments from already-borrowed patterns, removing an avoidable `String` allocation on common `glob`/`grep` request normalization paths.
 - Removed three redundant hot-path clones in `edit`/`list_dir`/`write` (`PathBuf` ownership now moved directly on early-return branches and scratch-path init), trimming avoidable allocation/copy work without changing behavior.
 - CLI `glob`/`grep` scan-limit JSON 输出改为内建字符串映射（`entries/files/time/results/response_bytes`）并移除不必要的 fallible 序列化分支；`list_dir`/`glob`/`grep` 响应组装函数同步改为无错误返回，减少热路径分支与无效错误传播风险。

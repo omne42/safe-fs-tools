@@ -147,6 +147,9 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() {
         return true;
     }
+    if haystack.len() < needle.len() {
+        return false;
+    }
     memchr::memmem::find(haystack, needle).is_some()
 }
 
@@ -177,11 +180,13 @@ fn update_query_match_state(
     if !query_window.is_empty() {
         let old_tail_len = query_window.len();
         let boundary_prefix_len = keep.min(chunk.len());
-        query_window.extend_from_slice(&chunk[..boundary_prefix_len]);
-        *query_matched = contains_subslice(query_window, query);
-        query_window.truncate(old_tail_len);
-        if *query_matched {
-            return;
+        if old_tail_len.saturating_add(boundary_prefix_len) >= query.len() {
+            query_window.extend_from_slice(&chunk[..boundary_prefix_len]);
+            *query_matched = contains_subslice(query_window, query);
+            query_window.truncate(old_tail_len);
+            if *query_matched {
+                return;
+            }
         }
     }
 
@@ -267,7 +272,10 @@ fn update_utf8_line_validity(
         return;
     }
 
-    if *pending_len > 0 {
+    while *pending_len > 0 {
+        if chunk.is_empty() {
+            return;
+        }
         let needed = 4usize.saturating_sub(*pending_len);
         let take = needed.min(chunk.len());
         let mut combined = [0_u8; 4];
@@ -292,7 +300,7 @@ fn update_utf8_line_validity(
                 }
                 pending[..trailing.len()].copy_from_slice(trailing);
                 *pending_len = trailing.len();
-                return;
+                chunk = &chunk[take..];
             }
         }
     }
