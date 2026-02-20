@@ -63,8 +63,9 @@ fn build_glob_response(
     diag: TraversalDiagnostics,
     started: &Instant,
     stable_sort: bool,
+    sorted_hint: bool,
 ) -> GlobResponse {
-    maybe_sort_glob_matches(&mut matches, stable_sort);
+    maybe_sort_glob_matches(&mut matches, stable_sort, sorted_hint);
     GlobResponse {
         matches,
         truncated: diag.truncated(),
@@ -80,14 +81,15 @@ fn build_glob_response(
 }
 
 #[cfg(feature = "glob")]
-fn maybe_sort_glob_matches(matches: &mut [PathBuf], stable_sort: bool) {
-    if !stable_sort || matches.len() <= 1 || matches_sorted_by_path(matches) {
+fn maybe_sort_glob_matches(matches: &mut [PathBuf], stable_sort: bool, sorted_hint: bool) {
+    if !stable_sort || matches.len() <= 1 || sorted_hint {
         return;
     }
     matches.sort_unstable();
 }
 
 #[cfg(feature = "glob")]
+#[cfg(test)]
 fn matches_sorted_by_path(matches: &[PathBuf]) -> bool {
     matches.windows(2).all(|pair| pair[0] <= pair[1])
 }
@@ -117,7 +119,7 @@ mod tests {
     #[test]
     fn maybe_sort_glob_matches_respects_stable_sort_enabled() {
         let mut matches = vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")];
-        maybe_sort_glob_matches(&mut matches, true);
+        maybe_sort_glob_matches(&mut matches, true, false);
         assert_eq!(
             matches,
             vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")]
@@ -127,7 +129,7 @@ mod tests {
     #[test]
     fn maybe_sort_glob_matches_skips_sort_when_stable_sort_disabled() {
         let mut matches = vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")];
-        maybe_sort_glob_matches(&mut matches, false);
+        maybe_sort_glob_matches(&mut matches, false, false);
         assert_eq!(
             matches,
             vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")]
@@ -137,7 +139,7 @@ mod tests {
     #[test]
     fn maybe_sort_glob_matches_keeps_sorted_input_intact() {
         let mut matches = vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")];
-        maybe_sort_glob_matches(&mut matches, true);
+        maybe_sort_glob_matches(&mut matches, true, true);
         assert_eq!(
             matches,
             vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")]
@@ -165,6 +167,8 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
 
     let mut matches =
         Vec::<PathBuf>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
+    let stable_sort = ctx.policy.traversal.stable_sort;
+    let mut matches_sorted = true;
     let mut response_bytes = 0usize;
     let mut diag = TraversalDiagnostics::default();
     let has_path_filters = ctx.has_traversal_path_filters();
@@ -179,7 +183,8 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                         matches,
                         diag,
                         &started,
-                        ctx.policy.traversal.stable_sort,
+                        stable_sort,
+                        matches_sorted,
                     ));
                 }
 
@@ -196,7 +201,8 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                         matches,
                         diag,
                         &started,
-                        ctx.policy.traversal.stable_sort,
+                        stable_sort,
+                        matches_sorted,
                     ));
                 }
             }
@@ -227,6 +233,14 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
                 response_bytes = response_bytes.saturating_add(path_bytes);
+                if stable_sort
+                    && matches_sorted
+                    && matches
+                        .last()
+                        .is_some_and(|prev| prev.as_path() > file.relative_path.as_path())
+                {
+                    matches_sorted = false;
+                }
                 matches.push(file.relative_path);
             }
             Ok(std::ops::ControlFlow::Continue(()))
@@ -241,7 +255,8 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
                 matches,
                 diag,
                 &started,
-                ctx.policy.traversal.stable_sort,
+                stable_sort,
+                matches_sorted,
             ));
         }
         Err(err) => return Err(err),
@@ -251,6 +266,7 @@ pub fn glob_paths(ctx: &Context, request: GlobRequest) -> Result<GlobResponse> {
         matches,
         diag,
         &started,
-        ctx.policy.traversal.stable_sort,
+        stable_sort,
+        matches_sorted,
     ))
 }

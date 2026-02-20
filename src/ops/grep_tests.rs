@@ -31,7 +31,7 @@ fn match_order_detects_unsorted_input() {
 #[test]
 fn maybe_sort_grep_matches_respects_stable_sort_enabled() {
     let mut matches = vec![m("b.txt", 1), m("a.txt", 2)];
-    maybe_sort_grep_matches(&mut matches, true);
+    maybe_sort_grep_matches(&mut matches, true, false);
     assert_eq!(matches[0].path, PathBuf::from("a.txt"));
     assert_eq!(matches[1].path, PathBuf::from("b.txt"));
 }
@@ -39,7 +39,7 @@ fn maybe_sort_grep_matches_respects_stable_sort_enabled() {
 #[test]
 fn maybe_sort_grep_matches_skips_sort_when_stable_sort_disabled() {
     let mut matches = vec![m("b.txt", 1), m("a.txt", 2)];
-    maybe_sort_grep_matches(&mut matches, false);
+    maybe_sort_grep_matches(&mut matches, false, false);
     assert_eq!(matches[0].path, PathBuf::from("b.txt"));
     assert_eq!(matches[1].path, PathBuf::from("a.txt"));
 }

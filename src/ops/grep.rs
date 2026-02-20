@@ -459,8 +459,9 @@ fn build_grep_response(
     counters: GrepSkipCounters,
     started: &Instant,
     stable_sort: bool,
+    sorted_hint: bool,
 ) -> GrepResponse {
-    maybe_sort_grep_matches(&mut matches, stable_sort);
+    maybe_sort_grep_matches(&mut matches, stable_sort, sorted_hint);
     GrepResponse {
         matches,
         truncated: diag.truncated(),
@@ -478,14 +479,15 @@ fn build_grep_response(
 }
 
 #[cfg(feature = "grep")]
-fn maybe_sort_grep_matches(matches: &mut [GrepMatch], stable_sort: bool) {
-    if !stable_sort || matches.len() <= 1 || matches_sorted_by_path_line(matches) {
+fn maybe_sort_grep_matches(matches: &mut [GrepMatch], stable_sort: bool, sorted_hint: bool) {
+    if !stable_sort || matches.len() <= 1 || sorted_hint {
         return;
     }
     matches.sort_unstable_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
 }
 
 #[cfg(feature = "grep")]
+#[cfg(test)]
 fn matches_sorted_by_path_line(matches: &[GrepMatch]) -> bool {
     matches.windows(2).all(|pair| {
         let left = &pair[0];
@@ -541,6 +543,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
     let root_path = ctx.canonical_root(&request.root_id)?;
     let mut matches =
         Vec::<GrepMatch>::with_capacity(initial_match_capacity(ctx.policy.limits.max_results));
+    let stable_sort = ctx.policy.traversal.stable_sort;
+    let mut matches_sorted = true;
     // Estimated payload-byte guardrail; not a strict process-memory cap.
     let mut estimated_response_bytes = 0usize;
     let mut counters = GrepSkipCounters::default();
@@ -577,7 +581,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                         diag,
                         counters,
                         &started,
-                        ctx.policy.traversal.stable_sort,
+                        stable_sort,
+                        matches_sorted,
                     ));
                 }
 
@@ -595,7 +600,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                         diag,
                         counters,
                         &started,
-                        ctx.policy.traversal.stable_sort,
+                        stable_sort,
+                        matches_sorted,
                     ));
                 }
             }
@@ -837,6 +843,18 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                     Some(first_idx) => matches[first_idx].path.clone(),
                     None => std::mem::take(&mut owned_relative_path),
                 };
+                if stable_sort
+                    && matches_sorted
+                    && matches
+                        .last()
+                        .is_some_and(|previous| match previous.path.cmp(&path) {
+                            std::cmp::Ordering::Greater => true,
+                            std::cmp::Ordering::Equal => previous.line > line_no,
+                            std::cmp::Ordering::Less => false,
+                        })
+                {
+                    matches_sorted = false;
+                }
                 let is_first_match_for_file = first_match_index.is_none();
                 matches.push(GrepMatch {
                     path,
@@ -866,7 +884,8 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                 diag,
                 counters,
                 &started,
-                ctx.policy.traversal.stable_sort,
+                stable_sort,
+                matches_sorted,
             ));
         }
         Err(err) => return Err(err),
@@ -877,6 +896,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
         diag,
         counters,
         &started,
-        ctx.policy.traversal.stable_sort,
+        stable_sort,
+        matches_sorted,
     ))
 }

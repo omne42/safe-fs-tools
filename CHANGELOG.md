@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `glob`/`grep` stable-sort now keeps an incremental `matches_sorted` hint while collecting results and only runs the final sort when that hint flips false, removing an extra full-result sortedness pre-scan on large outputs without changing truncation/order semantics.
 - Fixed a `grep` streamed UTF-8 validation edge case where pending multi-byte state could stop processing the remainder of the same chunk, causing valid UTF-8 lines to be misclassified as non-UTF8 and skipped.
 - `grep` plain-query chunk matching now short-circuits impossible substring checks (`haystack < needle`) and skips cross-boundary `memmem` probes when the combined tail/prefix length cannot satisfy the query length, trimming hot-loop overhead without changing match semantics.
 - `path_utils::normalize_glob_pattern_for_matching` now keeps borrow-first semantics when trimming leading `"./"` segments from already-borrowed patterns, removing an avoidable `String` allocation on common `glob`/`grep` request normalization paths.
