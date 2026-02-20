@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` now revalidates directory identity once more after retained-entry materialization, reducing a late TOCTOU window where post-scan metadata could be read from a replaced directory path before response return.
+- `grep` line-text clipping now uses a fast owned-prefix helper that skips UTF-8 boundary backtracking for already-in-budget text, trimming per-match hot-path overhead without changing truncation semantics.
 - `grep` UTF-8 line-text truncation now uses `str::floor_char_boundary` via a shared helper in the hot match path, removing repeated per-match boundary backtracking loops while preserving truncation semantics.
 - CLI error rendering now avoids several redundant `String` clones when the same redacted path/root id is used for both JSON details and public message output; `details_map` also preallocates map capacity for the mandatory `kind` field.
 - `grep` glob-filter lazy-open path now reuses a single absolute-path scratch buffer instead of allocating `root_path.join(relative_path)` per candidate file, reducing hot-path `PathBuf` allocation churn on large scans without changing match/truncation semantics.

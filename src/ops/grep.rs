@@ -508,6 +508,16 @@ fn utf8_prefix_within(input: &str, max_bytes: usize) -> &str {
 }
 
 #[cfg(feature = "grep")]
+#[inline]
+fn to_owned_utf8_prefix_within(input: &str, max_bytes: usize) -> String {
+    if input.len() <= max_bytes {
+        input.to_owned()
+    } else {
+        utf8_prefix_within(input, max_bytes).to_owned()
+    }
+}
+
+#[cfg(feature = "grep")]
 fn maybe_shrink_line_buffer(line_buf: &mut Vec<u8>, retained_hint_bytes: usize) {
     const DEFAULT_RETAINED_CAPACITY: usize = 8 * 1024;
     const MAX_RETAINED_CAPACITY: usize = 256 * 1024;
@@ -815,7 +825,7 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                             let line_truncated = line_was_capped || redacted.len() > max_line_bytes;
                             let text = match redacted {
                                 std::borrow::Cow::Borrowed(redacted) => {
-                                    utf8_prefix_within(redacted, max_line_bytes).to_owned()
+                                    to_owned_utf8_prefix_within(redacted, max_line_bytes)
                                 }
                                 std::borrow::Cow::Owned(redacted) => {
                                     if redacted.len() <= max_line_bytes {
@@ -829,13 +839,13 @@ pub fn grep(ctx: &Context, request: GrepRequest) -> Result<GrepResponse> {
                         }
                         crate::redaction::RedactionOutcome::OutputLimitExceeded => {
                             let marker = crate::redaction::REDACTION_OUTPUT_LIMIT_MARKER;
-                            (utf8_prefix_within(marker, max_line_bytes).to_owned(), true)
+                            (to_owned_utf8_prefix_within(marker, max_line_bytes), true)
                         }
                     }
                 } else {
                     let line_truncated = line_was_capped || line.len() > max_line_bytes;
                     (
-                        utf8_prefix_within(line, max_line_bytes).to_owned(),
+                        to_owned_utf8_prefix_within(line, max_line_bytes),
                         line_truncated,
                     )
                 };

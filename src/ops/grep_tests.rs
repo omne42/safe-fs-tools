@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use super::{
     GrepMatch, MAX_REGEX_LINE_BYTES, ReadLineCapped, ReadLineCappedOptions,
     matches_sorted_by_path_line, max_capped_line_bytes_for_request, maybe_shrink_line_buffer,
-    maybe_sort_grep_matches,
+    maybe_sort_grep_matches, to_owned_utf8_prefix_within,
 };
 
 fn m(path: &str, line: u64) -> GrepMatch {
@@ -353,4 +353,17 @@ fn update_query_match_state_keeps_small_tail_on_large_no_match_chunk() {
         query_window.as_slice(),
         &long_chunk[long_chunk.len().saturating_sub(query_window.len())..]
     );
+}
+
+#[test]
+fn to_owned_utf8_prefix_within_returns_full_text_when_already_within_limit() {
+    let text = "hello";
+    assert_eq!(to_owned_utf8_prefix_within(text, 64), "hello");
+}
+
+#[test]
+fn to_owned_utf8_prefix_within_clips_at_utf8_boundary_when_limited() {
+    let text = "你好a";
+    // "你" is 3 bytes and "好" starts at byte 3. Limiting to 4 must keep only "你".
+    assert_eq!(to_owned_utf8_prefix_within(text, 4), "你");
 }

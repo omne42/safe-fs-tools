@@ -618,6 +618,7 @@ pub fn list_dir(ctx: &Context, request: ListDirRequest) -> Result<ListDirRespons
         estimated_response_bytes = estimated_response_bytes.saturating_add(entry_response_bytes);
         entries.push(candidate.into_list_entry(&relative_dir, relative_is_root, kind, size_bytes));
     }
+    ensure_directory_identity_unchanged(&abs_entry_path, &relative_dir, &meta)?;
     let truncated = is_list_dir_truncated(
         max_entries,
         false,
@@ -710,8 +711,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Candidate, ListDirEntryKind, entry_kind_and_size_no_follow, initial_entries_capacity,
-        initial_heap_capacity, is_list_dir_truncated, list_entry_estimated_response_bytes,
+        Candidate, ListDirEntryKind, ensure_directory_identity_unchanged,
+        entry_kind_and_size_no_follow, initial_entries_capacity, initial_heap_capacity,
+        is_list_dir_truncated, list_entry_estimated_response_bytes,
         list_entry_min_estimated_response_bytes, max_estimated_list_dir_response_bytes,
         relative_entry_path, relative_entry_path_for_deny, runtime_max_entries_cap,
         scan_count_only_entries_without_deny_globs,
@@ -984,5 +986,26 @@ mod tests {
         let (kind, size_bytes) = entry_kind_and_size_no_follow(&victim).expect("metadata");
         assert_eq!(kind, ListDirEntryKind::Symlink);
         assert_eq!(size_bytes, 0);
+    }
+
+    #[test]
+    fn ensure_directory_identity_unchanged_detects_replaced_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let listed = dir.path().join("listed");
+        std::fs::create_dir(&listed).expect("create listed dir");
+        let expected = std::fs::symlink_metadata(&listed).expect("metadata before");
+
+        let moved = dir.path().join("listed-old");
+        std::fs::rename(&listed, &moved).expect("rename old dir");
+        std::fs::create_dir(&listed).expect("recreate listed dir");
+
+        let err = ensure_directory_identity_unchanged(&listed, Path::new("listed"), &expected)
+            .expect_err("directory identity change should be rejected");
+        match err {
+            crate::error::Error::InvalidPath(message) => {
+                assert!(message.contains("changed during list_dir"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
