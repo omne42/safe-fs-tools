@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CLI `glob`/`grep` scan-limit JSON 输出改为内建字符串映射（`entries/files/time/results/response_bytes`）并移除不必要的 fallible 序列化分支；`list_dir`/`glob`/`grep` 响应组装函数同步改为无错误返回，减少热路径分支与无效错误传播风险。
 - `list_dir` retained-entry materialization now reuses one precomputed per-candidate response-byte base (path+name) and consumes a precomputed `relative_is_root` flag during path emission, trimming repeated hot-loop byte accounting and root-path checks without changing truncation/order semantics.
 - `list_dir` `max_entries=0` now uses a no-deny fast path that short-circuits on the first visible directory entry without probing `DirEntry::file_type()`, reducing syscall overhead on large directories while keeping truncation semantics.
 - `write` overwrite staging now uses a single post-write/post-permission `sync_all` before atomic rename (instead of two syncs), reducing overwrite-path flush overhead without changing durability semantics; added a Unix regression test to lock permission-preservation behavior on overwrite.

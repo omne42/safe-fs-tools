@@ -33,8 +33,7 @@ fn effective_max_patch_bytes(cli: &Cli, policy: &safe_fs_tools::SandboxPolicy) -
         .max_patch_bytes
         .unwrap_or(policy.limits.max_read_bytes);
     cli.max_patch_bytes
-        .map(|bytes| bytes.min(policy_patch_limit))
-        .unwrap_or(policy_patch_limit)
+        .map_or(policy_patch_limit, |bytes| bytes.min(policy_patch_limit))
 }
 
 fn path_to_lossy_string(path: &Path) -> String {
@@ -51,9 +50,7 @@ fn list_dir_entry_kind_json_value(kind: ListDirEntryKind) -> serde_json::Value {
     serde_json::Value::String(value.to_string())
 }
 
-fn list_dir_response_to_json_value(
-    response: ListDirResponse,
-) -> Result<serde_json::Value, CliError> {
+fn list_dir_response_to_json_value(response: ListDirResponse) -> serde_json::Value {
     let mut map = serde_json::Map::with_capacity(5);
     map.insert(
         "path".to_string(),
@@ -92,10 +89,10 @@ fn list_dir_response_to_json_value(
         "skipped_io_errors".to_string(),
         serde_json::Value::from(response.skipped_io_errors),
     );
-    Ok(serde_json::Value::Object(map))
+    serde_json::Value::Object(map)
 }
 
-fn glob_response_to_json_value(response: GlobResponse) -> Result<serde_json::Value, CliError> {
+fn glob_response_to_json_value(response: GlobResponse) -> serde_json::Value {
     let mut map = serde_json::Map::with_capacity(10);
     let matches = response
         .matches
@@ -115,7 +112,7 @@ fn glob_response_to_json_value(response: GlobResponse) -> Result<serde_json::Val
         "scan_limit_reached".to_string(),
         serde_json::Value::Bool(response.scan_limit_reached),
     );
-    insert_scan_limit_reason(&mut map, response.scan_limit_reason)?;
+    insert_scan_limit_reason(&mut map, response.scan_limit_reason);
     map.insert(
         "elapsed_ms".to_string(),
         serde_json::Value::from(response.elapsed_ms),
@@ -136,23 +133,34 @@ fn glob_response_to_json_value(response: GlobResponse) -> Result<serde_json::Val
         "skipped_dangling_symlink_targets".to_string(),
         serde_json::Value::from(response.skipped_dangling_symlink_targets),
     );
-    Ok(serde_json::Value::Object(map))
+    serde_json::Value::Object(map)
+}
+
+fn scan_limit_reason_json_value(reason: ScanLimitReason) -> serde_json::Value {
+    let reason = match reason {
+        ScanLimitReason::Entries => "entries",
+        ScanLimitReason::Files => "files",
+        ScanLimitReason::Time => "time",
+        ScanLimitReason::Results => "results",
+        ScanLimitReason::ResponseBytes => "response_bytes",
+        _ => "unknown",
+    };
+    serde_json::Value::String(reason.to_string())
 }
 
 fn insert_scan_limit_reason(
     map: &mut serde_json::Map<String, serde_json::Value>,
     scan_limit_reason: Option<ScanLimitReason>,
-) -> Result<(), CliError> {
+) {
     if let Some(reason) = scan_limit_reason {
         map.insert(
             "scan_limit_reason".to_string(),
-            serde_json::to_value(reason).map_err(CliError::from)?,
+            scan_limit_reason_json_value(reason),
         );
     }
-    Ok(())
 }
 
-fn grep_response_to_json_value(response: GrepResponse) -> Result<serde_json::Value, CliError> {
+fn grep_response_to_json_value(response: GrepResponse) -> serde_json::Value {
     let mut map = serde_json::Map::with_capacity(12);
     let mut matches = Vec::with_capacity(response.matches.len());
     for item in response.matches {
@@ -190,7 +198,7 @@ fn grep_response_to_json_value(response: GrepResponse) -> Result<serde_json::Val
         "scan_limit_reached".to_string(),
         serde_json::Value::Bool(response.scan_limit_reached),
     );
-    insert_scan_limit_reason(&mut map, response.scan_limit_reason)?;
+    insert_scan_limit_reason(&mut map, response.scan_limit_reason);
     map.insert(
         "elapsed_ms".to_string(),
         serde_json::Value::from(response.elapsed_ms),
@@ -211,7 +219,7 @@ fn grep_response_to_json_value(response: GrepResponse) -> Result<serde_json::Val
         "skipped_dangling_symlink_targets".to_string(),
         serde_json::Value::from(response.skipped_dangling_symlink_targets),
     );
-    Ok(serde_json::Value::Object(map))
+    serde_json::Value::Object(map)
 }
 
 fn execute_command(
@@ -240,29 +248,31 @@ fn execute_command(
             root,
             max_entries,
             path,
-        } => list_dir_response_to_json_value(safe_fs_tools::ops::list_dir(
-            ctx,
-            ListDirRequest {
-                root_id: root,
-                path,
-                max_entries,
-            },
-        )?),
+        } => Ok(list_dir_response_to_json_value(
+            safe_fs_tools::ops::list_dir(
+                ctx,
+                ListDirRequest {
+                    root_id: root,
+                    path,
+                    max_entries,
+                },
+            )?,
+        )),
         Command::Glob { root, pattern } => {
-            glob_response_to_json_value(safe_fs_tools::ops::glob_paths(
+            Ok(glob_response_to_json_value(safe_fs_tools::ops::glob_paths(
                 ctx,
                 GlobRequest {
                     root_id: root,
                     pattern,
                 },
-            )?)
+            )?))
         }
         Command::Grep {
             root,
             query,
             regex,
             glob,
-        } => grep_response_to_json_value(safe_fs_tools::ops::grep(
+        } => Ok(grep_response_to_json_value(safe_fs_tools::ops::grep(
             ctx,
             GrepRequest {
                 root_id: root,
@@ -270,7 +280,7 @@ fn execute_command(
                 regex,
                 glob,
             },
-        )?),
+        )?)),
         Command::Stat { root, path } => serde_json::to_value(safe_fs_tools::ops::stat(
             ctx,
             StatRequest {
@@ -437,11 +447,13 @@ fn preflight_mutating_target(
 mod tests {
     use std::path::PathBuf;
 
+    use safe_fs_tools::ops::ScanLimitReason;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
 
     use super::{
         glob_response_to_json_value, grep_response_to_json_value, list_dir_response_to_json_value,
+        scan_limit_reason_json_value,
     };
 
     #[cfg(unix)]
@@ -464,8 +476,7 @@ mod tests {
             }],
             truncated: false,
             skipped_io_errors: 0,
-        })
-        .expect("list_dir response should serialize");
+        });
 
         assert_eq!(
             value["entries"][0]["path"].as_str(),
@@ -488,8 +499,7 @@ mod tests {
             skipped_walk_errors: 0,
             skipped_io_errors: 0,
             skipped_dangling_symlink_targets: 0,
-        })
-        .expect("glob response should serialize");
+        });
 
         assert_eq!(
             value["matches"][0].as_str(),
@@ -519,12 +529,35 @@ mod tests {
             skipped_walk_errors: 0,
             skipped_io_errors: 0,
             skipped_dangling_symlink_targets: 0,
-        })
-        .expect("grep response should serialize");
+        });
 
         assert_eq!(
             value["matches"][0]["path"].as_str(),
             Some(path.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn scan_limit_reason_json_matches_public_contract() {
+        assert_eq!(
+            scan_limit_reason_json_value(ScanLimitReason::Entries),
+            serde_json::Value::String("entries".to_string())
+        );
+        assert_eq!(
+            scan_limit_reason_json_value(ScanLimitReason::Files),
+            serde_json::Value::String("files".to_string())
+        );
+        assert_eq!(
+            scan_limit_reason_json_value(ScanLimitReason::Time),
+            serde_json::Value::String("time".to_string())
+        );
+        assert_eq!(
+            scan_limit_reason_json_value(ScanLimitReason::Results),
+            serde_json::Value::String("results".to_string())
+        );
+        assert_eq!(
+            scan_limit_reason_json_value(ScanLimitReason::ResponseBytes),
+            serde_json::Value::String("response_bytes".to_string())
         );
     }
 }
