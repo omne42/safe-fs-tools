@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `list_dir` `max_entries=0` count-only path now skips deny-path name extraction when `secrets.deny_globs` is empty, avoiding unnecessary per-entry `OsString` allocations while preserving existing I/O error classification.
+- `list_dir` internal candidate equality now compares `file_name` directly, removing redundant display-name normalization work in heap bookkeeping.
+- Windows traversal filtering now reuses a single case-insensitive `strip_prefix` fallback result per entry (instead of recomputing it), trimming duplicate normalization on filtered walks.
 - `glob` pattern normalization now returns borrow-first `Cow<str>` and traversal/secrets glob compilation paths consume borrowed normalized patterns when possible, avoiding unnecessary per-request `String` allocations on already-normalized inputs.
 - `traversal.skip_globs` total-byte accounting now uses checked addition and returns an explicit overflow validation error instead of saturating arithmetic, tightening policy-shape validation for extreme inputs.
 - `list_dir` now allocates the deny-path scratch buffer only when `secrets.deny_globs` is configured for a non-root target path, removing one unnecessary `PathBuf` clone on the common permissive-policy path.

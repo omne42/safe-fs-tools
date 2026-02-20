@@ -171,7 +171,7 @@ impl Candidate {
 
 impl PartialEq for Candidate {
     fn eq(&self, other: &Self) -> bool {
-        self.name() == other.name() && self.file_name == other.file_name
+        self.file_name == other.file_name
     }
 }
 
@@ -313,6 +313,10 @@ fn process_dir_entry_count_only(
     relative_dir: &Path,
     deny_path_scratch: Option<&mut PathBuf>,
 ) -> Result<CountOnlyOutcome> {
+    if !has_deny_globs {
+        return Ok(classify_count_only_outcome(entry.file_type().is_ok()));
+    }
+
     let name = entry.file_name();
     if is_entry_path_denied(
         ctx,

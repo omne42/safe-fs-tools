@@ -139,24 +139,18 @@ pub(super) fn walkdir_traversal_iter<'a>(
             Err(_) => {
                 #[cfg(windows)]
                 {
-                    if let Some(relative) =
-                        crate::path_utils::strip_prefix_case_insensitive_normalized(
-                            entry.path(),
-                            root_path,
-                        )
-                    {
-                        std::borrow::Cow::Owned(relative)
-                    } else {
-                        debug_assert!(
-                            crate::path_utils::strip_prefix_case_insensitive_normalized(
-                                entry.path(),
-                                root_path,
-                            )
-                            .is_some(),
-                            "walkdir yielded a path outside the selected root"
-                        );
+                    let relative = crate::path_utils::strip_prefix_case_insensitive_normalized(
+                        entry.path(),
+                        root_path,
+                    );
+                    debug_assert!(
+                        relative.is_some(),
+                        "walkdir yielded a path outside the selected root"
+                    );
+                    let Some(relative) = relative else {
                         return false;
-                    }
+                    };
+                    std::borrow::Cow::Owned(relative)
                 }
                 #[cfg(not(windows))]
                 {
