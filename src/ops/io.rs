@@ -289,10 +289,6 @@ fn write_bytes_atomic_impl(
         .as_file_mut()
         .write_all(bytes)
         .map_err(|err| Error::io_path("write", relative, err))?;
-    tmp_file
-        .as_file_mut()
-        .sync_all()
-        .map_err(|err| Error::io_path("sync", relative, err))?;
 
     tmp_file
         .as_file()
@@ -306,6 +302,7 @@ fn write_bytes_atomic_impl(
         preserve_unix_xattrs,
     )
     .map_err(|err| Error::io_path("preserve_metadata", relative, err))?;
+    // A single post-write/post-metadata sync is enough before the atomic replace.
     tmp_file
         .as_file_mut()
         .sync_all()
