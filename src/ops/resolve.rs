@@ -82,9 +82,10 @@ fn classify_notfound_escape(
             let resolved_target = if symlink_target.is_absolute() {
                 symlink_target
             } else {
-                let mut parent = current.clone();
-                let _ = parent.pop();
-                parent.join(symlink_target)
+                current
+                    .parent()
+                    .unwrap_or(current.as_path())
+                    .join(symlink_target)
             };
             let resolved_target =
                 crate::path_utils_internal::normalize_path_lexical(&resolved_target);
@@ -130,16 +131,16 @@ pub(super) fn resolve_path_in_root_lexically<'ctx>(
     path: &Path,
 ) -> Result<ResolvedPath<'ctx>> {
     let resolved = ctx.policy.resolve_path_checked(root_id, path)?;
-    let root = ctx.policy.root(root_id)?;
+    let declared_root = ctx.declared_root(root_id)?;
     let canonical_root = ctx.canonical_root(root_id)?;
-    let requested_path = derive_requested_path(root_id, &root.path, canonical_root, &resolved)
+    let requested_path = derive_requested_path(root_id, declared_root, canonical_root, &resolved)
         .map_err(|err| match err {
-            Error::OutsideRoot { .. } => {
-                let normalized_requested = crate::path_utils_internal::normalize_path_lexical(path);
-                outside_root_error(root_id, &normalized_requested)
-            }
-            other => other,
-        })?;
+        Error::OutsideRoot { .. } => {
+            let normalized_requested = crate::path_utils_internal::normalize_path_lexical(path);
+            outside_root_error(root_id, &normalized_requested)
+        }
+        other => other,
+    })?;
     let requested_path = ctx.reject_secret_path(requested_path)?;
 
     Ok(ResolvedPath {

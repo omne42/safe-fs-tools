@@ -55,6 +55,7 @@ impl Context {
             }
             canonical_roots.push(CanonicalRoot {
                 id: root.id.clone(),
+                declared_path: root.path.clone(),
                 canonical_path: canonical,
                 mode: root.mode,
             });
@@ -66,6 +67,7 @@ impl Context {
             let replaced = roots.insert(
                 root.id,
                 RootRuntime {
+                    declared_path: root.declared_path,
                     canonical_path: root.canonical_path,
                     mode: root.mode,
                 },
@@ -160,6 +162,11 @@ impl Context {
             .map(|root| root.canonical_path.as_path())
     }
 
+    pub(super) fn declared_root(&self, root_id: &str) -> Result<&Path> {
+        self.root_runtime(root_id)
+            .map(|root| root.declared_path.as_path())
+    }
+
     #[cfg(any(feature = "glob", feature = "grep"))]
     pub(super) fn is_traversal_path_skipped(&self, relative: &Path) -> bool {
         self.traversal_skip_globs
@@ -211,6 +218,7 @@ impl Context {
 #[derive(Debug)]
 struct CanonicalRoot {
     id: String,
+    declared_path: PathBuf,
     canonical_path: PathBuf,
     mode: RootMode,
 }

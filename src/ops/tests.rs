@@ -377,6 +377,29 @@ fn requested_path_for_dot_is_not_empty() {
 }
 
 #[test]
+#[cfg(unix)]
+fn absolute_path_under_declared_symlink_root_preserves_requested_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real_root = dir.path().join("real");
+    fs::create_dir(&real_root).expect("create real root");
+    let alias_root = dir.path().join("alias");
+    std::os::unix::fs::symlink(&real_root, &alias_root).expect("create alias symlink root");
+    fs::write(alias_root.join("file.txt"), "ok").expect("write file");
+
+    let mut policy = SandboxPolicy::single_root("root", &alias_root, RootMode::ReadOnly);
+    policy.paths.allow_absolute = true;
+    let ctx = Context::new(policy).expect("ctx");
+
+    let absolute_alias_file = alias_root.join("file.txt");
+    let (_canonical, relative, requested_path) = ctx
+        .canonical_path_in_root("root", &absolute_alias_file)
+        .expect("canonicalize absolute path under alias root");
+
+    assert_eq!(relative, PathBuf::from("file.txt"));
+    assert_eq!(requested_path, PathBuf::from("file.txt"));
+}
+
+#[test]
 fn context_builder_build_matches_context_new() {
     let dir = tempfile::tempdir().expect("tempdir");
     let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);

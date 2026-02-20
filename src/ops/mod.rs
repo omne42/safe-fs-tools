@@ -69,6 +69,7 @@ pub struct ContextBuilder {
 
 #[derive(Debug)]
 struct RootRuntime {
+    declared_path: PathBuf,
     canonical_path: PathBuf,
     mode: RootMode,
 }

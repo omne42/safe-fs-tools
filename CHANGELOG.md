@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `resolve` root-path derivation now reads the declared root path from `Context` runtime state (same O(1) root map as canonical roots) instead of re-scanning `policy.roots` per request, reducing repeated linear lookups and removing split-source root metadata drift risk.
+- `resolve` symlink escape classification now derives relative symlink parents from `current.parent()` instead of cloning and mutating a full `PathBuf` per symlink hop, trimming allocation churn on deep symlinked paths.
+- Added a Unix regression test for absolute paths under symlink-declared roots to lock requested-path derivation behavior (`requested_path == "file.txt"` under alias roots).
 - `list_dir` now routes `max_entries=0` through a dedicated count-only scan path and keeps the top-k materialization loop branch-free, reducing hot-loop branching/allocation overhead while preserving truncation and `skipped_io_errors` semantics.
 - Traversal walk-root resolution now reuses the already-resolved caller root path instead of doing a second root-map lookup, trimming per-request setup overhead without changing boundary checks.
 - `resolve` not-found escape classification now reuses mutable path buffers (`push`/`pop`) instead of rebuilding joined paths at every segment, removing quadratic allocation/copy behavior on deep paths while preserving outside-root symlink escape checks.
