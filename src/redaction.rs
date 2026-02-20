@@ -369,6 +369,15 @@ fn append_segment_with_limit(output: &mut String, segment: &str) -> bool {
     }
 }
 
+#[inline]
+fn reserve_replace_output_capacity(output: &mut String, target_capacity: usize) {
+    if output.capacity() < target_capacity {
+        // `String::reserve` uses `len + additional`; with a cleared reusable buffer,
+        // reserve the full target instead of a capacity delta.
+        output.reserve(target_capacity.saturating_sub(output.len()));
+    }
+}
+
 fn replace_regex_with_limit(
     input: &str,
     regex: &Regex,
@@ -382,9 +391,7 @@ fn replace_regex_with_limit(
 
     output.clear();
     let target_capacity = input.len().min(MAX_REDACTED_OUTPUT_BYTES);
-    if output.capacity() < target_capacity {
-        output.reserve(target_capacity.saturating_sub(output.capacity()));
-    }
+    reserve_replace_output_capacity(output, target_capacity);
     let mut last = 0usize;
 
     for found in std::iter::once(first_match).chain(matches) {
@@ -642,6 +649,16 @@ mod tests {
 
         let redacted = redactor.redact_text_cow("foo");
         assert_eq!(redacted.as_ref(), "XYY");
+    }
+
+    #[test]
+    fn reserve_replace_output_capacity_grows_reused_buffer_to_target() {
+        let mut output = String::with_capacity(32);
+        output.push_str("seed");
+        output.clear();
+
+        reserve_replace_output_capacity(&mut output, 128);
+        assert!(output.capacity() >= 128);
     }
 
     #[test]
