@@ -100,7 +100,7 @@ fn resolve_path_rejects_drive_relative_paths() {
     let dir = tempfile::tempdir().expect("tempdir");
     let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
     let err = policy
-        .resolve_path("root", Path::new("C:foo"))
+        .resolve_path_checked("root", Path::new("C:foo"))
         .expect_err("should reject");
 
     assert_invalid_path_contains(err, "drive-relative paths are not supported");
@@ -113,7 +113,7 @@ fn resolve_path_rejects_colon_paths_on_windows() {
     let dir = tempfile::tempdir().expect("tempdir");
     let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
     let err = policy
-        .resolve_path("root", Path::new("file.txt::$DATA"))
+        .resolve_path_checked("root", Path::new("file.txt::$DATA"))
         .expect_err("should reject");
 
     assert_invalid_path_contains(err, "':' is not allowed on Windows");

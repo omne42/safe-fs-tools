@@ -229,7 +229,7 @@ fn relative_from_walk_entry<'a>(
         if relative.is_none() {
             diag.inc_skipped_walk_errors();
         }
-        return relative.map(Cow::Owned);
+        relative.map(Cow::Owned)
     }
 
     #[cfg(not(windows))]

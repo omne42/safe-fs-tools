@@ -220,6 +220,7 @@ mod tests {
     use std::path::Path;
 
     use super::classify_notfound_escape;
+    #[cfg(unix)]
     use crate::error::Error;
 
     #[test]

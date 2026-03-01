@@ -198,7 +198,7 @@ fn prefixes_eq(a: std::path::Prefix<'_>, b: std::path::Prefix<'_>) -> bool {
         (Disk(a), Disk(b))
         | (Disk(a), VerbatimDisk(b))
         | (VerbatimDisk(a), Disk(b))
-        | (VerbatimDisk(a), VerbatimDisk(b)) => a.to_ascii_lowercase() == b.to_ascii_lowercase(),
+        | (VerbatimDisk(a), VerbatimDisk(b)) => a.eq_ignore_ascii_case(&b),
         (UNC(a_server, a_share), UNC(b_server, b_share))
         | (UNC(a_server, a_share), VerbatimUNC(b_server, b_share))
         | (VerbatimUNC(a_server, a_share), UNC(b_server, b_share))

@@ -10,6 +10,7 @@ Binary: `safe-fs-tools`
 - `--redact-paths`: best-effort path redaction in JSON errors.
 - `--redact-paths-strict`: stricter redaction (implies `--redact-paths`).
 - `--max-patch-bytes <N>`: cap patch input bytes (stdin/file), additionally bounded by policy limits.
+- `--confirm-mutating-ops`: required for mutating commands (`edit`, `patch`, `mkdir`, `write`, `delete`, `move`, `copy-file`).
 
 ## Common Notes
 
@@ -54,13 +55,13 @@ safe-fs-tools --policy policy.toml stat --root <root_id> <path>
 ### `edit`
 
 ```bash
-safe-fs-tools --policy policy.toml edit --root <root_id> <path> --start-line N --end-line N "<replacement>"
+safe-fs-tools --policy policy.toml --confirm-mutating-ops edit --root <root_id> <path> --start-line N --end-line N "<replacement>"
 ```
 
 ### `patch`
 
 ```bash
-safe-fs-tools --policy policy.toml patch --root <root_id> <path> <patch_file>
+safe-fs-tools --policy policy.toml --confirm-mutating-ops patch --root <root_id> <path> <patch_file>
 ```
 
 - Use `-` as `<patch_file>` to read from stdin.
@@ -68,13 +69,13 @@ safe-fs-tools --policy policy.toml patch --root <root_id> <path> <patch_file>
 ### `mkdir`
 
 ```bash
-safe-fs-tools --policy policy.toml mkdir --root <root_id> <path> [--create-parents] [--ignore-existing]
+safe-fs-tools --policy policy.toml --confirm-mutating-ops mkdir --root <root_id> <path> [--create-parents] [--ignore-existing]
 ```
 
 ### `write`
 
 ```bash
-safe-fs-tools --policy policy.toml write --root <root_id> <path> <content_file> [--overwrite] [--create-parents]
+safe-fs-tools --policy policy.toml --confirm-mutating-ops write --root <root_id> <path> <content_file> [--overwrite] [--create-parents]
 ```
 
 - Use `-` as `<content_file>` to read from stdin.
@@ -82,19 +83,19 @@ safe-fs-tools --policy policy.toml write --root <root_id> <path> <content_file> 
 ### `delete`
 
 ```bash
-safe-fs-tools --policy policy.toml delete --root <root_id> <path> [--recursive] [--ignore-missing]
+safe-fs-tools --policy policy.toml --confirm-mutating-ops delete --root <root_id> <path> [--recursive] [--ignore-missing]
 ```
 
 ### `move`
 
 ```bash
-safe-fs-tools --policy policy.toml move --root <root_id> <from> <to> [--overwrite] [--create-parents]
+safe-fs-tools --policy policy.toml --confirm-mutating-ops move --root <root_id> <from> <to> [--overwrite] [--create-parents]
 ```
 
 ### `copy-file`
 
 ```bash
-safe-fs-tools --policy policy.toml copy-file --root <root_id> <from> <to> [--overwrite] [--create-parents]
+safe-fs-tools --policy policy.toml --confirm-mutating-ops copy-file --root <root_id> <from> <to> [--overwrite] [--create-parents]
 ```
 
 ## Integration Patterns

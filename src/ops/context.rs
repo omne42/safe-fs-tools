@@ -17,6 +17,13 @@ use super::{GlobRequest, GlobResponse};
 #[cfg(feature = "grep")]
 use super::{GrepRequest, GrepResponse};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecisionTrace {
+    pub reason_code: &'static str,
+    pub risk_tag: &'static str,
+    pub policy_rule: Option<&'static str>,
+}
+
 impl Context {
     pub fn new(policy: SandboxPolicy) -> Result<Self> {
         Self::builder(policy).build()
@@ -149,6 +156,16 @@ impl Context {
 
     pub fn copy_file(&self, request: CopyFileRequest) -> Result<CopyFileResponse> {
         super::copy_file(self, request)
+    }
+
+    /// Build a stable decision trace from an operation error for audit pipelines.
+    pub fn decision_trace_for_error(&self, error: &Error) -> DecisionTrace {
+        let _ = self;
+        DecisionTrace {
+            reason_code: error.reason_code(),
+            risk_tag: error.risk_tag(),
+            policy_rule: error.policy_rule(),
+        }
     }
 
     fn root_runtime(&self, root_id: &str) -> Result<&RootRuntime> {
@@ -377,6 +394,25 @@ fn canonical_paths_overlap(a: &Path, b: &Path) -> bool {
         || crate::path_utils::starts_with_case_insensitive_normalized(b, a)
 }
 
+#[cfg(test)]
+mod decision_trace_tests {
+    use super::*;
+    use crate::policy::SandboxPolicy;
+
+    #[test]
+    fn decision_trace_uses_error_classification_contract() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let policy = SandboxPolicy::single_root("root", dir.path(), RootMode::ReadOnly);
+        let ctx = Context::new(policy).expect("ctx");
+
+        let trace =
+            ctx.decision_trace_for_error(&Error::SecretPathDenied(PathBuf::from(".git/config")));
+        assert_eq!(trace.reason_code, Error::CODE_SECRET_PATH_DENIED);
+        assert_eq!(trace.risk_tag, "boundary_violation");
+        assert_eq!(trace.policy_rule, Some("secrets.deny_globs"));
+    }
+}
+
 #[cfg(windows)]
 fn canonical_paths_cmp_case_insensitive(a: &Path, b: &Path) -> std::cmp::Ordering {
     crate::platform::windows_path_compare::os_str_cmp_case_insensitive(a.as_os_str(), b.as_os_str())
@@ -391,6 +427,7 @@ mod tests {
     fn canonical_root(id: &str, canonical_path: &str) -> CanonicalRoot {
         CanonicalRoot {
             id: id.to_string(),
+            declared_path: PathBuf::from(canonical_path),
             canonical_path: PathBuf::from(canonical_path),
             mode: RootMode::ReadOnly,
         }

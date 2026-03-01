@@ -136,6 +136,28 @@ Defaults include `.git` and `.env` deny patterns.
 - `--error-format json --redact-paths-strict` in CLI wrappers
 - run inside OS sandbox/container
 
+## High-Risk Boundary
+
+`SandboxPolicy` controls filesystem access and resource budgets only. It does not decide:
+
+- business/legal legitimacy of file contents,
+- human approval workflow for sensitive actions,
+- organization-level identity/trust-chain requirements.
+
+For high-risk scenarios, wrappers should add:
+
+- explicit user confirmation for mutating operations,
+- external approval/audit workflow,
+- stronger runtime isolation (container/VM/OS sandbox).
+
+## Out of Scope for Policy Schema
+
+The policy schema intentionally excludes:
+
+- content moderation and copyright governance logic,
+- network/proxy governance logic unrelated to local filesystem operations,
+- OS-level confinement semantics.
+
 ## See Also
 
 - [`../policy.example.toml`](../policy.example.toml)

@@ -2,13 +2,15 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use common::test_policy;
 use safe_fs_tools::ops::{Context, GrepRequest, grep};
 use safe_fs_tools::policy::RootMode;
 
-#[cfg(feature = "glob")]
+#[cfg(all(feature = "glob", unix))]
 use safe_fs_tools::ops::{GlobRequest, glob_paths};
 
 #[cfg(unix)]

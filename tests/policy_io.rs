@@ -5,6 +5,7 @@ mod unix_helpers;
 
 #[cfg(feature = "policy-io")]
 mod policy_io {
+    #[cfg(unix)]
     const SYMLINK_FRAGMENT: &str = "symlink";
 
     use safe_fs_tools::ops::Context;
@@ -42,6 +43,7 @@ mod policy_io {
         std::fs::write(policy_path, encoded).expect("write toml");
     }
 
+    #[cfg(unix)]
     fn assert_invalid_path(err: safe_fs_tools::Error) {
         match err {
             safe_fs_tools::Error::InvalidPath(_) => {}
@@ -49,6 +51,7 @@ mod policy_io {
         }
     }
 
+    #[cfg(unix)]
     fn assert_invalid_path_contains(err: safe_fs_tools::Error, fragment: &str) {
         match err {
             safe_fs_tools::Error::InvalidPath(msg) => {

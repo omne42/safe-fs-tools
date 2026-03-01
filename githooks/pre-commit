@@ -193,6 +193,43 @@ if [[ ! -f "$repo_root/Cargo.toml" ]]; then
   exit 0
 fi
 
+# Repository secrets scan gate (can be bypassed only for controlled local emergency workflows).
+if [[ "${SAFE_FS_SKIP_SECRET_SCAN:-}" == "1" ]]; then
+  echo "pre-commit: skipping secrets scan (SAFE_FS_SKIP_SECRET_SCAN=1)." >&2
+else
+  if ! command -v gitleaks >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+pre-commit: gitleaks is required for secrets scanning but was not found.
+
+Install gitleaks and retry:
+  https://github.com/gitleaks/gitleaks
+
+If you must bypass locally for an emergency fix, use:
+  SAFE_FS_SKIP_SECRET_SCAN=1 git commit ...
+EOF
+    exit 1
+  fi
+
+  baseline_path="$repo_root/security/secrets/gitleaks-baseline.json"
+  gitleaks_cmd=(
+    gitleaks
+    git
+    --staged
+    --redact
+    --no-banner
+    --log-level warn
+    --exit-code 1
+  )
+  if [[ -f "$baseline_path" ]]; then
+    gitleaks_cmd+=(--baseline-path "$baseline_path")
+  fi
+
+  (
+    cd "$repo_root"
+    "${gitleaks_cmd[@]}"
+  )
+fi
+
 gate_script="$repo_root/scripts/gate.sh"
 if [[ ! -x "$gate_script" ]]; then
   echo "pre-commit: missing gate script: $gate_script" >&2

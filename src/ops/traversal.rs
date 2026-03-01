@@ -110,7 +110,7 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
         if !path.as_os_str().as_encoded_bytes().contains(&b'\\') {
             return glob.is_match(path);
         }
-        return GLOB_NORMALIZED_WIDE_BUF.with(|normalized_wide| {
+        GLOB_NORMALIZED_WIDE_BUF.with(|normalized_wide| {
             let mut normalized_wide = normalized_wide.borrow_mut();
             normalized_wide.clear();
             normalized_wide.extend(
@@ -124,7 +124,7 @@ pub(super) fn globset_is_match(glob: &GlobSet, path: &Path) -> bool {
             let matched = glob.is_match(Path::new(&normalized));
             let _ = clear_and_shrink_reusable_vec(&mut normalized_wide, MAX_RETAINED_WIDE_UNITS);
             matched
-        });
+        })
     }
     #[cfg(not(windows))]
     {

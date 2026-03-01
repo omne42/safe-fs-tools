@@ -2,7 +2,9 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use common::all_permissions_test_policy;
 use safe_fs_tools::ops::{Context, GlobRequest, glob_paths};

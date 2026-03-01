@@ -11,6 +11,16 @@ It is **not**:
 - an OS sandbox,
 - a complete TOCTOU-hard filesystem confinement model.
 
+## Explicit Boundary (Non-Goals)
+
+`safe-fs-tools` does not provide:
+
+- content legality/copyright judgment,
+- organization approval workflow or human sign-off system,
+- OS-kernel isolation guarantees.
+
+If your scenario requires those controls, implement them in outer systems (platform governance, approval service, OS/container isolation), and use `safe-fs-tools` as one policy layer.
+
 ## Recommended Deployment Modes
 
 ### Trusted local automation
@@ -56,6 +66,26 @@ Mitigation:
 - run inside OS/container sandbox,
 - reduce error detail exposure,
 - constrain roots to minimal scope.
+
+## Deployment Isolation Baseline
+
+Minimum baseline for agent/server deployments:
+
+- Run under a dedicated non-privileged OS user.
+- Use a dedicated workspace root, never `/` or user home as root.
+- Keep `allow_absolute = false` unless there is a strict operational need.
+- Prefer container/VM isolation in semi-trusted and untrusted contexts.
+- Restrict outbound network access for the wrapper process where possible.
+- Keep CLI machine mode enabled: `--error-format json --redact-paths-strict`.
+
+Environment baseline:
+
+| Environment | Minimum controls |
+|---|---|
+| Local trusted dev | Dedicated project root + least-permission policy |
+| CI shared runner | Ephemeral workspace + strict limits + JSON/redaction mode |
+| Agent/service (semi-trusted) | Container/VM + dedicated user + strict policy + narrow mount scope |
+| Multi-tenant/adversarial | OS isolation is mandatory; `safe-fs-tools` alone is insufficient |
 
 ## Platform Notes
 

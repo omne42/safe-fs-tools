@@ -19,11 +19,14 @@ This is the primary documentation portal for `safe-fs-tools`.
 - [`../SECURITY.md`](../SECURITY.md): formal threat model and disclosure process.
 - [`security-guide.md`](security-guide.md): practical security guidance for users/integrators.
 - [`deployment-and-ops.md`](deployment-and-ops.md): CI, release, hooks, and maintenance workflows.
+- [`secrets-gate.md`](secrets-gate.md): secrets scanning gate, baseline, and response policy.
+- [`ops-runbook-secrets.md`](ops-runbook-secrets.md): secrets finding triage, escalation, and remediation runbook.
 
 ## Additional Design Notes
 
 - [`db-vfs.md`](db-vfs.md): DB-backed VFS architecture decision and integration notes.
 - [`example-survey.md`](example-survey.md): ecosystem survey notes (non-normative).
+- [`release-notes-risk-boundary-2026h1.md`](release-notes-risk-boundary-2026h1.md): risk-boundary delivery summary.
 
 ## Versioning
 

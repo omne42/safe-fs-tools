@@ -1,16 +1,19 @@
+#[cfg(not(windows))]
 use std::fs;
 use std::path::Path;
 
 #[derive(Debug)]
 pub(crate) enum RenameReplaceError {
     Io(std::io::Error),
+    #[allow(dead_code)]
     CommittedButUnsynced(std::io::Error),
 }
 
 impl RenameReplaceError {
     pub(crate) fn io_error(&self) -> &std::io::Error {
         match self {
-            Self::Io(err) | Self::CommittedButUnsynced(err) => err,
+            Self::Io(err) => err,
+            Self::CommittedButUnsynced(err) => err,
         }
     }
 }
@@ -33,11 +36,12 @@ impl std::error::Error for RenameReplaceError {
     }
 }
 
+#[cfg(not(windows))]
 fn map_post_rename_sync(sync_result: std::io::Result<()>) -> Result<(), RenameReplaceError> {
     sync_result.map_err(RenameReplaceError::CommittedButUnsynced)
 }
 
-#[cfg(unix)]
+#[cfg(all(not(windows), unix))]
 fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
     let Some(parent) = path.parent() else {
         return Ok(());
@@ -49,12 +53,12 @@ fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
     parent_dir.sync_all()
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(windows), not(unix)))]
 fn sync_parent_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(not(windows), unix))]
 fn sync_rename_parents(src_path: &Path, dest_path: &Path) -> std::io::Result<()> {
     sync_parent_directory(dest_path)?;
     let src_parent = src_path.parent();
@@ -65,7 +69,7 @@ fn sync_rename_parents(src_path: &Path, dest_path: &Path) -> std::io::Result<()>
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(windows), not(unix)))]
 fn sync_rename_parents(_src_path: &Path, _dest_path: &Path) -> std::io::Result<()> {
     Ok(())
 }

@@ -37,6 +37,21 @@ Hooks enforce:
 - Runs on push/PR.
 - Matrix: `ubuntu-latest`, `macos-latest`, `windows-latest`.
 - Runs `./scripts/gate.sh`.
+- Includes blocking `gitleaks` secrets scan with checksum-verified tool install.
+
+### Secrets Secondary (`.github/workflows/secrets-secondary.yml`)
+
+- Runs weekly and on manual dispatch.
+- Executes `trufflehog` verified scan and uploads:
+  - `trufflehog-verified.jsonl`,
+  - `secrets-secondary-summary.json` (structured run summary).
+- Default mode is warning-only.
+- Enforce mode can be enabled:
+  - branch policy: `SECRETS_SECONDARY_ENFORCE_ON_MAIN=true`,
+  - manual one-off: dispatch input `enforce=true`.
+- Optional tracking issue can be enabled:
+  - branch policy: `SECRETS_SECONDARY_OPEN_ISSUE_ON_FINDINGS=true`,
+  - manual one-off: dispatch input `open_issue=true`.
 
 ### Docs (`.github/workflows/docs.yml`)
 
@@ -84,3 +99,4 @@ git push origin v0.2.1
 - Pin Rust toolchain from `rust-toolchain.toml` in CI and local dev.
 - Keep dependency updates batched with full gate runs.
 - For integrations, consume JSON errors and classify via stable error codes.
+- Follow repository secrets gate policy: [`secrets-gate.md`](secrets-gate.md).

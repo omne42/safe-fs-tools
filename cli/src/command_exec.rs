@@ -18,12 +18,41 @@ pub(crate) fn run_with_policy(
     let max_write_bytes = policy.limits.max_write_bytes;
     let ctx = Context::new(policy)?;
     let Cli {
-        command, pretty, ..
+        confirm_mutating_ops,
+        command,
+        pretty,
+        ..
     } = cli;
+    ensure_mutating_confirmation(&command, confirm_mutating_ops)?;
 
     let value = execute_command(&ctx, command, max_patch_bytes, max_write_bytes)?;
     let out = crate::serialize_json(&value, pretty)?;
     crate::write_stdout_line(&out)?;
+    Ok(())
+}
+
+const MUTATING_CONFIRMATION_MESSAGE: &str =
+    "mutating operation requires explicit confirmation (--confirm-mutating-ops)";
+
+fn command_requires_mutation_confirmation(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Edit { .. }
+            | Command::Patch { .. }
+            | Command::Mkdir { .. }
+            | Command::Write { .. }
+            | Command::Delete { .. }
+            | Command::Move { .. }
+            | Command::CopyFile { .. }
+    )
+}
+
+fn ensure_mutating_confirmation(command: &Command, confirmed: bool) -> Result<(), CliError> {
+    if command_requires_mutation_confirmation(command) && !confirmed {
+        return Err(
+            safe_fs_tools::Error::NotPermitted(MUTATING_CONFIRMATION_MESSAGE.to_string()).into(),
+        );
+    }
     Ok(())
 }
 
@@ -295,16 +324,25 @@ fn execute_command(
             start_line,
             end_line,
             replacement,
-        } => serde_json::to_value(safe_fs_tools::ops::edit_range(
-            ctx,
-            EditRequest {
-                root_id: root,
-                path,
-                start_line,
-                end_line,
-                replacement,
-            },
-        )?)
+        } => {
+            preflight_mutating_target(
+                ctx,
+                root.as_str(),
+                ctx.policy().permissions.edit,
+                "edit is disabled by policy",
+                "edit",
+            )?;
+            serde_json::to_value(safe_fs_tools::ops::edit_range(
+                ctx,
+                EditRequest {
+                    root_id: root,
+                    path,
+                    start_line,
+                    end_line,
+                    replacement,
+                },
+            )?)
+        }
         .map_err(CliError::from),
         Command::Patch {
             root,
@@ -333,15 +371,24 @@ fn execute_command(
             path,
             create_parents,
             ignore_existing,
-        } => serde_json::to_value(safe_fs_tools::ops::mkdir(
-            ctx,
-            MkdirRequest {
-                root_id: root,
-                path,
-                create_parents,
-                ignore_existing,
-            },
-        )?)
+        } => {
+            preflight_mutating_target(
+                ctx,
+                root.as_str(),
+                ctx.policy().permissions.mkdir,
+                "mkdir is disabled by policy",
+                "mkdir",
+            )?;
+            serde_json::to_value(safe_fs_tools::ops::mkdir(
+                ctx,
+                MkdirRequest {
+                    root_id: root,
+                    path,
+                    create_parents,
+                    ignore_existing,
+                },
+            )?)
+        }
         .map_err(CliError::from),
         Command::Write {
             root,
@@ -374,15 +421,24 @@ fn execute_command(
             path,
             recursive,
             ignore_missing,
-        } => serde_json::to_value(safe_fs_tools::ops::delete(
-            ctx,
-            DeleteRequest {
-                root_id: root,
-                path,
-                recursive,
-                ignore_missing,
-            },
-        )?)
+        } => {
+            preflight_mutating_target(
+                ctx,
+                root.as_str(),
+                ctx.policy().permissions.delete,
+                "delete is disabled by policy",
+                "delete",
+            )?;
+            serde_json::to_value(safe_fs_tools::ops::delete(
+                ctx,
+                DeleteRequest {
+                    root_id: root,
+                    path,
+                    recursive,
+                    ignore_missing,
+                },
+            )?)
+        }
         .map_err(CliError::from),
         Command::Move {
             root,
@@ -390,16 +446,25 @@ fn execute_command(
             to,
             overwrite,
             create_parents,
-        } => serde_json::to_value(safe_fs_tools::ops::move_path(
-            ctx,
-            MovePathRequest {
-                root_id: root,
-                from,
-                to,
-                overwrite,
-                create_parents,
-            },
-        )?)
+        } => {
+            preflight_mutating_target(
+                ctx,
+                root.as_str(),
+                ctx.policy().permissions.move_path,
+                "move is disabled by policy",
+                "move",
+            )?;
+            serde_json::to_value(safe_fs_tools::ops::move_path(
+                ctx,
+                MovePathRequest {
+                    root_id: root,
+                    from,
+                    to,
+                    overwrite,
+                    create_parents,
+                },
+            )?)
+        }
         .map_err(CliError::from),
         Command::CopyFile {
             root,
@@ -407,16 +472,25 @@ fn execute_command(
             to,
             overwrite,
             create_parents,
-        } => serde_json::to_value(safe_fs_tools::ops::copy_file(
-            ctx,
-            CopyFileRequest {
-                root_id: root,
-                from,
-                to,
-                overwrite,
-                create_parents,
-            },
-        )?)
+        } => {
+            preflight_mutating_target(
+                ctx,
+                root.as_str(),
+                ctx.policy().permissions.copy_file,
+                "copy_file is disabled by policy",
+                "copy_file",
+            )?;
+            serde_json::to_value(safe_fs_tools::ops::copy_file(
+                ctx,
+                CopyFileRequest {
+                    root_id: root,
+                    from,
+                    to,
+                    overwrite,
+                    create_parents,
+                },
+            )?)
+        }
         .map_err(CliError::from),
     }
 }
@@ -445,6 +519,8 @@ fn preflight_mutating_target(
 
 #[cfg(test)]
 mod tests {
+    use crate::Command;
+    use crate::error::CliError;
     use std::path::PathBuf;
 
     use safe_fs_tools::ops::ScanLimitReason;
@@ -452,8 +528,12 @@ mod tests {
     use std::os::unix::ffi::OsStringExt;
 
     use super::{
-        glob_response_to_json_value, grep_response_to_json_value, list_dir_response_to_json_value,
+        command_requires_mutation_confirmation, ensure_mutating_confirmation,
         scan_limit_reason_json_value,
+    };
+    #[cfg(unix)]
+    use super::{
+        glob_response_to_json_value, grep_response_to_json_value, list_dir_response_to_json_value,
     };
 
     #[cfg(unix)]
@@ -559,5 +639,57 @@ mod tests {
             scan_limit_reason_json_value(ScanLimitReason::ResponseBytes),
             serde_json::Value::String("response_bytes".to_string())
         );
+    }
+
+    #[test]
+    fn mutation_confirmation_classifies_commands_correctly() {
+        assert!(!command_requires_mutation_confirmation(&Command::Read {
+            root: "root".to_string(),
+            path: PathBuf::from("a.txt"),
+            start_line: None,
+            end_line: None,
+        }));
+        assert!(!command_requires_mutation_confirmation(&Command::Stat {
+            root: "root".to_string(),
+            path: PathBuf::from("a.txt"),
+        }));
+        assert!(command_requires_mutation_confirmation(&Command::Write {
+            root: "root".to_string(),
+            path: PathBuf::from("a.txt"),
+            content_file: PathBuf::from("content.txt"),
+            overwrite: false,
+            create_parents: false,
+        }));
+        assert!(command_requires_mutation_confirmation(&Command::Delete {
+            root: "root".to_string(),
+            path: PathBuf::from("a.txt"),
+            recursive: false,
+            ignore_missing: false,
+        }));
+    }
+
+    #[test]
+    fn mutation_confirmation_rejects_mutating_commands_when_not_confirmed() {
+        let err = ensure_mutating_confirmation(
+            &Command::Write {
+                root: "root".to_string(),
+                path: PathBuf::from("a.txt"),
+                content_file: PathBuf::from("content.txt"),
+                overwrite: false,
+                create_parents: false,
+            },
+            false,
+        )
+        .expect_err("mutating command should require confirmation");
+
+        match err {
+            CliError::Tool(safe_fs_tools::Error::NotPermitted(message)) => {
+                assert!(
+                    message.contains("--confirm-mutating-ops"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }

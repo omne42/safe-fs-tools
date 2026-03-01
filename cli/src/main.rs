@@ -56,6 +56,12 @@ struct Cli {
     #[arg(value_parser = clap::value_parser!(u64).range(1..))]
     max_patch_bytes: Option<u64>,
 
+    /// Require explicit confirmation before executing mutating operations.
+    ///
+    /// Mutating commands: `edit`, `patch`, `mkdir`, `write`, `delete`, `move`, `copy-file`.
+    #[arg(long, default_value_t = false)]
+    confirm_mutating_ops: bool,
+
     #[command(subcommand)]
     command: Command,
 }

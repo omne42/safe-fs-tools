@@ -299,10 +299,10 @@ pub(crate) fn preserve_unix_security_metadata(
     use std::os::unix::fs::MetadataExt;
 
     let tmp_meta = tmp_file.metadata()?;
-    let src_uid: libc::uid_t = src_meta.uid().into();
-    let src_gid: libc::gid_t = src_meta.gid().into();
-    let tmp_uid: libc::uid_t = tmp_meta.uid().into();
-    let tmp_gid: libc::gid_t = tmp_meta.gid().into();
+    let src_uid: libc::uid_t = src_meta.uid();
+    let src_gid: libc::gid_t = src_meta.gid();
+    let tmp_uid: libc::uid_t = tmp_meta.uid();
+    let tmp_gid: libc::gid_t = tmp_meta.gid();
     if src_uid != tmp_uid || src_gid != tmp_gid {
         let uid: libc::uid_t = if src_uid == tmp_uid {
             libc::uid_t::MAX

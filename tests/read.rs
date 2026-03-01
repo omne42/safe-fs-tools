@@ -20,6 +20,7 @@ fn read_enabled_policy(
 
 const ROOT_ID: &str = "root";
 const MSG_ABSOLUTE_REQUEST_PATHS: &str = "absolute request paths";
+#[cfg(unix)]
 const MSG_NOT_REGULAR_FILE: &str = "not a regular file";
 const MSG_LINE_RANGE_TOGETHER: &str = "must be provided together";
 const MSG_INVALID_LINE_RANGE: &str = "invalid line range";

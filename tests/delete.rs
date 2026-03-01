@@ -3,7 +3,6 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{all_permissions_test_policy, test_policy};
-#[cfg(unix)]
 use safe_fs_tools::ops::DeleteKind;
 use safe_fs_tools::ops::{Context, DeleteRequest, delete};
 use safe_fs_tools::policy::RootMode;
