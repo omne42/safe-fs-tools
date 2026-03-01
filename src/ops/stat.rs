@@ -51,31 +51,8 @@ fn metadata_time_to_millis(value: std::io::Result<std::time::SystemTime>) -> Opt
     value.ok().and_then(system_time_to_millis)
 }
 
-fn file_identity_from_metadata(meta: &fs::Metadata) -> Option<FileIdentity> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-
-        Some(FileIdentity::Unix {
-            dev: meta.dev(),
-            ino: meta.ino(),
-        })
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-
-        Some(FileIdentity::Windows {
-            volume_serial: u64::from(meta.volume_serial_number()?),
-            file_index: meta.file_index()?,
-        })
-    }
-    #[cfg(all(not(unix), not(windows)))]
-    {
-        let _ = meta;
-        // Fail-closed: identity revalidation is currently supported only on Unix/Windows.
-        None
-    }
+fn file_identity_from_path(path: &Path) -> Option<FileIdentity> {
+    FileIdentity::from_path(path)
 }
 
 fn revalidate_path_stability(
@@ -108,7 +85,7 @@ fn revalidate_path_stability(
         )));
     }
 
-    match file_identity_from_metadata(&rechecked_meta) {
+    match file_identity_from_path(canonical_path) {
         Some(actual_identity) if actual_identity == expected_identity => {}
         Some(_) => {
             return Err(Error::InvalidPath(format!(
@@ -143,9 +120,9 @@ pub fn stat(ctx: &Context, request: StatRequest) -> Result<StatResponse> {
         )));
     }
 
-    let expected_identity = file_identity_from_metadata(&meta).ok_or_else(|| {
+    let expected_identity = file_identity_from_path(&path).ok_or_else(|| {
         Error::InvalidPath(format!(
-            "cannot verify identity for path {} on this platform (stat identity revalidation is only supported on Unix/Windows)",
+            "cannot verify identity for path {} on this platform",
             relative.display()
         ))
     })?;

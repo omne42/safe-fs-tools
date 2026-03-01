@@ -8,66 +8,21 @@ use crate::error::{Error, Result};
 
 use super::Context;
 
-#[cfg(any(unix, windows))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ParentIdentity {
-    #[cfg(unix)]
-    Unix { dev: u64, ino: u64 },
-    #[cfg(windows)]
-    Windows { volume_serial: u64, file_index: u64 },
-}
+#[derive(Debug, PartialEq, Eq)]
+struct ParentIdentity(same_file::Handle);
 
-#[cfg(not(any(unix, windows)))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ParentIdentity;
-
-#[cfg(unix)]
-fn parent_identity_from_metadata(
-    meta: &fs::Metadata,
-    _relative_parent: &Path,
-) -> Result<ParentIdentity> {
-    use std::os::unix::fs::MetadataExt;
-
-    Ok(ParentIdentity::Unix {
-        dev: meta.dev(),
-        ino: meta.ino(),
-    })
-}
-
-#[cfg(windows)]
-fn parent_identity_from_metadata(
-    meta: &fs::Metadata,
+fn parent_identity_from_path(
+    canonical_parent: &Path,
     relative_parent: &Path,
 ) -> Result<ParentIdentity> {
-    use std::os::windows::fs::MetadataExt;
-
-    let Some(volume_serial) = meta.volume_serial_number() else {
-        return Err(Error::InvalidPath(format!(
-            "cannot verify parent identity for path {}",
-            relative_parent.display()
-        )));
-    };
-    let Some(file_index) = meta.file_index() else {
-        return Err(Error::InvalidPath(format!(
-            "cannot verify parent identity for path {}",
-            relative_parent.display()
-        )));
-    };
-    Ok(ParentIdentity::Windows {
-        volume_serial: u64::from(volume_serial),
-        file_index,
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
-fn parent_identity_from_metadata(
-    _meta: &fs::Metadata,
-    _relative_parent: &Path,
-) -> Result<ParentIdentity> {
-    Err(Error::InvalidPath(
-        "write is unsupported on this platform: cannot verify destination parent identity"
-            .to_string(),
-    ))
+    same_file::Handle::from_path(canonical_parent)
+        .map(ParentIdentity)
+        .map_err(|_| {
+            Error::InvalidPath(format!(
+                "cannot verify parent identity for path {} on this filesystem",
+                relative_parent.display()
+            ))
+        })
 }
 
 fn capture_parent_identity(
@@ -82,7 +37,7 @@ fn capture_parent_identity(
             relative_parent.display()
         )));
     }
-    parent_identity_from_metadata(&meta, relative_parent)
+    parent_identity_from_path(canonical_parent, relative_parent)
 }
 
 fn write_temp_file(
@@ -167,8 +122,7 @@ fn verify_parent_identity(
             relative_parent.display()
         )));
     }
-    let current_parent_identity =
-        parent_identity_from_metadata(&current_parent_meta, relative_parent)?;
+    let current_parent_identity = parent_identity_from_path(canonical_parent, relative_parent)?;
     if current_parent_identity != *expected_parent_identity {
         return Err(Error::InvalidPath(format!(
             "parent path {} changed during operation",

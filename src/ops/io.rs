@@ -5,39 +5,18 @@ use std::path::Path;
 use crate::error::{Error, Result};
 pub(super) use crate::platform::rename::RenameReplaceError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum FileIdentity {
-    #[cfg(unix)]
-    Unix { dev: u64, ino: u64 },
-    #[cfg(windows)]
-    Windows { volume_serial: u64, file_index: u64 },
-}
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct FileIdentity(same_file::Handle);
 
 impl FileIdentity {
-    fn from_metadata(meta: &fs::Metadata) -> Option<Self> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
+    fn from_file(file: &fs::File) -> Option<Self> {
+        let cloned = file.try_clone().ok()?;
+        let handle = same_file::Handle::from_file(cloned).ok()?;
+        Some(Self(handle))
+    }
 
-            Some(Self::Unix {
-                dev: meta.dev(),
-                ino: meta.ino(),
-            })
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-
-            Some(Self::Windows {
-                volume_serial: u64::from(meta.volume_serial_number()?),
-                file_index: meta.file_index()?,
-            })
-        }
-        #[cfg(all(not(unix), not(windows)))]
-        {
-            let _ = meta;
-            None
-        }
+    pub(super) fn from_path(path: &Path) -> Option<Self> {
+        same_file::Handle::from_path(path).ok().map(Self)
     }
 }
 
@@ -134,11 +113,11 @@ fn reject_symlink_metadata(_meta: &fs::Metadata, _relative: &Path) -> Result<()>
 
 fn verify_expected_identity(
     relative: &Path,
-    expected_identity: Option<FileIdentity>,
+    expected_identity: Option<&FileIdentity>,
     actual_identity: Option<FileIdentity>,
 ) -> Result<()> {
     match (expected_identity, actual_identity) {
-        (Some(expected), Some(actual)) if expected != actual => Err(Error::InvalidPath(format!(
+        (Some(expected), Some(actual)) if *expected != actual => Err(Error::InvalidPath(format!(
             "path {} changed during operation",
             relative.display()
         ))),
@@ -173,7 +152,7 @@ pub(super) fn read_string_limited_with_identity(
     max_bytes: u64,
 ) -> Result<(String, FileIdentity)> {
     let (file, meta) = open_regular_file_for_read(path, relative)?;
-    let identity = FileIdentity::from_metadata(&meta).ok_or_else(|| {
+    let identity = FileIdentity::from_file(&file).ok_or_else(|| {
         Error::InvalidPath(format!(
             "cannot verify identity for path {} on this platform",
             relative.display()
@@ -241,7 +220,7 @@ pub(super) fn write_bytes_atomic_checked(
         path,
         relative,
         bytes,
-        Some(expected_identity),
+        Some(&expected_identity),
         true,
         preserve_unix_xattrs,
     )
@@ -251,16 +230,20 @@ fn write_bytes_atomic_impl(
     path: &Path,
     relative: &Path,
     bytes: &[u8],
-    expected_identity: Option<FileIdentity>,
+    expected_identity: Option<&FileIdentity>,
     recheck_before_commit: bool,
     preserve_unix_xattrs: bool,
 ) -> Result<()> {
     // Preserve prior behavior: fail if the original file isn't writable.
     let (existing_file, meta) = open_regular_file_for_write(path, relative)?;
+    #[cfg(not(unix))]
+    let _ = &existing_file;
+    #[cfg(not(unix))]
+    let _ = preserve_unix_xattrs;
     verify_expected_identity(
         relative,
         expected_identity,
-        FileIdentity::from_metadata(&meta),
+        FileIdentity::from_file(&existing_file),
     )?;
 
     // Keep existing mode/readonly permissions, then preserve Unix security metadata.
@@ -313,11 +296,11 @@ fn write_bytes_atomic_impl(
     if recheck_before_commit {
         // Best-effort conflict detection: re-open with no-follow and re-check identity
         // right before commit to narrow the TOCTOU window between read and replace.
-        let (_recheck_file, recheck_meta) = open_regular_file_for_write(path, relative)?;
+        let (recheck_file, _recheck_meta) = open_regular_file_for_write(path, relative)?;
         verify_expected_identity(
             relative,
             expected_identity,
-            FileIdentity::from_metadata(&recheck_meta),
+            FileIdentity::from_file(&recheck_file),
         )?;
     }
 

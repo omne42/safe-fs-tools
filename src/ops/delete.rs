@@ -219,72 +219,13 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
 }
 
 #[cfg(windows)]
-#[inline]
-fn windows_identity_fields_match<T: Eq, U: Eq>(
-    a_volume: Option<T>,
-    a_index: Option<U>,
-    b_volume: Option<T>,
-    b_index: Option<U>,
-) -> Option<bool> {
-    match (a_volume, a_index, b_volume, b_index) {
-        (Some(a_volume), Some(a_index), Some(b_volume), Some(b_index)) => {
-            Some(a_volume == b_volume && a_index == b_index)
-        }
-        _ => None,
-    }
-}
-
-#[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
-    use std::os::windows::fs::MetadataExt;
-    windows_identity_fields_match(
-        a.volume_serial_number(),
-        a.file_index(),
-        b.volume_serial_number(),
-        b.file_index(),
-    )
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
+    None
 }
 
 #[cfg(not(any(unix, windows)))]
 fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
     None
-}
-
-#[cfg(all(test, windows))]
-mod tests {
-    use super::windows_identity_fields_match;
-
-    #[test]
-    fn windows_identity_requires_all_fields_present() {
-        assert_eq!(
-            windows_identity_fields_match::<u32, u64>(None, Some(1), None, Some(1),),
-            None
-        );
-        assert_eq!(
-            windows_identity_fields_match::<u32, u64>(Some(1), None, Some(1), None,),
-            None
-        );
-        assert_eq!(
-            windows_identity_fields_match::<u32, u64>(None, None, None, None,),
-            None
-        );
-    }
-
-    #[test]
-    fn windows_identity_compares_values_when_all_present() {
-        assert_eq!(
-            windows_identity_fields_match::<u32, u64>(Some(7), Some(11), Some(7), Some(11),),
-            Some(true)
-        );
-        assert_eq!(
-            windows_identity_fields_match::<u32, u64>(Some(7), Some(11), Some(8), Some(11),),
-            Some(false)
-        );
-        assert_eq!(
-            windows_identity_fields_match::<u32, u64>(Some(7), Some(11), Some(7), Some(12),),
-            Some(false)
-        );
-    }
 }
 
 #[cfg(any(unix, windows))]

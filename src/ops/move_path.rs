@@ -55,19 +55,8 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
 }
 
 #[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
-    use std::os::windows::fs::MetadataExt;
-    match (
-        a.volume_serial_number(),
-        a.file_index(),
-        b.volume_serial_number(),
-        b.file_index(),
-    ) {
-        (Some(a_serial), Some(a_index), Some(b_serial), Some(b_index)) => {
-            Some(a_serial == b_serial && a_index == b_index)
-        }
-        _ => None,
-    }
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
+    None
 }
 
 #[cfg(not(any(unix, windows)))]

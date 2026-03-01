@@ -177,6 +177,43 @@ impl Error {
             Error::InputTooLarge { .. } => Self::CODE_INPUT_TOO_LARGE,
         }
     }
+
+    /// Stable reason code for audit/telemetry pipelines.
+    ///
+    /// Currently aligned with `code()` for backward compatibility.
+    pub fn reason_code(&self) -> &'static str {
+        self.code()
+    }
+
+    /// Coarse-grained risk tag for fast policy/audit grouping.
+    pub fn risk_tag(&self) -> &'static str {
+        match self {
+            Error::OutsideRoot { .. } | Error::SecretPathDenied(_) => "boundary_violation",
+            Error::NotPermitted(_) => "authorization",
+            Error::InvalidPolicy(_) | Error::RootNotFound(_) => "policy_configuration",
+            Error::InvalidPath(_)
+            | Error::InvalidUtf8 { .. }
+            | Error::InvalidRegex { .. }
+            | Error::Patch(_)
+            | Error::InputTooLarge { .. }
+            | Error::FileTooLarge { .. } => "input_validation",
+            Error::Io(_) | Error::IoPath { .. } | Error::CommittedButUnsynced { .. } => {
+                "runtime_io"
+            }
+            #[cfg(any(feature = "glob", feature = "grep"))]
+            Error::WalkDir(_) | Error::WalkDirRoot { .. } => "runtime_io",
+        }
+    }
+
+    /// Optional policy rule hint associated with an error.
+    pub fn policy_rule(&self) -> Option<&'static str> {
+        match self {
+            Error::OutsideRoot { .. } => Some("roots/paths.allow_absolute"),
+            Error::SecretPathDenied(_) => Some("secrets.deny_globs"),
+            Error::InvalidPolicy(_) => Some("policy.validate"),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -331,5 +368,33 @@ mod tests {
         assert!(error.source().is_some());
         assert_eq!(error.code(), Error::CODE_INVALID_REGEX);
         assert!(error.to_string().contains("["));
+    }
+
+    #[test]
+    fn reason_code_is_stable_alias_of_code() {
+        let err = Error::NotPermitted("x".to_string());
+        assert_eq!(err.reason_code(), err.code());
+    }
+
+    #[test]
+    fn risk_tag_and_policy_rule_are_classified() {
+        let boundary = Error::OutsideRoot {
+            root_id: "root".to_string(),
+            path: PathBuf::from("x"),
+        };
+        assert_eq!(boundary.risk_tag(), "boundary_violation");
+        assert_eq!(boundary.policy_rule(), Some("roots/paths.allow_absolute"));
+
+        let denied = Error::SecretPathDenied(PathBuf::from(".git/config"));
+        assert_eq!(denied.risk_tag(), "boundary_violation");
+        assert_eq!(denied.policy_rule(), Some("secrets.deny_globs"));
+
+        let not_permitted = Error::NotPermitted("x".to_string());
+        assert_eq!(not_permitted.risk_tag(), "authorization");
+        assert_eq!(not_permitted.policy_rule(), None);
+
+        let io = Error::Io(not_found_error());
+        assert_eq!(io.risk_tag(), "runtime_io");
+        assert_eq!(io.policy_rule(), None);
     }
 }

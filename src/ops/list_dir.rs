@@ -51,19 +51,8 @@ fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
 }
 
 #[cfg(windows)]
-fn metadata_same_file(a: &fs::Metadata, b: &fs::Metadata) -> Option<bool> {
-    use std::os::windows::fs::MetadataExt;
-    match (
-        a.volume_serial_number(),
-        b.volume_serial_number(),
-        a.file_index(),
-        b.file_index(),
-    ) {
-        (Some(a_serial), Some(b_serial), Some(a_index), Some(b_index)) => {
-            Some(a_serial == b_serial && a_index == b_index)
-        }
-        _ => None,
-    }
+fn metadata_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> Option<bool> {
+    None
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -728,13 +717,14 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
 
+    #[cfg(unix)]
+    use super::entry_kind_and_size_no_follow;
     use super::{
         Candidate, ListDirEntryKind, decimal_len_u64, ensure_directory_identity_unchanged,
-        entry_kind_and_size_no_follow, initial_entries_capacity, initial_heap_capacity,
-        is_list_dir_truncated, list_entry_estimated_response_bytes,
-        list_entry_min_estimated_response_bytes, max_estimated_list_dir_response_bytes,
-        relative_entry_path, relative_entry_path_for_deny, runtime_max_entries_cap,
-        scan_count_only_entries_without_deny_globs,
+        initial_entries_capacity, initial_heap_capacity, is_list_dir_truncated,
+        list_entry_estimated_response_bytes, list_entry_min_estimated_response_bytes,
+        max_estimated_list_dir_response_bytes, relative_entry_path, relative_entry_path_for_deny,
+        runtime_max_entries_cap, scan_count_only_entries_without_deny_globs,
     };
 
     #[test]

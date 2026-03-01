@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Windows identity checks now use stable `same-file` handle-based verification in critical TOCTOU-sensitive read/write/stat paths; non-reliable metadata-identity comparisons on Windows were removed from auxiliary paths, `Error::policy_rule()` no longer over-attributes all `NotPermitted` errors to `permissions/root.mode`, and the `secrets-secondary` workflow summary generation no longer depends on runtime `apt-get jq`.
 - release: bump crate versions (`safe-fs-tools`, `safe-fs-tools-cli`) to `1.0.0`.
 - `grep` now bounds initial line-buffer and reader-buffer preallocation by `limits.max_read_bytes + 1` (in addition to existing clamp limits), reducing per-request memory overhead under small read-budget policies without changing scan/truncation behavior; added unit coverage for the new capacity bounds.
 - `delete --recursive` deny pre-scan now returns the denied child path without cloning the scratch `PathBuf` on the error branch, removing one unnecessary allocation on the deny-hit path.
