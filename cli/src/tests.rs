@@ -450,7 +450,7 @@ fn format_path_for_error_strips_root_prefix_when_redacting() {
     let (dir, redaction) = make_redaction();
     let path = dir.path().join("sub").join("file.txt");
 
-    let formatted = super::format_path_for_error(&path, Some(&redaction), true, false);
+    let formatted = crate::error::format_path_for_error(&path, Some(&redaction), true, false);
     assert_eq!(
         PathBuf::from(formatted),
         PathBuf::from("sub").join("file.txt")
@@ -463,14 +463,14 @@ fn format_path_for_error_strict_redaction_hides_file_names_outside_roots() {
     let other = tempfile::tempdir().expect("tempdir");
     let path = other.path().join(".env");
 
-    let formatted = super::format_path_for_error(&path, Some(&redaction), true, true);
+    let formatted = crate::error::format_path_for_error(&path, Some(&redaction), true, true);
     assert_eq!(formatted, "<redacted>");
 }
 
 #[test]
 fn format_path_for_error_redacts_relative_paths_to_file_name() {
     let path = PathBuf::from("nested/secret/file.txt");
-    let formatted = super::format_path_for_error(&path, None, true, false);
+    let formatted = crate::error::format_path_for_error(&path, None, true, false);
     assert_eq!(formatted, "file.txt");
 }
 

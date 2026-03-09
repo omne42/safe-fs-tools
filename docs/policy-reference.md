@@ -8,7 +8,7 @@
 [[roots]]
 id = "workspace"
 path = "/abs/path"
-mode = "read_only" # or "read_write"
+write_scope = "read_only" # or "workspace_write"
 
 [permissions]
 read = true
@@ -52,9 +52,10 @@ skip_globs = ["node_modules/**", "target/**"]
 
 - `id`: unique, `[A-Za-z0-9._-]`, max length 64, no surrounding whitespace.
 - `path`: absolute path (structural validation); existence and directory checks happen in `Context::new`.
-- `mode`:
+- `write_scope`:
   - `read_only`
-  - `read_write`
+  - `workspace_write`
+  - `full_access`
 
 ## `permissions`
 

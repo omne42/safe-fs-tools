@@ -299,7 +299,17 @@ fn revalidate_parent_before_delete(
 }
 
 pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
-    ctx.ensure_write_operation_allowed(&request.root_id, ctx.policy.permissions.delete, "delete")?;
+    let defer_permission_to_git_fallback =
+        !ctx.policy.permissions.delete && ctx.git_permission_fallback_enabled();
+    if defer_permission_to_git_fallback {
+        ctx.ensure_can_write(&request.root_id, "delete")?;
+    } else {
+        ctx.ensure_write_operation_allowed(
+            &request.root_id,
+            ctx.policy.permissions.delete,
+            "delete",
+        )?;
+    }
     ensure_delete_identity_verification_supported()?;
 
     let resolved =
@@ -358,6 +368,14 @@ pub fn delete(ctx: &Context, request: DeleteRequest) -> Result<DeleteResponse> {
     // Second check blocks secret paths after canonicalization resolves symlinks.
     if ctx.redactor.is_path_denied(&relative) {
         return Err(Error::SecretPathDenied(relative));
+    }
+    if defer_permission_to_git_fallback {
+        ctx.ensure_git_revertible_write_allowed(
+            &request.root_id,
+            &relative,
+            "delete",
+            request.recursive,
+        )?;
     }
 
     let target = canonical_parent.join(file_name);

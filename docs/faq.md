@@ -30,7 +30,7 @@ To reduce traversal ambiguity and containment risk. Symlinked files may still be
 Either:
 
 - permission flag is disabled, or
-- root mode is `read_only`.
+- root `write_scope` is `read_only`.
 
 ## What is the difference between `deny_globs` and `skip_globs`?
 

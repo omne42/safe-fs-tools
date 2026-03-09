@@ -365,12 +365,12 @@ mod policy_io {
 [[roots]]
 id = "dup"
 path = '{}'
-mode = "read_only"
+write_scope = "read_only"
 
 [[roots]]
 id = "dup"
 path = '{}'
-mode = "read_only"
+write_scope = "read_only"
 "#,
                 root_path.display(),
                 root_path.display()

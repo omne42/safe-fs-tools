@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use safe_fs_tools::ops::{Context, ListDirRequest, ReadRequest, list_dir, read_file};
 #[cfg(feature = "glob")]
 use safe_fs_tools::ops::{GlobRequest, glob_paths};
@@ -10,7 +10,8 @@ use safe_fs_tools::ops::{GrepRequest, grep};
 use safe_fs_tools::policy::{Permissions, RootMode, SandboxPolicy};
 
 fn permissive_policy(root: &Path) -> SandboxPolicy {
-    let mut policy = SandboxPolicy::single_root("root", root.to_path_buf(), RootMode::ReadWrite);
+    let mut policy =
+        SandboxPolicy::single_root("root", root.to_path_buf(), RootMode::WorkspaceWrite);
     policy.permissions = Permissions {
         read: true,
         glob: true,
@@ -119,63 +120,71 @@ fn bench_ops(c: &mut Criterion) {
     let fixture = setup_fixture();
 
     c.bench_function("read/full_large_file", |b| {
-        b.iter(|| {
-            let req = fixture.read_req.clone();
-            read_file(&fixture.ctx_stable, req).expect("read");
-        });
+        b.iter_batched(
+            || fixture.read_req.clone(),
+            |req| read_file(&fixture.ctx_stable, req).expect("read"),
+            BatchSize::PerIteration,
+        );
     });
     c.bench_function("read/full_large_file_with_redaction_regex", |b| {
-        b.iter(|| {
-            let req = fixture.read_req.clone();
-            read_file(&fixture.ctx_redaction, req).expect("read");
-        });
+        b.iter_batched(
+            || fixture.read_req.clone(),
+            |req| read_file(&fixture.ctx_redaction, req).expect("read"),
+            BatchSize::PerIteration,
+        );
     });
 
     c.bench_function("list_dir/top_k_entries", |b| {
-        b.iter(|| {
-            let req = fixture.list_req.clone();
-            list_dir(&fixture.ctx_stable, req).expect("list_dir");
-        });
+        b.iter_batched(
+            || fixture.list_req.clone(),
+            |req| list_dir(&fixture.ctx_stable, req).expect("list_dir"),
+            BatchSize::PerIteration,
+        );
     });
 
     #[cfg(feature = "glob")]
     c.bench_function("glob/txt_files_stable_sort", |b| {
-        b.iter(|| {
-            let req = fixture.glob_req.clone();
-            glob_paths(&fixture.ctx_stable, req).expect("glob");
-        });
+        b.iter_batched(
+            || fixture.glob_req.clone(),
+            |req| glob_paths(&fixture.ctx_stable, req).expect("glob"),
+            BatchSize::PerIteration,
+        );
     });
 
     #[cfg(feature = "glob")]
     c.bench_function("glob/txt_files_unstable_order", |b| {
-        b.iter(|| {
-            let req = fixture.glob_req.clone();
-            glob_paths(&fixture.ctx_unstable, req).expect("glob");
-        });
+        b.iter_batched(
+            || fixture.glob_req.clone(),
+            |req| glob_paths(&fixture.ctx_unstable, req).expect("glob"),
+            BatchSize::PerIteration,
+        );
     });
 
     #[cfg(feature = "grep")]
     c.bench_function("grep/plain_query_stable_sort", |b| {
-        b.iter(|| {
-            let req = fixture.grep_req.clone();
-            grep(&fixture.ctx_stable, req).expect("grep");
-        });
+        b.iter_batched(
+            || fixture.grep_req.clone(),
+            |req| grep(&fixture.ctx_stable, req).expect("grep"),
+            BatchSize::PerIteration,
+        );
     });
 
     #[cfg(feature = "grep")]
     c.bench_function("grep/plain_query_stable_sort_with_redaction_regex", |b| {
-        b.iter(|| {
-            let req = fixture.grep_req.clone();
-            grep(&fixture.ctx_redaction, req).expect("grep");
-        });
+        b.iter_batched(
+            || fixture.grep_req.clone(),
+            |req| grep(&fixture.ctx_redaction, req).expect("grep"),
+            BatchSize::PerIteration,
+        );
     });
 
     #[cfg(feature = "grep")]
     c.bench_function("grep/plain_query_unstable_order", |b| {
-        b.iter(|| {
-            let req = fixture.grep_req.clone();
-            grep(&fixture.ctx_unstable, req).expect("grep");
-        });
+        b.iter_batched(
+            || fixture.grep_req.clone(),
+            |req| grep(&fixture.ctx_unstable, req).expect("grep"),
+            BatchSize::PerIteration,
+        );
     });
 }
 

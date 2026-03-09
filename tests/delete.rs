@@ -44,7 +44,7 @@ impl Drop for UnixThreadGuard {
 #[test]
 fn delete_absolute_paths_report_relative_requested_path_when_parent_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.paths.allow_absolute = true;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -76,7 +76,7 @@ fn delete_absolute_paths_report_relative_requested_path_when_parent_is_missing()
 fn delete_absolute_paths_report_relative_requested_path_when_leaf_is_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("parent")).expect("mkdir");
-    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.paths.allow_absolute = true;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -115,8 +115,11 @@ fn delete_unlinks_symlink_without_deleting_target() {
     std::fs::write(&target, "hello\n").expect("write");
     symlink(&target, &link).expect("symlink");
 
-    let ctx =
-        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(all_permissions_test_policy(
+        dir.path(),
+        RootMode::WorkspaceWrite,
+    ))
+    .expect("ctx");
     let resp = delete(
         &ctx,
         DeleteRequest {
@@ -147,8 +150,11 @@ fn delete_unlinks_symlink_even_if_target_is_outside_root() {
     let link = dir.path().join("outside-link.txt");
     symlink(outside.path(), &link).expect("symlink");
 
-    let ctx =
-        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(all_permissions_test_policy(
+        dir.path(),
+        RootMode::WorkspaceWrite,
+    ))
+    .expect("ctx");
     let resp = delete(
         &ctx,
         DeleteRequest {
@@ -178,7 +184,7 @@ fn delete_denies_requested_path_before_resolving_symlink_dirs() {
     std::fs::write(dir.path().join("allowed").join("file.txt"), "hello\n").expect("write");
     symlink(dir.path().join("allowed"), dir.path().join("deny")).expect("symlink dir");
 
-    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.secrets.deny_globs = vec!["deny/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -217,7 +223,7 @@ fn delete_denies_after_canonicalization_when_symlink_parent_points_to_denied_pat
     std::fs::write(denied_dir.join("file.txt"), "secret\n").expect("write");
     symlink(&denied_dir, dir.path().join("allowed_link")).expect("symlink dir");
 
-    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.secrets.deny_globs = vec!["denied_dir/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -256,7 +262,7 @@ fn delete_recursive_rejects_when_tree_contains_denied_descendant() {
     std::fs::write(denied_dir.join("config"), "[core]\n").expect("write denied");
     std::fs::write(dir.path().join("project").join("public.txt"), "ok\n").expect("write public");
 
-    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.secrets.deny_globs = vec!["project/.git/**".to_string()];
     let ctx = Context::new(policy).expect("ctx");
 
@@ -339,8 +345,11 @@ fn delete_rejects_dot_and_empty_paths() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sentinel = dir.path().join("sentinel.txt");
     std::fs::write(&sentinel, "keep\n").expect("write sentinel");
-    let ctx =
-        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(all_permissions_test_policy(
+        dir.path(),
+        RootMode::WorkspaceWrite,
+    ))
+    .expect("ctx");
 
     let err = delete(
         &ctx,
@@ -395,8 +404,11 @@ fn delete_rejects_directories_without_recursive() {
     let subdir = dir.path().join("subdir");
     std::fs::create_dir_all(&subdir).expect("mkdir");
 
-    let ctx =
-        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(all_permissions_test_policy(
+        dir.path(),
+        RootMode::WorkspaceWrite,
+    ))
+    .expect("ctx");
 
     let err = delete(
         &ctx,
@@ -442,8 +454,11 @@ fn delete_revalidate_parent_detects_path_change() {
     let pivot = dir.path().join("pivot");
     symlink(&dir_a, &pivot).expect("symlink pivot");
 
-    let ctx =
-        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(all_permissions_test_policy(
+        dir.path(),
+        RootMode::WorkspaceWrite,
+    ))
+    .expect("ctx");
 
     let keep_flapping = Arc::new(AtomicBool::new(true));
     let keep_flapping_bg = Arc::clone(&keep_flapping);
@@ -532,8 +547,11 @@ fn delete_ignore_missing_returns_missing_when_symlink_parent_is_temporarily_abse
     let pivot = dir.path().join("pivot");
     symlink(&actual_parent, &pivot).expect("symlink pivot");
 
-    let ctx =
-        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(all_permissions_test_policy(
+        dir.path(),
+        RootMode::WorkspaceWrite,
+    ))
+    .expect("ctx");
 
     let keep_flapping = Arc::new(AtomicBool::new(true));
     let keep_flapping_bg = Arc::clone(&keep_flapping);
@@ -608,8 +626,11 @@ fn delete_ignore_missing_returns_missing_when_symlink_parent_is_temporarily_abse
 #[test]
 fn delete_ignore_missing_returns_missing_when_parent_directory_is_absent() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let ctx =
-        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(all_permissions_test_policy(
+        dir.path(),
+        RootMode::WorkspaceWrite,
+    ))
+    .expect("ctx");
 
     let resp = delete(
         &ctx,

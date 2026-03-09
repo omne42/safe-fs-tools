@@ -46,7 +46,7 @@ Example CLI wrapper flags:
 
 - Use root-relative paths only (`allow_absolute = false`).
 - Use dedicated roots per workspace.
-- Keep `read_only` mode unless mutation is truly required.
+- Keep `write_scope = read_only` unless mutation is truly required.
 - Start from least privilege in `permissions`.
 - Set conservative `max_*` limits for untrusted workloads.
 - Add deny globs for secrets and SCM metadata.

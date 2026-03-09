@@ -1,11 +1,13 @@
 use std::path::{Component, Path, PathBuf};
 
+pub(crate) const CLI_ERROR_CODE_INVALID_CLI_ARGS: &str = "invalid_cli_args";
 const CLI_ERROR_CODE_JSON: &str = "json";
 
 #[derive(Debug)]
 pub(crate) enum CliError {
     Tool(safe_fs_tools::Error),
     Json(serde_json::Error),
+    ArgsValidation(String),
 }
 
 impl std::fmt::Display for CliError {
@@ -13,6 +15,7 @@ impl std::fmt::Display for CliError {
         match self {
             CliError::Tool(err) => write!(f, "{err}"),
             CliError::Json(err) => write!(f, "json error: {err}"),
+            CliError::ArgsValidation(message) => write!(f, "{message}"),
         }
     }
 }
@@ -22,6 +25,7 @@ impl std::error::Error for CliError {
         match self {
             CliError::Tool(err) => Some(err),
             CliError::Json(err) => Some(err),
+            CliError::ArgsValidation(_) => None,
         }
     }
 }
@@ -43,6 +47,7 @@ impl CliError {
         match self {
             CliError::Tool(err) => err.code(),
             CliError::Json(_) => CLI_ERROR_CODE_JSON,
+            CliError::ArgsValidation(_) => CLI_ERROR_CODE_INVALID_CLI_ARGS,
         }
     }
 }

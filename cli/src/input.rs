@@ -65,14 +65,8 @@ pub(crate) fn load_text_limited(
 
     let limit = max_bytes.saturating_add(1);
     let reads_stdin = path.as_os_str() == "-";
-    let mut bytes = if reads_stdin {
-        Vec::<u8>::with_capacity(initial_stdin_capacity(max_bytes))
-    } else {
-        Vec::<u8>::new()
-    };
-    let mut known_size = None;
-
-    if reads_stdin {
+    let (bytes, known_size) = if reads_stdin {
+        let mut bytes = Vec::<u8>::with_capacity(initial_stdin_capacity(max_bytes));
         std::io::stdin()
             .take(limit)
             .read_to_end(&mut bytes)
@@ -81,6 +75,7 @@ pub(crate) fn load_text_limited(
                 path: path.to_path_buf(),
                 source: err,
             })?;
+        (bytes, None)
     } else {
         let (file, metadata) = open_input_file(path)?;
         let file_size = metadata.len();
@@ -90,9 +85,7 @@ pub(crate) fn load_text_limited(
                 max_bytes,
             });
         }
-        known_size = Some(file_size);
-        bytes = Vec::<u8>::with_capacity(initial_input_capacity(file_size, max_bytes));
-
+        let mut bytes = Vec::<u8>::with_capacity(initial_input_capacity(file_size, max_bytes));
         file.take(limit)
             .read_to_end(&mut bytes)
             .map_err(|err| safe_fs_tools::Error::IoPath {
@@ -100,7 +93,8 @@ pub(crate) fn load_text_limited(
                 path: path.to_path_buf(),
                 source: err,
             })?;
-    }
+        (bytes, Some(file_size))
+    };
 
     let read_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     if read_size > max_bytes {

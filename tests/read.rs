@@ -82,6 +82,41 @@ fn read_redacts_matches() {
 }
 
 #[test]
+fn read_rejects_sensitive_env_variants() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join(".env.local"), "SECRET=1\n").expect("write");
+
+    let ctx = Context::new(read_enabled_policy(dir.path(), RootMode::ReadOnly)).expect("ctx");
+    let err = read_err(&ctx, ".env.local", None, None);
+    match err {
+        safe_fs_tools::Error::NotPermitted(message) => {
+            assert!(
+                message.contains("env-specific tool"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn read_allows_env_example_and_template_variants() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join(".env.example"), "SECRET=example\n").expect("write");
+    std::fs::write(dir.path().join(".env.template"), "SECRET=template\n").expect("write");
+
+    let mut policy = read_enabled_policy(dir.path(), RootMode::ReadOnly);
+    policy.secrets.deny_globs.clear();
+    let ctx = Context::new(policy).expect("ctx");
+
+    let example = read_ok(&ctx, ".env.example", None, None);
+    assert!(example.content.contains("SECRET=example"));
+
+    let template = read_ok(&ctx, ".env.template", None, None);
+    assert!(template.content.contains("SECRET=template"));
+}
+
+#[test]
 fn read_fails_when_redaction_output_exceeds_limit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("huge-redacted.txt");

@@ -2,17 +2,16 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 
 mod command_exec;
 mod error;
 mod input;
 
 use error::{
-    CliError, PathRedaction, tool_error_details, tool_error_details_with, tool_public_message,
+    CLI_ERROR_CODE_INVALID_CLI_ARGS, CliError, PathRedaction, tool_error_details,
+    tool_error_details_with, tool_public_message,
 };
-
-#[cfg(test)]
-use error::format_path_for_error;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ErrorFormat {
@@ -299,8 +298,6 @@ where
     }
 }
 
-const CODE_INVALID_CLI_ARGS: &str = "invalid_cli_args";
-
 fn emit_parse_error(
     err: &clap::Error,
     cfg: ErrorRenderCfg<'_>,
@@ -329,6 +326,7 @@ fn render_parse_error(
             tool_public_message(tool, None, cfg.redact_paths, cfg.strict_redact_paths)
         }
         CliError::Json(_) => mode_err.to_string(),
+        CliError::ArgsValidation(_) => mode_err.to_string(),
     });
 
     match cfg.format {
@@ -360,7 +358,7 @@ fn render_parse_error(
 
             let out = serde_json::json!({
                 "error": {
-                    "code": CODE_INVALID_CLI_ARGS,
+                    "code": CLI_ERROR_CODE_INVALID_CLI_ARGS,
                     "message": public_message,
                     "details": details,
                 }
@@ -378,9 +376,9 @@ fn validate_error_render_mode(
     redact_paths: bool,
 ) -> Result<(), CliError> {
     if redact_paths && !matches!(error_format, ErrorFormat::Json) {
-        return Err(CliError::Tool(safe_fs_tools::Error::InvalidPath(
+        return Err(CliError::ArgsValidation(
             "--redact-paths/--redact-paths-strict require --error-format json".to_string(),
-        )));
+        ));
     }
     Ok(())
 }
@@ -435,6 +433,7 @@ fn render_json_error(err: &CliError, cfg: ErrorRenderCfg<'_>) -> String {
                 cfg.strict_redact_paths,
             ),
             CliError::Json(_) => err.to_string(),
+            CliError::ArgsValidation(message) => message.clone(),
         }),
     );
 
@@ -469,7 +468,7 @@ fn fallback_json_error() -> String {
     }
 }
 
-fn serialize_json(value: &serde_json::Value, pretty: bool) -> Result<String, CliError> {
+fn serialize_json<T: Serialize>(value: &T, pretty: bool) -> Result<String, CliError> {
     if pretty {
         Ok(serde_json::to_string_pretty(value)?)
     } else {
@@ -566,7 +565,7 @@ mod parse_error_tests {
         );
 
         let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("valid json");
-        assert_eq!(parsed["error"]["code"], CODE_INVALID_CLI_ARGS);
+        assert_eq!(parsed["error"]["code"], CLI_ERROR_CODE_INVALID_CLI_ARGS);
     }
 
     #[test]
@@ -588,17 +587,17 @@ mod parse_error_tests {
                 strict_redact_paths: false,
                 redaction: None,
             },
-            Some(&CliError::Tool(safe_fs_tools::Error::InvalidPath(
+            Some(&CliError::ArgsValidation(
                 "--redact-paths/--redact-paths-strict require --error-format json".to_string(),
-            ))),
+            )),
         );
 
         let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("valid json");
-        assert_eq!(parsed["error"]["code"], CODE_INVALID_CLI_ARGS);
+        assert_eq!(parsed["error"]["code"], CLI_ERROR_CODE_INVALID_CLI_ARGS);
         assert_eq!(parsed["error"]["message"], "invalid cli arguments");
         assert_eq!(
             parsed["error"]["details"]["render_mode"]["message"],
-            "invalid path"
+            "--redact-paths/--redact-paths-strict require --error-format json"
         );
     }
 }

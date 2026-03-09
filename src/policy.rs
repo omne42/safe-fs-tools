@@ -6,20 +6,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum RootMode {
-    #[default]
-    ReadOnly,
-    ReadWrite,
-}
+pub use policy_meta::WriteScope as RootMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Root {
     pub id: String,
     pub path: PathBuf,
-    #[serde(default)]
+    #[serde(default, rename = "write_scope", alias = "mode")]
     pub mode: RootMode,
 }
 

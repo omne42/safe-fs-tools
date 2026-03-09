@@ -20,6 +20,7 @@ serde = { version = "1", features = ["derive"] }
 same-file = "1"
 tempfile = "3"
 thiserror = "1"
+policy-meta = { path = "../policy-meta-spec/rust/policy-meta" }
 toml = { version = "0.8", optional = true }
 serde_json = { version = "1", optional = true }
 walkdir = { version = "2", optional = true }
@@ -44,3 +45,4 @@ glob = ["dep:walkdir"]
 grep = ["dep:walkdir"]
 patch = ["dep:diffy"]
 policy-io = ["dep:toml", "dep:serde_json"]
+git-permissions = []

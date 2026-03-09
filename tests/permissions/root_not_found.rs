@@ -31,8 +31,11 @@ fn setup_missing_root_fixture() -> MissingRootFixture {
     std::fs::write(&file_path, "hello\n").expect("write file");
     std::fs::write(&from, "from\n").expect("write from");
     std::fs::write(&to, "to\n").expect("write to");
-    let ctx =
-        Context::new(all_permissions_test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(all_permissions_test_policy(
+        dir.path(),
+        RootMode::WorkspaceWrite,
+    ))
+    .expect("ctx");
 
     MissingRootFixture {
         _dir: dir,
@@ -73,7 +76,7 @@ fn missing_root_with_disabled_write_permission_reports_not_permitted() {
     let file_path = dir.path().join("file.txt");
     std::fs::write(&file_path, "hello\n").expect("write baseline");
 
-    let mut policy = all_permissions_test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = all_permissions_test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.permissions.write = false;
     let ctx = Context::new(policy).expect("ctx");
 

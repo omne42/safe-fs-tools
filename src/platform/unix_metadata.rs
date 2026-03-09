@@ -1,5 +1,37 @@
 use std::fs;
 
+fn sync_ownership(src_meta: &fs::Metadata, tmp_file: &fs::File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+
+    let tmp_meta = tmp_file.metadata()?;
+    let src_uid: libc::uid_t = src_meta.uid();
+    let src_gid: libc::gid_t = src_meta.gid();
+    let tmp_uid: libc::uid_t = tmp_meta.uid();
+    let tmp_gid: libc::gid_t = tmp_meta.gid();
+    if src_uid == tmp_uid && src_gid == tmp_gid {
+        return Ok(());
+    }
+
+    let uid: libc::uid_t = if src_uid == tmp_uid {
+        libc::uid_t::MAX
+    } else {
+        src_uid
+    };
+    let gid: libc::gid_t = if src_gid == tmp_gid {
+        libc::gid_t::MAX
+    } else {
+        src_gid
+    };
+
+    // SAFETY: fd comes from a live file handle and uid/gid values are plain integers.
+    let chown_rc = unsafe { libc::fchown(tmp_file.as_raw_fd(), uid, gid) };
+    if chown_rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn preserve_unix_security_metadata(
     src_file: &fs::File,
@@ -7,16 +39,70 @@ pub(crate) fn preserve_unix_security_metadata(
     tmp_file: &fs::File,
     copy_xattrs: bool,
 ) -> std::io::Result<()> {
+    sync_ownership(src_meta, tmp_file)?;
+
+    if !copy_xattrs {
+        return Ok(());
+    }
+
+    sync_xattrs(src_file, tmp_file)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn sync_xattrs(src_file: &fs::File, tmp_file: &fs::File) -> std::io::Result<()> {
     use std::collections::HashSet;
-    use std::ffi::{CStr, CString};
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::MetadataExt;
+
+    let src_fd = src_file.as_raw_fd();
+    let dst_fd = tmp_file.as_raw_fd();
+
+    let src_names = xattr_syscalls::list_fd(src_fd)?;
+    let dst_names = xattr_syscalls::list_fd(dst_fd)?;
+    let dst_names_empty = dst_names.is_empty();
+
+    if src_names.is_empty() {
+        for dst_name in dst_names {
+            xattr_syscalls::remove_fd(dst_fd, dst_name.as_c_str())?;
+        }
+        return Ok(());
+    }
+
+    if !dst_names_empty {
+        let mut src_name_set = HashSet::<&[u8]>::with_capacity(src_names.len());
+        src_name_set.extend(src_names.iter().map(|name| name.as_bytes()));
+
+        for dst_name in dst_names {
+            if src_name_set.contains(dst_name.as_bytes()) {
+                continue;
+            }
+            xattr_syscalls::remove_fd(dst_fd, dst_name.as_c_str())?;
+        }
+    }
+
+    for name in src_names {
+        let name_cstr = name.as_c_str();
+        let src_value = xattr_syscalls::read_fd_required(src_fd, name_cstr)?;
+        if !dst_names_empty {
+            let dst_value = xattr_syscalls::read_fd(dst_fd, name_cstr)?;
+            if dst_value.as_deref() == Some(src_value.as_slice()) {
+                continue;
+            }
+        }
+        xattr_syscalls::set_fd(dst_fd, name_cstr, &src_value)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+mod xattr_syscalls {
+    use std::ffi::{CStr, CString};
 
     // DESIGN INVARIANT (Linux/Android xattrs):
     // - Rust std provides ownership/mode timestamps, but does not expose extended attributes.
     // - We must preserve xattrs on already-open file handles so metadata copy remains bound to the
     //   same inode and does not reopen by path (which would widen TOCTOU/symlink races).
-    // - Therefore this function uses fd-scoped libc xattr syscalls:
+    // - Therefore this module uses fd-scoped libc xattr syscalls:
     //   `flistxattr`, `fgetxattr`, `fsetxattr`, and `fremovexattr`.
     // - All `unsafe` below is confined to syscall boundaries; pointer validity and buffer lengths
     //   are checked at each call site.
@@ -45,51 +131,7 @@ pub(crate) fn preserve_unix_security_metadata(
         err.raw_os_error() == Some(libc::ERANGE)
     }
 
-    fn xattr_read_fd_required(fd: libc::c_int, name: &CStr) -> std::io::Result<Vec<u8>> {
-        for _ in 0..MAX_XATTR_RACE_RETRIES {
-            // SAFETY: `name` is NUL-terminated and both pointers are valid for this call.
-            let len = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
-            if len < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let len = checked_kernel_len(len, MAX_XATTR_VALUE_BYTES, "xattr value length")?;
-            if len == 0 {
-                return Ok(Vec::new());
-            }
-            let mut buf = vec![0_u8; len];
-            // SAFETY: destination buffer is valid for `buf.len()` bytes.
-            let read = unsafe {
-                libc::fgetxattr(
-                    fd,
-                    name.as_ptr(),
-                    buf.as_mut_ptr().cast::<libc::c_void>(),
-                    buf.len(),
-                )
-            };
-            if read < 0 {
-                let err = std::io::Error::last_os_error();
-                if is_retryable_xattr_race(&err) {
-                    continue;
-                }
-                return Err(err);
-            }
-            let read = usize::try_from(read).map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "xattr read length overflow",
-                )
-            })?;
-            buf.truncate(read);
-            return Ok(buf);
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::ResourceBusy,
-            "xattr value changed concurrently during read",
-        ))
-    }
-
-    fn xattr_read_fd(fd: libc::c_int, name: &CStr) -> std::io::Result<Option<Vec<u8>>> {
+    fn read_fd_impl(fd: libc::c_int, name: &CStr) -> std::io::Result<Option<Vec<u8>>> {
         for _ in 0..MAX_XATTR_RACE_RETRIES {
             // SAFETY: `name` is NUL-terminated and both pointers are valid for this call.
             let len = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
@@ -140,7 +182,15 @@ pub(crate) fn preserve_unix_security_metadata(
         ))
     }
 
-    fn xattr_list_fd(fd: libc::c_int) -> std::io::Result<Vec<CString>> {
+    pub(crate) fn read_fd_required(fd: libc::c_int, name: &CStr) -> std::io::Result<Vec<u8>> {
+        read_fd_impl(fd, name)?.ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENODATA))
+    }
+
+    pub(crate) fn read_fd(fd: libc::c_int, name: &CStr) -> std::io::Result<Option<Vec<u8>>> {
+        read_fd_impl(fd, name)
+    }
+
+    pub(crate) fn list_fd(fd: libc::c_int) -> std::io::Result<Vec<CString>> {
         for _ in 0..MAX_XATTR_RACE_RETRIES {
             // SAFETY: null buffer with size 0 asks kernel for the required size.
             let list_len = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
@@ -194,98 +244,35 @@ pub(crate) fn preserve_unix_security_metadata(
         ))
     }
 
-    let tmp_meta = tmp_file.metadata()?;
-    let src_uid: libc::uid_t = src_meta.uid();
-    let src_gid: libc::gid_t = src_meta.gid();
-    let tmp_uid: libc::uid_t = tmp_meta.uid();
-    let tmp_gid: libc::gid_t = tmp_meta.gid();
-    if src_uid != tmp_uid || src_gid != tmp_gid {
-        let uid: libc::uid_t = if src_uid == tmp_uid {
-            libc::uid_t::MAX
-        } else {
-            src_uid
-        };
-        let gid: libc::gid_t = if src_gid == tmp_gid {
-            libc::gid_t::MAX
-        } else {
-            src_gid
-        };
-        // SAFETY: fd comes from a live file handle and uid/gid values are plain integers.
-        let chown_rc = unsafe { libc::fchown(tmp_file.as_raw_fd(), uid, gid) };
-        if chown_rc != 0 {
-            return Err(std::io::Error::last_os_error());
+    pub(crate) fn remove_fd(fd: libc::c_int, name: &CStr) -> std::io::Result<()> {
+        // SAFETY: xattr name pointer is valid for this synchronous call.
+        let remove_rc = unsafe { libc::fremovexattr(fd, name.as_ptr()) };
+        if remove_rc == 0 {
+            return Ok(());
         }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ENODATA) {
+            return Ok(());
+        }
+        Err(err)
     }
 
-    if !copy_xattrs {
-        return Ok(());
-    }
-
-    let src_fd = src_file.as_raw_fd();
-    let fd = tmp_file.as_raw_fd();
-
-    let src_names = xattr_list_fd(src_fd)?;
-    let dst_names = xattr_list_fd(fd)?;
-    let dst_names_empty = dst_names.is_empty();
-    if src_names.is_empty() {
-        for dst_name in dst_names {
-            // SAFETY: xattr name pointer is valid for this synchronous call.
-            let remove_rc = unsafe { libc::fremovexattr(fd, dst_name.as_ptr()) };
-            if remove_rc != 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::ENODATA) {
-                    continue;
-                }
-                return Err(err);
-            }
-        }
-        return Ok(());
-    }
-
-    if !dst_names_empty {
-        let mut src_name_set = HashSet::<&[u8]>::with_capacity(src_names.len());
-        src_name_set.extend(src_names.iter().map(|name| name.as_bytes()));
-        for dst_name in dst_names {
-            if src_name_set.contains(dst_name.as_bytes()) {
-                continue;
-            }
-            // SAFETY: xattr name pointer is valid for this synchronous call.
-            let remove_rc = unsafe { libc::fremovexattr(fd, dst_name.as_ptr()) };
-            if remove_rc != 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::ENODATA) {
-                    continue;
-                }
-                return Err(err);
-            }
-        }
-    }
-
-    for name in src_names {
-        let name_cstr = name.as_c_str();
-        let src_value = xattr_read_fd_required(src_fd, name_cstr)?;
-        if !dst_names_empty {
-            let dst_value = xattr_read_fd(fd, name_cstr)?;
-            if dst_value.as_deref() == Some(src_value.as_slice()) {
-                continue;
-            }
-        }
+    pub(crate) fn set_fd(fd: libc::c_int, name: &CStr, value: &[u8]) -> std::io::Result<()> {
         // SAFETY: xattr name/value buffers are valid for this synchronous call.
         let set_rc = unsafe {
             libc::fsetxattr(
                 fd,
-                name_cstr.as_ptr(),
-                src_value.as_ptr().cast::<libc::c_void>(),
-                src_value.len(),
+                name.as_ptr(),
+                value.as_ptr().cast::<libc::c_void>(),
+                value.len(),
                 0,
             )
         };
-        if set_rc != 0 {
-            return Err(std::io::Error::last_os_error());
+        if set_rc == 0 {
+            return Ok(());
         }
+        Err(std::io::Error::last_os_error())
     }
-
-    Ok(())
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -295,32 +282,7 @@ pub(crate) fn preserve_unix_security_metadata(
     tmp_file: &fs::File,
     _copy_xattrs: bool,
 ) -> std::io::Result<()> {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::fs::MetadataExt;
-
-    let tmp_meta = tmp_file.metadata()?;
-    let src_uid: libc::uid_t = src_meta.uid();
-    let src_gid: libc::gid_t = src_meta.gid();
-    let tmp_uid: libc::uid_t = tmp_meta.uid();
-    let tmp_gid: libc::gid_t = tmp_meta.gid();
-    if src_uid != tmp_uid || src_gid != tmp_gid {
-        let uid: libc::uid_t = if src_uid == tmp_uid {
-            libc::uid_t::MAX
-        } else {
-            src_uid
-        };
-        let gid: libc::gid_t = if src_gid == tmp_gid {
-            libc::gid_t::MAX
-        } else {
-            src_gid
-        };
-        // SAFETY: fd comes from a live file handle and uid/gid values are plain integers.
-        let chown_rc = unsafe { libc::fchown(tmp_file.as_raw_fd(), uid, gid) };
-        if chown_rc != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    Ok(())
+    sync_ownership(src_meta, tmp_file)
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]

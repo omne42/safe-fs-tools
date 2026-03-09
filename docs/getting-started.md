@@ -32,7 +32,7 @@ cp policy.example.toml ./policy.toml
 Edit `policy.toml`:
 
 - Set `[[roots]]` `path` to an absolute directory.
-- Choose `mode` (`read_only` or `read_write`).
+- Choose `write_scope` (`read_only` or `workspace_write`).
 - Enable only permissions you actually need.
 
 Example minimal read-only policy:
@@ -41,7 +41,7 @@ Example minimal read-only policy:
 [[roots]]
 id = "workspace"
 path = "/abs/path/to/workspace"
-mode = "read_only"
+write_scope = "read_only"
 
 [permissions]
 read = true

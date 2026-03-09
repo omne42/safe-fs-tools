@@ -509,7 +509,7 @@ fn policy_deserialization_rejects_unknown_fields_in_toml() {
 [[roots]]
 id = "root"
 path = "/"
-mode = "read_only"
+write_scope = "read_only"
 unknown_root = true
 "#,
             "unknown_root",
@@ -520,7 +520,7 @@ unknown_root = true
 [[roots]]
 id = "root"
 path = "/"
-mode = "read_only"
+write_scope = "read_only"
 
 unknown_top = true
 "#,
@@ -532,7 +532,7 @@ unknown_top = true
 [[roots]]
 id = "root"
 path = "/"
-mode = "read_only"
+write_scope = "read_only"
 
 [permissions]
 read = true
@@ -546,7 +546,7 @@ unknown_permissions = true
 [[roots]]
 id = "root"
 path = "/"
-mode = "read_only"
+write_scope = "read_only"
 
 [limits]
 unknown_limits = 1
@@ -559,7 +559,7 @@ unknown_limits = 1
 [[roots]]
 id = "root"
 path = "/"
-mode = "read_only"
+write_scope = "read_only"
 
 [secrets]
 unknown_secrets = true
@@ -572,7 +572,7 @@ unknown_secrets = true
 [[roots]]
 id = "root"
 path = "/"
-mode = "read_only"
+write_scope = "read_only"
 
 [traversal]
 unknown_traversal = true
@@ -585,7 +585,7 @@ unknown_traversal = true
 [[roots]]
 id = "root"
 path = "/"
-mode = "read_only"
+write_scope = "read_only"
 
 [paths]
 unknown_paths = true

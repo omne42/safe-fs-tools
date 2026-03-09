@@ -87,7 +87,7 @@ fn mkdir_denies_secret_requested_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
 
-    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::WorkspaceWrite);
     let err = mkdir(
         &ctx,
         MkdirRequest {
@@ -110,7 +110,7 @@ fn mkdir_denies_after_canonicalization_through_symlink_parent() {
         return;
     }
 
-    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::WorkspaceWrite);
     let err = mkdir(
         &ctx,
         MkdirRequest {
@@ -132,7 +132,7 @@ fn write_file_denies_secret_requested_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
 
-    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::WorkspaceWrite);
     let err = write_file(
         &ctx,
         WriteFileRequest {
@@ -156,7 +156,7 @@ fn write_file_denies_after_canonicalization_through_symlink_parent() {
         return;
     }
 
-    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::WorkspaceWrite);
     let err = write_file(
         &ctx,
         WriteFileRequest {
@@ -180,7 +180,7 @@ fn move_path_denies_secret_requested_destination_path() {
     std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
     std::fs::write(dir.path().join("from.txt"), "source").expect("write");
 
-    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::WorkspaceWrite);
     let err = move_path(
         &ctx,
         MovePathRequest {
@@ -209,7 +209,7 @@ fn move_path_denies_after_canonicalization_through_symlink_parent() {
         return;
     }
 
-    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::WorkspaceWrite);
     let err = move_path(
         &ctx,
         MovePathRequest {
@@ -234,7 +234,7 @@ fn copy_file_denies_secret_requested_destination_path() {
     std::fs::create_dir_all(dir.path().join("deny")).expect("mkdir");
     std::fs::write(dir.path().join("from.txt"), "source").expect("write");
 
-    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::WorkspaceWrite);
     let err = copy_file(
         &ctx,
         CopyFileRequest {
@@ -260,7 +260,7 @@ fn copy_file_denies_after_canonicalization_through_symlink_parent() {
         return;
     }
 
-    let ctx = ctx_with_deny_glob(dir.path(), RootMode::ReadWrite);
+    let ctx = ctx_with_deny_glob(dir.path(), RootMode::WorkspaceWrite);
     let err = copy_file(
         &ctx,
         CopyFileRequest {
@@ -285,7 +285,7 @@ fn delete_deletes_dirs_recursively_and_ignores_missing() {
     std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
     std::fs::write(dir.path().join("sub").join("a.txt"), "hi").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = delete(
         &ctx,
         DeleteRequest {
@@ -324,7 +324,7 @@ fn delete_rejects_directory_without_recursive() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.permissions.delete = true;
     let ctx = Context::new(policy).expect("ctx");
     let err = delete(

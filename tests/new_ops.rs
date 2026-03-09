@@ -218,7 +218,7 @@ fn stat_resolves_symlink_targets_with_requested_path() {
 fn mkdir_creates_directories_and_can_ignore_existing() {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = mkdir(
         &ctx,
         MkdirRequest {
@@ -255,7 +255,7 @@ fn mkdir_rejects_existing_paths_when_creation_is_not_allowed() {
     std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
     std::fs::write(dir.path().join("file.txt"), "hi").expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.permissions.mkdir = true;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -310,7 +310,7 @@ fn mkdir_rejects_symlink_targets() {
         return;
     }
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.permissions.mkdir = true;
     let ctx = Context::new(policy).expect("ctx");
 
@@ -353,7 +353,7 @@ fn mkdir_rejects_readonly_root() {
 fn write_file_creates_new_files_and_respects_overwrite() {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = write_file(
         &ctx,
         WriteFileRequest {
@@ -425,7 +425,7 @@ fn write_file_overwrite_preserves_existing_permissions() {
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640))
         .expect("set permissions");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = write_file(
         &ctx,
         WriteFileRequest {
@@ -456,7 +456,7 @@ fn write_file_rejects_directory_targets() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.permissions.write = true;
     let ctx = Context::new(policy).expect("ctx");
     let err = write_file(
@@ -484,7 +484,7 @@ fn write_file_rejects_symlink_targets() {
         return;
     }
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.permissions.write = true;
     let ctx = Context::new(policy).expect("ctx");
     let err = write_file(
@@ -511,7 +511,7 @@ fn write_file_rejects_symlink_targets() {
 fn write_file_rejects_content_larger_than_max_write_bytes() {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.permissions.write = true;
     policy.limits.max_write_bytes = 1;
     let ctx = Context::new(policy).expect("ctx");
@@ -568,7 +568,7 @@ fn move_path_renames_entries() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "hi").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = move_path(
         &ctx,
         MovePathRequest {
@@ -599,7 +599,7 @@ fn move_path_same_path_is_noop_when_source_exists() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("same.txt"), "hi").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = move_path(
         &ctx,
         MovePathRequest {
@@ -627,7 +627,7 @@ fn move_path_same_path_is_noop_when_source_exists() {
 #[test]
 fn move_path_same_path_missing_source_reports_not_found() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
 
     let err = move_path(
         &ctx,
@@ -655,7 +655,7 @@ fn move_path_overwrite_replaces_existing_destination_file() {
     std::fs::write(dir.path().join("from.txt"), "new").expect("write source");
     std::fs::write(dir.path().join("to.txt"), "old").expect("write destination");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = move_path(
         &ctx,
         MovePathRequest {
@@ -686,7 +686,7 @@ fn move_path_create_parents_creates_missing_destination_parents() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("from.txt"), "hi").expect("write source");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = move_path(
         &ctx,
         MovePathRequest {
@@ -718,7 +718,7 @@ fn move_path_rejects_moving_directory_into_descendant() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("a").join("sub")).expect("mkdir");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let err = move_path(
         &ctx,
         MovePathRequest {
@@ -767,7 +767,7 @@ fn copy_file_copies_regular_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "hi").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = copy_file(
         &ctx,
         CopyFileRequest {
@@ -798,7 +798,7 @@ fn copy_file_overwrite_replaces_existing_destination_file() {
     std::fs::write(dir.path().join("from.txt"), "new").expect("write source");
     std::fs::write(dir.path().join("to.txt"), "old").expect("write destination");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = copy_file(
         &ctx,
         CopyFileRequest {
@@ -832,7 +832,7 @@ fn copy_file_create_parents_creates_missing_destination_parents() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("from.txt"), "hi").expect("write source");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = copy_file(
         &ctx,
         CopyFileRequest {
@@ -865,7 +865,7 @@ fn copy_file_create_parents_creates_missing_destination_parents() {
 #[test]
 fn copy_file_same_path_still_validates_source_exists() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
 
     let err = copy_file(
         &ctx,
@@ -892,7 +892,7 @@ fn copy_file_same_path_is_a_noop_when_source_exists() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("same.txt"), "hi").expect("write");
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let resp = copy_file(
         &ctx,
         CopyFileRequest {
@@ -926,7 +926,7 @@ fn copy_file_same_path_is_noop_even_when_file_exceeds_max_write_bytes() {
     )
     .expect("write");
 
-    let mut policy = test_policy(dir.path(), RootMode::ReadWrite);
+    let mut policy = test_policy(dir.path(), RootMode::WorkspaceWrite);
     policy.permissions.copy_file = true;
     policy.limits.max_write_bytes = 1;
     let ctx = Context::new(policy).expect("ctx");
@@ -960,7 +960,7 @@ fn copy_file_rejects_symlink_sources() {
         return;
     }
 
-    let ctx = Context::new(test_policy(dir.path(), RootMode::ReadWrite)).expect("ctx");
+    let ctx = Context::new(test_policy(dir.path(), RootMode::WorkspaceWrite)).expect("ctx");
     let err = copy_file(
         &ctx,
         CopyFileRequest {
